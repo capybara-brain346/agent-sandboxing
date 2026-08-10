@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Response } from "express";
-import { SseHub } from "../src/services/sandbox-service/sse-hub";
+import { SseHub } from "../src/services/sandbox/sse-hub";
 
 describe("SseHub", () => {
   it("buffers live events during replay and flushes only newer sequences", () => {

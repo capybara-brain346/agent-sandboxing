@@ -7,23 +7,52 @@ import type {
   SandboxStatus,
 } from "@prisma/client";
 import type { Config } from "../../config";
-import {
-  isWorkspacePath,
-  splitOutput,
-  takeUtf8Prefix,
-  workspaceRoot,
-} from "../../types/sandbox-service/domain";
-import type { EventType } from "../../types/sandbox-service/domain";
-import { ServiceError, notFound } from "../../shared/errors";
-import type { EventStore } from "./event-store";
-import type { RuntimeOutput, SandboxRuntime } from "./runtime";
 import type {
   CommandRequest,
+  EventType,
+  PublicEvent,
   StartCommandResponse,
-} from "../../routes/sandbox-service/contracts";
-import type { PublicEvent } from "../../types/sandbox-service/events";
+} from "../../types/sandbox.types";
+import { ServiceError, notFound } from "../../shared/errors";
+import { isWorkspacePath, workspaceRoot } from "./workspace";
+import type { EventStore } from "./event-store";
+import type { RuntimeOutput, SandboxRuntime } from "./runtime";
 
 const safeEnv = /^[A-Z_][A-Z0-9_]*$/;
+
+export function splitOutput(text: string, maxBytes = 16_384): string[] {
+  const out: string[] = [];
+  let current = "";
+  let currentBytes = 0;
+
+  for (const char of text) {
+    const bytes = Buffer.byteLength(char);
+    if (current && currentBytes + bytes > maxBytes) {
+      out.push(current);
+      current = "";
+      currentBytes = 0;
+    }
+    current += char;
+    currentBytes += bytes;
+  }
+
+  if (current) out.push(current);
+  return out;
+}
+
+export function takeUtf8Prefix(text: string, maxBytes: number): string {
+  let result = "";
+  let bytesUsed = 0;
+
+  for (const char of text) {
+    const bytes = Buffer.byteLength(char);
+    if (bytesUsed + bytes > maxBytes) break;
+    result += char;
+    bytesUsed += bytes;
+  }
+
+  return result;
+}
 
 const isUniqueConstraintError = (error: unknown, name: string): boolean => {
   if (!error || typeof error !== "object") return false;
@@ -74,9 +103,7 @@ export const normalizeCommandRequest = (
   if (
     Object.entries(env).some(
       ([key, value]) =>
-        !safeEnv.test(key) ||
-        typeof value !== "string" ||
-        value.length > 4096,
+        !safeEnv.test(key) || typeof value !== "string" || value.length > 4096,
     )
   )
     throw new ServiceError(
@@ -130,8 +157,7 @@ export class CommandOutputLimiter {
         break;
       }
 
-      const truncated =
-        Buffer.byteLength(bounded) < Buffer.byteLength(chunk);
+      const truncated = Buffer.byteLength(bounded) < Buffer.byteLength(chunk);
       this.outputTruncated ||= truncated;
       this.persistedBytes += Buffer.byteLength(bounded);
       events.push({

@@ -5,26 +5,70 @@ import type {
   SandboxStatus,
 } from "@prisma/client";
 import type { Config } from "../../config";
+import { loadConfig } from "../../config";
+import { prisma } from "../../db/prisma";
 import type {
+  CommandRequest,
   CreateSandboxRequest,
   CreateSandboxResponse,
   DiffResponse,
-} from "../../routes/sandbox-service/contracts";
-import { workspaceRoot } from "../../types/sandbox-service/domain";
-import type { EventType } from "../../types/sandbox-service/domain";
+  EventType,
+  PublicEvent,
+  StartCommandResponse,
+} from "../../types/sandbox.types";
 import { ServiceError, notFound } from "../../shared/errors";
-import type { EventStore } from "./event-store";
+import { workspaceRoot } from "./workspace";
+import { CommandExecutionService } from "./command-execution-service";
+import { EventStore } from "./event-store";
 import type { SandboxRuntime } from "./runtime";
-import type { PublicEvent } from "../../types/sandbox-service/events";
+import { DockerSandboxRuntime } from "./runtime";
+import { sseHub } from "./sse-hub";
 
-export class SandboxLifecycleService {
+const transitions: Record<SandboxStatus, readonly SandboxStatus[]> = {
+  creating: ["ready", "failed", "stopping"],
+  ready: ["stopping", "failed"],
+  stopping: ["stopped", "failed"],
+  stopped: ["deleted"],
+  failed: ["deleted"],
+  deleted: [],
+};
+
+export const canTransition = (
+  from: SandboxStatus,
+  to: SandboxStatus,
+): boolean => transitions[from].includes(to);
+
+const safeError = (
+  error: unknown,
+  operation: string,
+): { code: string; message: string; operation: string; retryable: boolean } => ({
+  code: error instanceof ServiceError ? error.code : "unknown",
+  message:
+    error instanceof ServiceError
+      ? error.message
+      : "Sandbox runtime operation failed",
+  operation,
+  retryable: false,
+});
+
+export class SandboxService {
+  private readonly commands: CommandExecutionService;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly events: EventStore,
     private readonly runtime: SandboxRuntime,
     private readonly config: Config,
     private readonly publish: (event: PublicEvent) => void,
-  ) {}
+  ) {
+    this.commands = new CommandExecutionService(
+      prisma,
+      events,
+      runtime,
+      config,
+      publish,
+    );
+  }
 
   async create(input: CreateSandboxRequest): Promise<CreateSandboxResponse> {
     const id = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
@@ -88,6 +132,17 @@ export class SandboxLifecycleService {
     return this.events.listAfter(sandboxId, after);
   }
 
+  async startCommand(
+    sandboxId: string,
+    input: CommandRequest,
+  ): Promise<StartCommandResponse> {
+    return this.commands.startCommand(sandboxId, input);
+  }
+
+  async getCommand(sandboxId: string, commandId: string): Promise<unknown> {
+    return this.commands.getCommand(sandboxId, commandId);
+  }
+
   async diff(sandboxId: string): Promise<DiffResponse> {
     const sandbox = await this.prisma.sandbox.findUnique({
       where: { id: sandboxId },
@@ -117,7 +172,7 @@ export class SandboxLifecycleService {
     } catch (error) {
       throw new ServiceError(
         "diff_failed",
-        this.safeError(error, "diff").message,
+        safeError(error, "diff").message,
         500,
       );
     }
@@ -220,7 +275,7 @@ export class SandboxLifecycleService {
       });
       events.forEach((event) => this.publish(event));
     } catch (error) {
-      const safe = this.safeError(error, "provision");
+      const safe = safeError(error, "provision");
       await this.prisma
         .$transaction(async (tx) => {
           await tx.sandbox.update({
@@ -257,18 +312,6 @@ export class SandboxLifecycleService {
     );
   }
 
-  private safeError(
-    error: unknown,
-    operation: string,
-  ): { code: string; message: string; operation: string; retryable: boolean } {
-    const message =
-      error instanceof ServiceError
-        ? error.message
-        : "Sandbox runtime operation failed";
-    const code = error instanceof ServiceError ? error.code : "unknown";
-    return { code, message, operation, retryable: false };
-  }
-
   private snapshot(sandbox: {
     id: string;
     status: SandboxStatus;
@@ -294,3 +337,11 @@ export class SandboxLifecycleService {
     };
   }
 }
+
+export const sandboxService = new SandboxService(
+  prisma,
+  new EventStore(prisma),
+  new DockerSandboxRuntime(loadConfig()),
+  loadConfig(),
+  (event) => sseHub.publish(event),
+);

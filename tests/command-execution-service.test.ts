@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CommandOutputLimiter,
   normalizeCommandRequest,
-} from "../src/services/sandbox-service/command-execution-service";
+  splitOutput,
+  takeUtf8Prefix,
+} from "../src/services/sandbox/command-execution-service";
 import { ServiceError } from "../src/shared/errors";
 
 describe("command execution rules", () => {
@@ -60,5 +62,15 @@ describe("command execution rules", () => {
     ]);
     expect(limiter.bytes).toBe(4);
     expect(limiter.truncated).toBe(true);
+  });
+
+  it("byte-bounds output without splitting UTF-8 characters", () => {
+    expect(splitOutput("a".repeat(20), 8)).toEqual([
+      "aaaaaaaa",
+      "aaaaaaaa",
+      "aaaa",
+    ]);
+    expect(splitOutput("ééé", 4)).toEqual(["éé", "é"]);
+    expect(takeUtf8Prefix("ééé", 5)).toBe("éé");
   });
 });

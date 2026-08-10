@@ -1,37 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { createApp } from "../src/app";
-import type { SandboxService } from "../src/services/sandbox-service/sandbox-service";
-import type { EventStore } from "../src/services/sandbox-service/event-store";
-import type { SseHub } from "../src/services/sandbox-service/sse-hub";
 import { ServiceError } from "../src/shared/errors";
 
+vi.mock("../src/services/sandbox/sandbox-service", () => ({
+  sandboxService: {
+    create: vi.fn(),
+    get: vi.fn(),
+    has: vi.fn(),
+    eventsAfter: vi.fn(),
+    startCommand: vi.fn(),
+    getCommand: vi.fn(),
+    diff: vi.fn(),
+    stop: vi.fn(),
+  },
+}));
+
+vi.mock("../src/services/sandbox/sse-hub", () => ({
+  sseHub: { subscribe: vi.fn(), finishReplay: vi.fn(), publish: vi.fn() },
+}));
+
+vi.mock("../src/db/prisma", () => ({
+  prisma: { $queryRaw: vi.fn().mockResolvedValue([{ "?column?": 1 }]) },
+}));
+
+const { createApp } = await import("../src/server");
+const { sandboxService } = await import("../src/services/sandbox/sandbox-service");
+
 describe("HTTP wiring", () => {
-  const service = {
-    create: vi.fn().mockResolvedValue({
-      sandboxId: "s1",
-      status: "creating",
-      workspacePath: "/workspace/repo",
-      eventsUrl: "/sandboxes/s1/events",
-    }),
-    get: vi.fn().mockResolvedValue({ sandboxId: "s1", status: "ready" }),
-    has: vi.fn().mockResolvedValue(true),
-    startCommand: vi.fn((id: string, input: { cwd?: string }) => {
-      if (input.cwd === "/tmp")
-        return Promise.reject(
-          new ServiceError("unsafe_command_request", "unsafe", 422),
-        );
-      return Promise.resolve({ commandId: "c1", sandboxId: id, status: "running" });
-    }),
-  } as unknown as SandboxService;
-  const events = { listAfter: vi.fn().mockResolvedValue([]) } as unknown as EventStore;
-  const hub = { subscribe: vi.fn(), finishReplay: vi.fn() } as unknown as SseHub;
-  const app = createApp(service, hub);
+  const app = createApp();
 
   beforeEach(() => vi.clearAllMocks());
 
   it("reports health and returns async create", async () => {
     expect((await request(app).get("/health")).status).toBe(200);
+    vi.mocked(sandboxService.create).mockResolvedValue({
+      sandboxId: "s1",
+      status: "creating",
+      workspacePath: "/workspace/repo",
+      eventsUrl: "/sandboxes/s1/events",
+    });
     const response = await request(app)
       .post("/sandboxes")
       .send({ fixtureRepoPath: "./repo" });
@@ -53,7 +60,7 @@ describe("HTTP wiring", () => {
       .send({ image: 42 });
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("invalid_request");
-    expect(service.create).not.toHaveBeenCalled();
+    expect(sandboxService.create).not.toHaveBeenCalled();
   });
 
   it("validates unsafe command cwd", async () => {
@@ -69,22 +76,18 @@ describe("HTTP wiring", () => {
       .send({ command: "env", env: { BAD: 1 } });
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("invalid_request");
-    expect(service.startCommand).not.toHaveBeenCalled();
+    expect(sandboxService.startCommand).not.toHaveBeenCalled();
   });
 
   it("maps a missing fixture provisioning failure to a safe API error", async () => {
-    const failingService = {
-      create: vi
-        .fn()
-        .mockRejectedValue(
-          new ServiceError(
-            "fixture_missing",
-            "Local fixture repo was not found",
-            500,
-          ),
-        ),
-    } as unknown as SandboxService;
-    const response = await request(createApp(failingService, hub))
+    vi.mocked(sandboxService.create).mockRejectedValue(
+      new ServiceError(
+        "fixture_missing",
+        "Local fixture repo was not found",
+        500,
+      ),
+    );
+    const response = await request(app)
       .post("/sandboxes")
       .send({ fixtureRepoPath: "./missing" });
     expect(response.status).toBe(500);

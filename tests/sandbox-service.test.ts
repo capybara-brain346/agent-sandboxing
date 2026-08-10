@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import type { Config } from "../src/config";
-import type { EventStore } from "../src/services/sandbox-service/event-store";
+import type { EventStore } from "../src/services/sandbox/event-store";
 import { ServiceError } from "../src/shared/errors";
-import { SandboxLifecycleService } from "../src/services/sandbox-service/sandbox-lifecycle-service";
-import type { SandboxRuntime } from "../src/services/sandbox-service/runtime";
-import type { PublicEvent } from "../src/types/sandbox-service/events";
+import { SandboxService, canTransition } from "../src/services/sandbox/sandbox-service";
+import type { SandboxRuntime } from "../src/services/sandbox/runtime";
+import type { PublicEvent } from "../src/types/sandbox.types";
 
 const config = {
   FIXTURE_REPO_PATH: "./repo",
@@ -25,7 +25,12 @@ const event = (type: string, sequence: number): PublicEvent => ({
   createdAt: "2026-01-01T00:00:00.000Z",
 });
 
-describe("SandboxLifecycleService", () => {
+describe("SandboxService", () => {
+  it("allows only documented sandbox status transitions", () => {
+    expect(canTransition("creating", "ready")).toBe(true);
+    expect(canTransition("ready", "creating")).toBe(false);
+  });
+
   it("publishes creation only after the transaction commits and starts provisioning", async () => {
     const publish = vi.fn();
     const runtime = {
@@ -50,13 +55,7 @@ describe("SandboxLifecycleService", () => {
         }),
       ),
     } as unknown as PrismaClient;
-    const service = new SandboxLifecycleService(
-      prisma,
-      events,
-      runtime,
-      config,
-      publish,
-    );
+    const service = new SandboxService(prisma, events, runtime, config, publish);
 
     const result = await service.create({});
 
@@ -85,7 +84,7 @@ describe("SandboxLifecycleService", () => {
         })),
       },
     } as unknown as PrismaClient;
-    const service = new SandboxLifecycleService(
+    const service = new SandboxService(
       prisma,
       {} as EventStore,
       runtime,
@@ -110,7 +109,7 @@ describe("SandboxLifecycleService", () => {
         })),
       },
     } as unknown as PrismaClient;
-    const service = new SandboxLifecycleService(
+    const service = new SandboxService(
       prisma,
       {} as EventStore,
       runtime,

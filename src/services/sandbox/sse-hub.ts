@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import type { PublicEvent } from "../../types/sandbox-service/events";
+import type { PublicEvent } from "../../types/sandbox.types";
 
 type Client = {
   response: Response;
@@ -47,4 +47,11 @@ export class SseHub {
     set?.delete(client);
     if (set?.size === 0) this.clients.delete(sandboxId);
   }
+  closeAll(): void {
+    for (const set of this.clients.values())
+      for (const client of set) client.response.end();
+    this.clients.clear();
+  }
 }
+
+export const sseHub = new SseHub();

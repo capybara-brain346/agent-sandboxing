@@ -1,35 +1,104 @@
-import { PrismaClient } from "@prisma/client";
-import { createApp } from "./app";
-import { CommandExecutionService } from "./services/sandbox-service/command-execution-service";
-import { loadConfig } from "./config";
-import { EventStore } from "./services/sandbox-service/event-store";
-import { DockerSandboxRuntime } from "./services/sandbox-service/runtime";
-import { SandboxLifecycleService } from "./services/sandbox-service/sandbox-lifecycle-service";
-import { SandboxService } from "./services/sandbox-service/sandbox-service";
-import { SseHub } from "./services/sandbox-service/sse-hub";
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
+import { randomUUID } from "node:crypto";
+import { logger } from "./logger";
+import { ServiceError } from "./shared/errors";
+import { prisma } from "./db/prisma";
+import { sandboxRouter } from "./routes/sandbox.routes";
 
-export const createServer = () => {
-  const config = loadConfig();
-  const prisma = new PrismaClient();
-  const hub = new SseHub();
-  const events = new EventStore(prisma);
-  const runtime = new DockerSandboxRuntime(config);
-  const publish = (event: Parameters<SseHub["publish"]>[0]): void =>
-    hub.publish(event);
-  const lifecycle = new SandboxLifecycleService(
-    prisma,
-    events,
-    runtime,
-    config,
-    publish,
-  );
-  const commands = new CommandExecutionService(
-    prisma,
-    events,
-    runtime,
-    config,
-    publish,
-  );
-  const service = new SandboxService(lifecycle, commands);
-  return { app: createApp(service, hub), config, prisma };
+const requestContext = (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+): void => {
+  request.id = request.header("X-Request-Id") ?? randomUUID();
+  response.set("X-Request-Id", request.id);
+  const start = process.hrtime.bigint();
+  response.on("finish", () => {
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    logger.info("request_completed", {
+      requestId: request.id,
+      method: request.method,
+      path: request.path,
+      status: response.statusCode,
+      durationMs: Math.round(durationMs),
+    });
+  });
+  next();
+};
+
+const securityHeaders = (
+  _request: Request,
+  response: Response,
+  next: NextFunction,
+): void => {
+  response.set({
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+  });
+  next();
+};
+
+const describeError = (error: unknown): Record<string, unknown> =>
+  error instanceof Error
+    ? { name: error.name, message: error.message, stack: error.stack }
+    : { value: error };
+
+const notFoundHandler = (_request: Request, _response: Response, next: NextFunction): void =>
+  next(new ServiceError("not_found", "Route was not found", 404));
+
+const errorHandler = (
+  error: unknown,
+  request: Request,
+  response: Response,
+  _next: NextFunction,
+): void => {
+  const serviceError = error instanceof ServiceError ? error : null;
+  if (!serviceError)
+    logger.error("unhandled_request_error", {
+      requestId: request.id,
+      method: request.method,
+      path: request.path,
+      error: describeError(error),
+    });
+
+  const status = serviceError?.status ?? 500;
+  response.status(status).json({
+    error: {
+      code: serviceError?.code ?? "internal_error",
+      message: serviceError?.message ?? "Internal server error",
+      details: serviceError?.details ?? {},
+    },
+  });
+};
+
+export const createApp = (): express.Express => {
+  const app = express();
+  app.disable("x-powered-by");
+  app.set("trust proxy", 1);
+
+  app.use(requestContext);
+  app.use(securityHeaders);
+  app.use(express.json({ limit: "32kb" }));
+
+  app.get("/health", async (_request, response) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      response.json({ status: "ok" });
+    } catch (error) {
+      logger.error("health_check_failed", { error: describeError(error) });
+      response.status(503).json({ status: "unavailable" });
+    }
+  });
+
+  app.use(sandboxRouter);
+
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+
+  return app;
 };

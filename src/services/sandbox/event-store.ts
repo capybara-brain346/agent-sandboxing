@@ -1,6 +1,5 @@
 import type { PrismaClient, Prisma, SandboxEventActor } from "@prisma/client";
-import type { EventType } from "../../types/sandbox-service/domain";
-import type { PublicEvent } from "../../types/sandbox-service/events";
+import type { EventType, PublicEvent } from "../../types/sandbox.types";
 
 type AppendInput = {
   sandboxId: string;
