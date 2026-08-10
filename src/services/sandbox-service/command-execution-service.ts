@@ -6,19 +6,22 @@ import type {
   SandboxEventActor,
   SandboxStatus,
 } from "@prisma/client";
-import type { Config } from "./config";
+import type { Config } from "../../config";
 import {
   isWorkspacePath,
   splitOutput,
   takeUtf8Prefix,
   workspaceRoot,
-} from "./domain";
-import type { EventType } from "./domain";
-import { ServiceError, notFound } from "./errors";
+} from "../../types/sandbox-service/domain";
+import type { EventType } from "../../types/sandbox-service/domain";
+import { ServiceError, notFound } from "../../shared/errors";
 import type { EventStore } from "./event-store";
 import type { RuntimeOutput, SandboxRuntime } from "./runtime";
-import type { CommandRequest, StartCommandResponse } from "./contracts";
-import type { PublicEvent } from "./types";
+import type {
+  CommandRequest,
+  StartCommandResponse,
+} from "../../routes/sandbox-service/contracts";
+import type { PublicEvent } from "../../types/sandbox-service/events";
 
 const safeEnv = /^[A-Z_][A-Z0-9_]*$/;
 

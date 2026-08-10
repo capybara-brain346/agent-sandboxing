@@ -1,8 +1,8 @@
 import { access, lstat, realpath } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { Config } from "./config";
-import { ServiceError } from "./errors";
+import type { Config } from "../../config";
+import { ServiceError } from "../../shared/errors";
 
 export type RuntimeOutput = { stream: "stdout" | "stderr"; chunk: string };
 export type RuntimeResult = {

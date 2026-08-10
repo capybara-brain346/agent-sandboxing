@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agent_sandboxing
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent_sandboxing"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - agent-sandboxing-postgres-data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent_sandboxing?schema=public
+      FIXTURE_REPO_PATH: /workspace/fixture-repo
+    ports:
+      - "3000:3000"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    command: npm run start:prod
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./repo:/workspace/fixture-repo:ro
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent_sandboxing?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: npm run prisma:migrate
+
+volumes:
+  agent-sandboxing-postgres-data:

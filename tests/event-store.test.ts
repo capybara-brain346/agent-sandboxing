@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { EventStore } from "../src/event-store";
+import { EventStore } from "../src/services/sandbox-service/event-store";
 
 describe("EventStore", () => {
   it("allocates strictly increasing per-sandbox sequences inside the transaction", async () => {

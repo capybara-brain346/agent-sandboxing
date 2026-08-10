@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   CommandOutputLimiter,
   normalizeCommandRequest,
-} from "../src/command-execution-service";
-import { ServiceError } from "../src/errors";
+} from "../src/services/sandbox-service/command-execution-service";
+import { ServiceError } from "../src/shared/errors";
 
 describe("command execution rules", () => {
   it("normalizes safe command requests", () => {

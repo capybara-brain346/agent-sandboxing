@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app";
-import type { SandboxService } from "../src/sandbox-service";
-import type { EventStore } from "../src/event-store";
-import type { SseHub } from "../src/sse-hub";
-import { ServiceError } from "../src/errors";
+import type { SandboxService } from "../src/services/sandbox-service/sandbox-service";
+import type { EventStore } from "../src/services/sandbox-service/event-store";
+import type { SseHub } from "../src/services/sandbox-service/sse-hub";
+import { ServiceError } from "../src/shared/errors";
 
 describe("HTTP wiring", () => {
   const service = {

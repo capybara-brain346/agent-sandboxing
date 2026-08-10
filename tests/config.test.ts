@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config";
-import { canTransition, splitOutput, takeUtf8Prefix } from "../src/domain";
+import {
+  canTransition,
+  splitOutput,
+  takeUtf8Prefix,
+} from "../src/types/sandbox-service/domain";
 
 describe("configuration and domain boundaries", () => {
   it("loads safe defaults with a required database URL", () => {

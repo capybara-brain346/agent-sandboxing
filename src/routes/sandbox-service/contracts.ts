@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { isWorkspacePath } from "./domain";
-import { ServiceError } from "./errors";
+import { ServiceError } from "../../shared/errors";
+import { isWorkspacePath } from "../../types/sandbox-service/domain";
 
 const createSandboxSchema = z
   .object({

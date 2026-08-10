@@ -8,7 +8,6 @@ The Sandbox Service is the first execution-plane component of the cloud coding a
 
 - `docs/agent-sandboxing-project.md` — product and architecture context
 - `docs/planning/sandbox-service-atomic-mvp-plan.md` — active MVP boundaries and implementation plan
-- `modules/sandbox-service/AGENTS.md` — module-specific coding instructions
 
 ## Documentation location
 
@@ -16,11 +15,11 @@ Put future implementation notes, operational runbooks, API documentation, contra
 
 ## Status
 
-Atomic MVP initial slice implemented. This module uses a local fixture repository and Docker containers; GitHub, auth, queues, and Task/Agent services are intentionally excluded.
+Atomic MVP initial slice implemented. The Sandbox Service now lives in the root TypeScript application under `src/routes/sandbox-service`, `src/services/sandbox-service`, and `src/types/sandbox-service`. It uses a local fixture repository and Docker containers; GitHub, auth, queues, and Task/Agent services are intentionally excluded.
 
 ## Development commands
 
-From `modules/sandbox-service`:
+From the repository root:
 
 ```bash
 cp .env.example .env
@@ -33,7 +32,15 @@ npm test
 npm run dev
 ```
 
-The API listens on `http://localhost:3000` by default. `POST /sandboxes` returns `202` while provisioning continues asynchronously. Provisioning copies the configured local fixture (default `./repo`) into `/workspace/repo`; it never bind-mounts the host fixture or Docker socket.
+The root Compose file runs migrations as a one-shot service before starting the app container:
+
+```bash
+docker compose build app
+docker compose up db-migrate
+docker compose up app
+```
+
+The API listens on `http://localhost:3000` by default. `POST /sandboxes` returns `202` while provisioning continues asynchronously. Provisioning copies the configured local fixture (default `./repo`) into `/workspace/repo`; spawned sandbox containers never receive the host fixture bind mount or Docker socket.
 
 ## API smoke flow
 

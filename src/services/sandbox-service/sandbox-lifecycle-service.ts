@@ -4,18 +4,18 @@ import type {
   SandboxEventActor,
   SandboxStatus,
 } from "@prisma/client";
-import type { Config } from "./config";
+import type { Config } from "../../config";
 import type {
   CreateSandboxRequest,
   CreateSandboxResponse,
   DiffResponse,
-} from "./contracts";
-import { workspaceRoot } from "./domain";
-import type { EventType } from "./domain";
-import { ServiceError, notFound } from "./errors";
+} from "../../routes/sandbox-service/contracts";
+import { workspaceRoot } from "../../types/sandbox-service/domain";
+import type { EventType } from "../../types/sandbox-service/domain";
+import { ServiceError, notFound } from "../../shared/errors";
 import type { EventStore } from "./event-store";
 import type { SandboxRuntime } from "./runtime";
-import type { PublicEvent } from "./types";
+import type { PublicEvent } from "../../types/sandbox-service/events";
 
 export class SandboxLifecycleService {
   constructor(

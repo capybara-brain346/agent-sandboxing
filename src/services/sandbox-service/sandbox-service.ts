@@ -1,17 +1,17 @@
 import type { PrismaClient } from "@prisma/client";
-import type { Config } from "./config";
+import type { Config } from "../../config";
 import type {
   CommandRequest,
   CreateSandboxRequest,
   CreateSandboxResponse,
   DiffResponse,
   StartCommandResponse,
-} from "./contracts";
+} from "../../routes/sandbox-service/contracts";
 import { CommandExecutionService } from "./command-execution-service";
 import type { EventStore } from "./event-store";
 import type { SandboxRuntime } from "./runtime";
 import { SandboxLifecycleService } from "./sandbox-lifecycle-service";
-import type { PublicEvent } from "./types";
+import type { PublicEvent } from "../../types/sandbox-service/events";
 
 export class SandboxService {
   private readonly lifecycle: SandboxLifecycleService;

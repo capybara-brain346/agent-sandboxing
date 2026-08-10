@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import type { Config } from "../src/config";
-import type { EventStore } from "../src/event-store";
-import { ServiceError } from "../src/errors";
-import { SandboxLifecycleService } from "../src/sandbox-lifecycle-service";
-import type { SandboxRuntime } from "../src/runtime";
-import type { PublicEvent } from "../src/types";
+import type { EventStore } from "../src/services/sandbox-service/event-store";
+import { ServiceError } from "../src/shared/errors";
+import { SandboxLifecycleService } from "../src/services/sandbox-service/sandbox-lifecycle-service";
+import type { SandboxRuntime } from "../src/services/sandbox-service/runtime";
+import type { PublicEvent } from "../src/types/sandbox-service/events";
 
 const config = {
   FIXTURE_REPO_PATH: "./repo",

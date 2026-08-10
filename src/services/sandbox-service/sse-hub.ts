@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import type { PublicEvent } from "./types";
+import type { PublicEvent } from "../../types/sandbox-service/events";
 
 type Client = {
   response: Response;

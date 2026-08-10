@@ -1,22 +1,16 @@
-import express, { type NextFunction, type Request, type Response } from "express";
-import {
-  parseCommandRequest,
-  parseCreateSandboxRequest,
-} from "./contracts";
-import type { SandboxService } from "./sandbox-service";
-import type { SseHub } from "./sse-hub";
-import { ServiceError } from "./errors";
+import type { Express, Request } from "express";
+import type { SandboxService } from "../../services/sandbox-service/sandbox-service";
+import type { SseHub } from "../../services/sandbox-service/sse-hub";
+import { ServiceError } from "../../shared/errors";
+import { parseCommandRequest, parseCreateSandboxRequest } from "./contracts";
 
 const id = (request: Request): string => request.params.id as string;
 
-export const createApp = (
+export const registerSandboxRoutes = (
+  app: Express,
   service: SandboxService,
   hub: SseHub,
-): express.Express => {
-  const app = express();
-  app.disable("x-powered-by");
-  app.use(express.json({ limit: "32kb" }));
-  app.get("/health", (_request, response) => response.json({ status: "ok" }));
+): void => {
   app.post("/sandboxes", async (request, response, next) => {
     try {
       const result = await service.create(
@@ -27,6 +21,7 @@ export const createApp = (
       next(error);
     }
   });
+
   app.get("/sandboxes/:id", async (request, response, next) => {
     try {
       response.json(await service.get(id(request)));
@@ -34,6 +29,7 @@ export const createApp = (
       next(error);
     }
   });
+
   app.get("/sandboxes/:id/events", async (request, response, next) => {
     try {
       const raw =
@@ -46,6 +42,7 @@ export const createApp = (
           "invalid_cursor",
           "Event cursor must be a non-negative integer",
         );
+
       const sandboxId = id(request);
       if (!(await service.has(sandboxId)))
         throw new ServiceError(
@@ -53,6 +50,7 @@ export const createApp = (
           "Sandbox was not found",
           404,
         );
+
       response.status(200).set({
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -60,6 +58,7 @@ export const createApp = (
         "X-Accel-Buffering": "no",
       });
       response.flushHeaders();
+
       const client = hub.subscribe(sandboxId, response, after);
       const events = await service.eventsAfter(sandboxId, after);
       for (const event of events)
@@ -67,6 +66,7 @@ export const createApp = (
           `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
         );
       hub.finishReplay(sandboxId, client, events.at(-1)?.sequence ?? after);
+
       const timer = setInterval(() => {
         if (!response.writableEnded) response.write(": keepalive\n\n");
       }, 15000);
@@ -76,6 +76,7 @@ export const createApp = (
       else response.end();
     }
   });
+
   app.post("/sandboxes/:id/commands", async (request, response, next) => {
     try {
       response
@@ -90,6 +91,7 @@ export const createApp = (
       next(error);
     }
   });
+
   app.get(
     "/sandboxes/:id/commands/:commandId",
     async (request, response, next) => {
@@ -105,6 +107,7 @@ export const createApp = (
       }
     },
   );
+
   app.get("/sandboxes/:id/diff", async (request, response, next) => {
     try {
       response.json(await service.diff(id(request)));
@@ -112,6 +115,7 @@ export const createApp = (
       next(error);
     }
   });
+
   app.delete("/sandboxes/:id", async (request, response, next) => {
     try {
       response.json(await service.stop(id(request)));
@@ -119,28 +123,4 @@ export const createApp = (
       next(error);
     }
   });
-  app.use((_request, _response, next) =>
-    next(new ServiceError("not_found", "Route was not found", 404)),
-  );
-  app.use(
-    (
-      error: unknown,
-      _request: Request,
-      response: Response,
-      _next: NextFunction,
-    ) => {
-      const serviceError =
-        error instanceof ServiceError
-          ? error
-          : new ServiceError("internal_error", "Internal server error", 500);
-      response.status(serviceError.status).json({
-        error: {
-          code: serviceError.code,
-          message: serviceError.message,
-          details: serviceError.details,
-        },
-      });
-    },
-  );
-  return app;
 };
