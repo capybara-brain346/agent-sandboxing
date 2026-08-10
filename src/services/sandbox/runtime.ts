@@ -3,33 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
-
-export type RuntimeOutput = { stream: "stdout" | "stderr"; chunk: string };
-export type RuntimeResult = {
-  exitCode: number | null;
-  timedOut: boolean;
-  outputBytes: number;
-  outputTruncated: boolean;
-};
-export interface SandboxRuntime {
-  provision(
-    sandboxId: string,
-    containerName: string,
-    image: string,
-    fixturePath: string,
-    signal?: AbortSignal,
-  ): Promise<{ containerId: string }>;
-  run(
-    containerName: string,
-    command: string,
-    cwd: string,
-    env: Record<string, string>,
-    timeoutMs: number,
-    onOutput: (output: RuntimeOutput) => Promise<void>,
-  ): Promise<RuntimeResult>;
-  diff(containerName: string): Promise<string>;
-  stop(containerName: string, graceMs: number): Promise<void>;
-}
+import type { RuntimeOutput, RuntimeResult } from "../../types/sandbox.types";
 
 const execFile = (
   args: string[],
@@ -84,7 +58,7 @@ const execFile = (
     });
   });
 
-export class DockerSandboxRuntime implements SandboxRuntime {
+export class SandboxRuntime {
   constructor(private readonly config: Config) {}
 
   async provision(

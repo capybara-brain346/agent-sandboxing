@@ -79,3 +79,28 @@ export type DiffResponse = {
   diff: string;
   generatedAt: string;
 };
+
+export type RuntimeOutput = { stream: "stdout" | "stderr"; chunk: string };
+
+export type RuntimeResult = {
+  exitCode: number | null;
+  timedOut: boolean;
+  outputBytes: number;
+  outputTruncated: boolean;
+};
+
+export type NormalizedCommandRequest = {
+  command: string;
+  cwd: string;
+  env: Record<string, string>;
+  timeoutMs: number;
+};
+
+export type LimitedOutputEvent = {
+  payload: {
+    stream: "stdout" | "stderr";
+    chunk: string;
+    chunk_index: number;
+    truncated: boolean;
+  };
+};

@@ -10,13 +10,16 @@ import type { Config } from "../../config";
 import type {
   CommandRequest,
   EventType,
+  LimitedOutputEvent,
+  NormalizedCommandRequest,
   PublicEvent,
+  RuntimeOutput,
   StartCommandResponse,
 } from "../../types/sandbox.types";
 import { ServiceError, notFound } from "../../shared/errors";
 import { isWorkspacePath, workspaceRoot } from "./workspace";
 import type { EventStore } from "./event-store";
-import type { RuntimeOutput, SandboxRuntime } from "./runtime";
+import type { SandboxRuntime } from "./runtime";
 
 const safeEnv = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -71,13 +74,6 @@ const isUniqueConstraintError = (error: unknown, name: string): boolean => {
   );
 };
 
-export type NormalizedCommandRequest = {
-  command: string;
-  cwd: string;
-  env: Record<string, string>;
-  timeoutMs: number;
-};
-
 export const normalizeCommandRequest = (
   input: CommandRequest,
   maxTimeoutMs: number,
@@ -113,15 +109,6 @@ export const normalizeCommandRequest = (
     );
 
   return { command, cwd, env, timeoutMs };
-};
-
-export type LimitedOutputEvent = {
-  payload: {
-    stream: "stdout" | "stderr";
-    chunk: string;
-    chunk_index: number;
-    truncated: boolean;
-  };
 };
 
 export class CommandOutputLimiter {

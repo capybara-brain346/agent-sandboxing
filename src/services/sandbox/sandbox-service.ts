@@ -20,8 +20,7 @@ import { ServiceError, notFound } from "../../shared/errors";
 import { workspaceRoot } from "./workspace";
 import { CommandExecutionService } from "./command-execution-service";
 import { EventStore } from "./event-store";
-import type { SandboxRuntime } from "./runtime";
-import { DockerSandboxRuntime } from "./runtime";
+import { SandboxRuntime } from "./runtime";
 import { sseHub } from "./sse-hub";
 
 const transitions: Record<SandboxStatus, readonly SandboxStatus[]> = {
@@ -341,7 +340,7 @@ export class SandboxService {
 export const sandboxService = new SandboxService(
   prisma,
   new EventStore(prisma),
-  new DockerSandboxRuntime(loadConfig()),
+  new SandboxRuntime(loadConfig()),
   loadConfig(),
   (event) => sseHub.publish(event),
 );
