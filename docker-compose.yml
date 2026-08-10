@@ -20,7 +20,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: 3000
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent_sandboxing?schema=public
       FIXTURE_REPO_PATH: /workspace/fixture-repo

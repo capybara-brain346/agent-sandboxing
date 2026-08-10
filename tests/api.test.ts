@@ -51,7 +51,7 @@ describe("HTTP wiring", () => {
       .post("/sandboxes")
       .send({ unexpectedField: "value" });
     expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe("unsupported_request");
+    expect(response.body.error.code).toBe("invalid_request");
   });
 
   it("rejects invalid local fixture provisioning fields before service dispatch", async () => {

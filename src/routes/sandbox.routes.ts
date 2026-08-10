@@ -1,42 +1,22 @@
 import { Router } from "express";
-import { z } from "zod";
 import { ServiceError } from "../shared/errors";
 import { isWorkspacePath } from "../services/sandbox/workspace";
-import { sandboxService } from "../services/sandbox/sandbox-service";
+import { sandboxService } from "../services/sandbox/sandbox";
 import { sseHub } from "../services/sandbox/sse-hub";
-
-const createSandboxSchema = z
-  .object({
-    fixtureRepoPath: z.string().min(1).optional(),
-    image: z.string().min(1).optional(),
-  })
-  .strict();
-
-const commandRequestSchema = z
-  .object({
-    command: z.string(),
-    cwd: z.string().optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    timeoutMs: z.number().int().positive().optional(),
-  })
-  .strict();
+import {
+  commandRequestSchema,
+  createSandboxSchema,
+} from "../types/sandbox.types";
 
 export const sandboxRouter = Router();
 
 sandboxRouter.post("/sandboxes", async (request, response, next) => {
   try {
     const parsed = createSandboxSchema.safeParse(request.body ?? {});
-    if (!parsed.success) {
-      const hasUnknownKey = parsed.error.issues.some(
-        (issue) => issue.code === "unrecognized_keys",
-      );
-      throw new ServiceError(
-        hasUnknownKey ? "unsupported_request" : "invalid_request",
-        hasUnknownKey
-          ? "Only local fixture provisioning fields are supported"
-          : "Request body is invalid",
-      );
-    }
+    if (!parsed.success)
+      throw new ServiceError("invalid_request", "Request body is invalid", 400, {
+        issues: parsed.error.issues,
+      });
     const result = await sandboxService.create(parsed.data);
     response.status(202).json(result);
   } catch (error) {
@@ -61,11 +41,13 @@ sandboxRouter.get("/sandboxes/:id/events", async (request, response, next) => {
         ? request.query.after
         : (request.header("Last-Event-ID") ?? "0");
     const after = Number(raw);
+
     if (!Number.isSafeInteger(after) || after < 0)
       throw new ServiceError(
         "invalid_cursor",
         "Event cursor must be a non-negative integer",
       );
+
     if (!(await sandboxService.has(sandboxId)))
       throw new ServiceError("sandbox_not_found", "Sandbox was not found", 404);
 
@@ -78,16 +60,19 @@ sandboxRouter.get("/sandboxes/:id/events", async (request, response, next) => {
     response.flushHeaders();
 
     const client = sseHub.subscribe(sandboxId, response, after);
+
     const events = await sandboxService.eventsAfter(sandboxId, after);
     for (const event of events)
       response.write(
         `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
       );
+
     sseHub.finishReplay(sandboxId, client, events.at(-1)?.sequence ?? after);
 
     const timer = setInterval(() => {
       if (!response.writableEnded) response.write(": keepalive\n\n");
     }, 15000);
+
     response.on("close", () => clearInterval(timer));
   } catch (error) {
     if (!response.headersSent) next(error);

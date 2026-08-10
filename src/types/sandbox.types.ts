@@ -1,4 +1,5 @@
 import type { SandboxEventActor } from "@prisma/client";
+import { z } from "zod";
 
 export const EVENT_TYPES = [
   "sandbox_created",
@@ -49,17 +50,23 @@ export type PublicEvent = {
   createdAt: string;
 };
 
-export type CreateSandboxRequest = {
-  fixtureRepoPath?: string | undefined;
-  image?: string | undefined;
-};
+export const createSandboxSchema = z
+  .object({
+    fixtureRepoPath: z.string().min(1).optional(),
+    image: z.string().min(1).optional(),
+  })
+  .strict();
+export type CreateSandboxRequest = z.infer<typeof createSandboxSchema>;
 
-export type CommandRequest = {
-  command: string;
-  cwd?: string | undefined;
-  env?: Record<string, string> | undefined;
-  timeoutMs?: number | undefined;
-};
+export const commandRequestSchema = z
+  .object({
+    command: z.string(),
+    cwd: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
+export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
 export type CreateSandboxResponse = {
   sandboxId: string;

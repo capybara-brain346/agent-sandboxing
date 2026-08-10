@@ -168,21 +168,27 @@ export class SandboxRuntime {
     onOutput: (output: RuntimeOutput) => Promise<void>,
   ): Promise<RuntimeResult> {
     const args = ["exec", "-i", "-w", cwd];
+
     for (const [key, value] of Object.entries(env))
       args.push("-e", `${key}=${value}`);
     args.push(containerName, "sh", "-lc", command);
+
     const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
+
     let outputBytes = 0;
     let outputTruncated = false;
     let timedOut = false;
     let outputChain = Promise.resolve();
+
     const consume = (stream: "stdout" | "stderr", data: Buffer): void => {
       const chunk = data.toString("utf8");
       outputBytes += Buffer.byteLength(chunk);
       outputChain = outputChain.then(() => onOutput({ stream, chunk }));
     };
+
     child.stdout.on("data", (data: Buffer) => consume("stdout", data));
     child.stderr.on("data", (data: Buffer) => consume("stderr", data));
+
     const result = await new Promise<number | null>((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -202,8 +208,10 @@ export class SandboxRuntime {
         void outputChain.then(() => resolve(code), reject);
       });
     });
+
     if (outputBytes > this.config.COMMAND_OUTPUT_MAX_BYTES)
       outputTruncated = true;
+
     return { exitCode: result, timedOut, outputBytes, outputTruncated };
   }
 
@@ -225,6 +233,7 @@ export class SandboxRuntime {
       )
     ).stdout;
   }
+
   async stop(containerName: string, graceMs: number): Promise<void> {
     await execFile(
       ["stop", "--time", String(Math.ceil(graceMs / 1000)), containerName],
@@ -233,6 +242,7 @@ export class SandboxRuntime {
       if (!error.message.toLowerCase().includes("no such container"))
         throw error;
     });
+
     await execFile(["rm", "-f", containerName], { timeoutMs: 10000 }).catch(
       () => undefined,
     );

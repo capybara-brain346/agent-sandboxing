@@ -161,7 +161,7 @@ prepare_fixture_repo
 
 log "checking unsupported create request validation"
 curl_json POST /sandboxes '{"unexpectedField":"value"}' 400 "$TMP_DIR/create-invalid.json"
-[[ "$(json_field "$TMP_DIR/create-invalid.json" error.code)" == "unsupported_request" ]] || fail "unexpected validation error code"
+[[ "$(json_field "$TMP_DIR/create-invalid.json" error.code)" == "invalid_request" ]] || fail "unexpected validation error code"
 
 log "creating sandbox"
 if [[ -n "${API_FIXTURE_REPO_PATH}" ]]; then

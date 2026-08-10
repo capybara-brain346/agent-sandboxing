@@ -17,8 +17,9 @@ import type {
   StartCommandResponse,
 } from "../../types/sandbox.types";
 import { ServiceError, notFound } from "../../shared/errors";
+import { logQueryFailure, runQuery } from "../../shared/query-logging";
 import { workspaceRoot } from "./workspace";
-import { CommandExecutionService } from "./command-execution-service";
+import { CommandExecutionService } from "./command-execution";
 import { EventStore } from "./event-store";
 import { SandboxRuntime } from "./runtime";
 import { sseHub } from "./sse-hub";
@@ -40,7 +41,12 @@ export const canTransition = (
 const safeError = (
   error: unknown,
   operation: string,
-): { code: string; message: string; operation: string; retryable: boolean } => ({
+): {
+  code: string;
+  message: string;
+  operation: string;
+  retryable: boolean;
+} => ({
   code: error instanceof ServiceError ? error.code : "unknown",
   message:
     error instanceof ServiceError
@@ -71,33 +77,35 @@ export class SandboxService {
 
   async create(input: CreateSandboxRequest): Promise<CreateSandboxResponse> {
     const id = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
-    const containerName = `agent-sandbox-${id}`;
+    const containerName = `sandbox-${id}`;
     const fixtureRepoPath =
       input.fixtureRepoPath ?? this.config.FIXTURE_REPO_PATH;
     const image = input.image ?? this.config.SANDBOX_IMAGE;
-    const result = await this.prisma.$transaction(async (tx) => {
-      const sandbox = await tx.sandbox.create({
-        data: {
-          id,
-          status: "creating",
-          containerName,
-          image,
-          workspacePath: workspaceRoot,
-          fixtureRepoPath,
-        },
-      });
-      const event = await this.events.appendInTransaction(tx, {
-        sandboxId: id,
-        type: "sandbox_created",
-        actor: "api",
-        correlationId: randomUUID(),
-        payload: {
-          container_name: containerName,
-          workspace_path: sandbox.workspacePath,
-        },
-      });
-      return { sandbox, event };
-    });
+    const result = await runQuery("create_sandbox", { sandboxId: id }, () =>
+      this.prisma.$transaction(async (tx) => {
+        const sandbox = await tx.sandbox.create({
+          data: {
+            id,
+            status: "creating",
+            containerName,
+            image,
+            workspacePath: workspaceRoot,
+            fixtureRepoPath,
+          },
+        });
+        const event = await this.events.appendInTransaction(tx, {
+          sandboxId: id,
+          type: "sandbox_created",
+          actor: "api",
+          correlationId: randomUUID(),
+          payload: {
+            container_name: containerName,
+            workspace_path: sandbox.workspacePath,
+          },
+        });
+        return { sandbox, event };
+      }),
+    );
     this.publish(result.event);
     void this.provision(
       result.sandbox.id,
@@ -114,15 +122,18 @@ export class SandboxService {
   }
 
   async get(sandboxId: string): Promise<unknown> {
-    const sandbox = await this.prisma.sandbox.findUnique({
-      where: { id: sandboxId },
-    });
+    const sandbox = await runQuery("get_sandbox", { sandboxId }, () =>
+      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
+    );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
     return this.snapshot(sandbox);
   }
 
   async has(sandboxId: string): Promise<boolean> {
-    return (await this.prisma.sandbox.count({ where: { id: sandboxId } })) > 0;
+    const count = await runQuery("has_sandbox", { sandboxId }, () =>
+      this.prisma.sandbox.count({ where: { id: sandboxId } }),
+    );
+    return count > 0;
   }
 
   async eventsAfter(sandboxId: string, after: number): Promise<PublicEvent[]> {
@@ -143,9 +154,9 @@ export class SandboxService {
   }
 
   async diff(sandboxId: string): Promise<DiffResponse> {
-    const sandbox = await this.prisma.sandbox.findUnique({
-      where: { id: sandboxId },
-    });
+    const sandbox = await runQuery("get_sandbox_for_diff", { sandboxId }, () =>
+      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
+    );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
     if (!["ready", "stopping", "stopped", "failed"].includes(sandbox.status))
       throw new ServiceError(
@@ -178,46 +189,50 @@ export class SandboxService {
   }
 
   async stop(sandboxId: string): Promise<unknown> {
-    const sandbox = await this.prisma.sandbox.findUnique({
-      where: { id: sandboxId },
-    });
+    const sandbox = await runQuery("get_sandbox_for_stop", { sandboxId }, () =>
+      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
+    );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
     if (sandbox.status === "stopped") return this.snapshot(sandbox);
     if (sandbox.status === "deleted")
       throw new ServiceError("sandbox_deleted", "Sandbox was deleted", 410);
-    const stopping = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.sandbox.update({
-        where: { id: sandboxId },
-        data: { status: "stopping", stoppingAt: new Date() },
-      });
-      const event = await this.events.appendInTransaction(tx, {
-        sandboxId,
-        type: "sandbox_stopping",
-        actor: "api",
-        correlationId: randomUUID(),
-        payload: {},
-      });
-      return { row, event };
-    });
+    const stopping = await runQuery("mark_sandbox_stopping", { sandboxId }, () =>
+      this.prisma.$transaction(async (tx) => {
+        const row = await tx.sandbox.update({
+          where: { id: sandboxId },
+          data: { status: "stopping", stoppingAt: new Date() },
+        });
+        const event = await this.events.appendInTransaction(tx, {
+          sandboxId,
+          type: "sandbox_stopping",
+          actor: "api",
+          correlationId: randomUUID(),
+          payload: {},
+        });
+        return { row, event };
+      }),
+    );
     this.publish(stopping.event);
     await this.runtime.stop(
       sandbox.containerName,
       this.config.SANDBOX_STOP_GRACE_MS,
     );
-    const stopped = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.sandbox.update({
-        where: { id: sandboxId },
-        data: { status: "stopped", stoppedAt: new Date() },
-      });
-      const event = await this.events.appendInTransaction(tx, {
-        sandboxId,
-        type: "sandbox_stopped",
-        actor: "cleanup",
-        correlationId: randomUUID(),
-        payload: {},
-      });
-      return { row, event };
-    });
+    const stopped = await runQuery("mark_sandbox_stopped", { sandboxId }, () =>
+      this.prisma.$transaction(async (tx) => {
+        const row = await tx.sandbox.update({
+          where: { id: sandboxId },
+          data: { status: "stopped", stoppedAt: new Date() },
+        });
+        const event = await this.events.appendInTransaction(tx, {
+          sandboxId,
+          type: "sandbox_stopped",
+          actor: "cleanup",
+          correlationId: randomUUID(),
+          payload: {},
+        });
+        return { row, event };
+      }),
+    );
     this.publish(stopped.event);
     return this.snapshot(stopped.row);
   }
@@ -247,36 +262,39 @@ export class SandboxService {
         image,
         fixturePath,
       );
-      const events = await this.prisma.$transaction(async (tx) => {
-        await tx.sandbox.update({
-          where: { id: sandboxId },
-          data: {
-            containerId: provisioned.containerId,
-            status: "ready",
-            readyAt: new Date(),
-          },
-        });
-        const copied = await this.events.appendInTransaction(tx, {
-          sandboxId,
-          type: "fixture_repo_copied",
-          actor: "provisioner",
-          correlationId: randomUUID(),
-          payload: { workspace_path: workspaceRoot },
-        });
-        const ready = await this.events.appendInTransaction(tx, {
-          sandboxId,
-          type: "sandbox_ready",
-          actor: "provisioner",
-          correlationId: randomUUID(),
-          payload: { container_id: provisioned.containerId },
-        });
-        return [copied, ready];
-      });
+      const events = await runQuery("mark_sandbox_ready", { sandboxId }, () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.sandbox.update({
+            where: { id: sandboxId },
+            data: {
+              containerId: provisioned.containerId,
+              status: "ready",
+              readyAt: new Date(),
+            },
+          });
+          const copied = await this.events.appendInTransaction(tx, {
+            sandboxId,
+            type: "fixture_repo_copied",
+            actor: "provisioner",
+            correlationId: randomUUID(),
+            payload: { workspace_path: workspaceRoot },
+          });
+          const ready = await this.events.appendInTransaction(tx, {
+            sandboxId,
+            type: "sandbox_ready",
+            actor: "provisioner",
+            correlationId: randomUUID(),
+            payload: { container_id: provisioned.containerId },
+          });
+          return [copied, ready];
+        }),
+      );
       events.forEach((event) => this.publish(event));
     } catch (error) {
+      logQueryFailure("provision_sandbox", { sandboxId }, error);
       const safe = safeError(error, "provision");
-      await this.prisma
-        .$transaction(async (tx) => {
+      await runQuery("mark_sandbox_failed", { sandboxId }, () =>
+        this.prisma.$transaction(async (tx) => {
           await tx.sandbox.update({
             where: { id: sandboxId },
             data: {
@@ -293,7 +311,8 @@ export class SandboxService {
             correlationId: randomUUID(),
             payload: safe,
           });
-        })
+        }),
+      )
         .then((event) => this.publish(event))
         .catch(() => undefined);
     }
@@ -306,9 +325,11 @@ export class SandboxService {
     actor: SandboxEventActor;
     payload: Record<string, unknown>;
   }): Promise<void> {
-    this.publish(
-      await this.events.append({ ...input, correlationId: randomUUID() }),
-    );
+    const event = await this.events.append({
+      ...input,
+      correlationId: randomUUID(),
+    });
+    this.publish(event);
   }
 
   private snapshot(sandbox: {

@@ -9,6 +9,8 @@
     "start": "tsx src/index.ts",
     "start:prod": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:runtime": "vitest run --config vitest.runtime.config.ts",
@@ -23,13 +25,16 @@
     "zod": "^4.0.17"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.3",
     "@types/node": "^24.3.0",
     "esbuild": "^0.28.2",
+    "eslint": "^10.8.1",
     "prisma": "^6.14.0",
     "supertest": "^7.1.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2",
+    "typescript-eslint": "^8.66.0",
     "vitest": "^3.2.4"
   }
 }

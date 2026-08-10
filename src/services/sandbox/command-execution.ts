@@ -17,6 +17,7 @@ import type {
   StartCommandResponse,
 } from "../../types/sandbox.types";
 import { ServiceError, notFound } from "../../shared/errors";
+import { runQuery } from "../../shared/query-logging";
 import { isWorkspacePath, workspaceRoot } from "./workspace";
 import type { EventStore } from "./event-store";
 import type { SandboxRuntime } from "./runtime";
@@ -85,17 +86,20 @@ export const normalizeCommandRequest = (
 
   if (!command)
     throw new ServiceError("invalid_request", "command must not be empty");
+
   if (!isWorkspacePath(cwd))
     throw new ServiceError(
       "unsafe_command_request",
       "cwd must be under /workspace/repo",
       422,
     );
+
   if (timeoutMs < 1 || timeoutMs > maxTimeoutMs)
     throw new ServiceError(
       "invalid_request",
       "timeoutMs exceeds the configured maximum",
     );
+
   if (
     Object.entries(env).some(
       ([key, value]) =>
@@ -177,58 +181,62 @@ export class CommandExecutionService {
       input,
       this.config.SANDBOX_COMMAND_TIMEOUT_MS,
     );
-    const result = await this.prisma
-      .$transaction(async (tx) => {
-        const sandboxes = await tx.$queryRaw<
-          Array<{
-            id: string;
-            status: SandboxStatus;
-            container_name: string;
-          }>
-        >`SELECT id, status, container_name FROM sandboxes WHERE id = ${sandboxId} FOR UPDATE`;
-        const sandbox = sandboxes[0];
-        if (!sandbox)
-          throw notFound("sandbox_not_found", "Sandbox was not found");
-        if (sandbox.status !== "ready")
-          throw new ServiceError(
-            "sandbox_not_ready",
-            "Sandbox is not ready",
-            409,
-          );
+    const result = await runQuery("start_command", { sandboxId }, () =>
+      this.prisma
+        .$transaction(async (tx) => {
+          const sandboxes = await tx.$queryRaw<
+            Array<{
+              id: string;
+              status: SandboxStatus;
+              container_name: string;
+            }>
+          >`SELECT id, status, container_name FROM sandboxes WHERE id = ${sandboxId} FOR UPDATE`;
+          const sandbox = sandboxes[0];
+          if (!sandbox)
+            throw notFound("sandbox_not_found", "Sandbox was not found");
+          if (sandbox.status !== "ready")
+            throw new ServiceError(
+              "sandbox_not_ready",
+              "Sandbox is not ready",
+              409,
+            );
 
-        const row = await tx.command.create({
-          data: {
+          const row = await tx.command.create({
+            data: {
+              sandboxId,
+              status: "running",
+              command: normalized.command,
+              cwd: normalized.cwd,
+              env: normalized.env as Prisma.InputJsonValue,
+              timeoutMs: normalized.timeoutMs,
+            },
+          });
+          const event = await this.events.appendInTransaction(tx, {
             sandboxId,
-            status: "running",
-            command: normalized.command,
-            cwd: normalized.cwd,
-            env: normalized.env as Prisma.InputJsonValue,
-            timeoutMs: normalized.timeoutMs,
-          },
-        });
-        const event = await this.events.appendInTransaction(tx, {
-          sandboxId,
-          commandId: row.id,
-          type: "command_started",
-          actor: "api",
-          correlationId: randomUUID(),
-          payload: {
-            command_id: row.id,
-            cwd: normalized.cwd,
-            timeout_ms: normalized.timeoutMs,
-          },
-        });
-        return { row, event, containerName: sandbox.container_name };
-      })
-      .catch((error: unknown) => {
-        if (isUniqueConstraintError(error, "commands_one_running_per_sandbox"))
-          throw new ServiceError(
-            "command_already_running",
-            "Another command is already running",
-            409,
-          );
-        throw error;
-      });
+            commandId: row.id,
+            type: "command_started",
+            actor: "api",
+            correlationId: randomUUID(),
+            payload: {
+              command_id: row.id,
+              cwd: normalized.cwd,
+              timeout_ms: normalized.timeoutMs,
+            },
+          });
+          return { row, event, containerName: sandbox.container_name };
+        })
+        .catch((error: unknown) => {
+          if (
+            isUniqueConstraintError(error, "commands_one_running_per_sandbox")
+          )
+            throw new ServiceError(
+              "command_already_running",
+              "Another command is already running",
+              409,
+            );
+          throw error;
+        }),
+    );
 
     this.publish(result.event);
     void this.executeCommand(
@@ -245,14 +253,18 @@ export class CommandExecutionService {
   }
 
   async getCommand(sandboxId: string, commandId: string): Promise<unknown> {
-    const hasSandbox =
-      (await this.prisma.sandbox.count({ where: { id: sandboxId } })) > 0;
-    if (!hasSandbox)
+    const count = await runQuery("has_sandbox", { sandboxId }, () =>
+      this.prisma.sandbox.count({ where: { id: sandboxId } }),
+    );
+    if (count === 0)
       throw notFound("sandbox_not_found", "Sandbox was not found");
 
-    const command = await this.prisma.command.findFirst({
-      where: { id: commandId, sandboxId },
-    });
+    const command = await runQuery(
+      "get_command",
+      { sandboxId, commandId },
+      () =>
+        this.prisma.command.findFirst({ where: { id: commandId, sandboxId } }),
+    );
     if (!command) throw notFound("command_not_found", "Command was not found");
     return {
       commandId: command.id,
@@ -311,28 +323,33 @@ export class CommandExecutionService {
         completedAt: new Date(),
       };
       if (result.timedOut) data.failureCode = "command_timeout";
-      const event = await this.prisma.$transaction(async (tx) => {
-        await tx.command.update({ where: { id: commandId }, data });
-        return this.events.appendInTransaction(tx, {
-          sandboxId,
-          commandId,
-          type: eventType,
-          actor: "runtime",
-          correlationId: randomUUID(),
-          payload: {
-            exit_code: result.exitCode,
-            duration_ms: 0,
-            timeout_ms: command.timeoutMs,
-            output_bytes: output.bytes,
-            output_truncated: outputTruncated,
-          },
-        });
-      });
+      const event = await runQuery(
+        "complete_command",
+        { sandboxId, commandId },
+        () =>
+          this.prisma.$transaction(async (tx) => {
+            await tx.command.update({ where: { id: commandId }, data });
+            return this.events.appendInTransaction(tx, {
+              sandboxId,
+              commandId,
+              type: eventType,
+              actor: "runtime",
+              correlationId: randomUUID(),
+              payload: {
+                exit_code: result.exitCode,
+                duration_ms: 0,
+                timeout_ms: command.timeoutMs,
+                output_bytes: output.bytes,
+                output_truncated: outputTruncated,
+              },
+            });
+          }),
+      );
       this.publish(event);
     } catch (error) {
       const safe = this.safeError(error, "command");
-      await this.prisma
-        .$transaction(async (tx) => {
+      await runQuery("mark_command_failed", { sandboxId, commandId }, () =>
+        this.prisma.$transaction(async (tx) => {
           await tx.command.update({
             where: { id: commandId },
             data: {
@@ -350,7 +367,8 @@ export class CommandExecutionService {
             correlationId: randomUUID(),
             payload: safe,
           });
-        })
+        }),
+      )
         .then((event) => this.publish(event))
         .catch(() => undefined);
     }
@@ -363,9 +381,11 @@ export class CommandExecutionService {
     actor: SandboxEventActor;
     payload: Record<string, unknown>;
   }): Promise<void> {
-    this.publish(
-      await this.events.append({ ...input, correlationId: randomUUID() }),
-    );
+    const event = await this.events.append({
+      ...input,
+      correlationId: randomUUID(),
+    });
+    this.publish(event);
   }
 
   private safeError(

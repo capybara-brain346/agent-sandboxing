@@ -1,5 +1,6 @@
 import type { PrismaClient, Prisma, SandboxEventActor } from "@prisma/client";
 import type { EventType, PublicEvent } from "../../types/sandbox.types";
+import { runQuery } from "../../shared/query-logging";
 
 type AppendInput = {
   sandboxId: string;
@@ -30,8 +31,8 @@ export class EventStore {
   constructor(private readonly prisma: PrismaClient) {}
 
   async append(input: AppendInput): Promise<PublicEvent> {
-    return this.prisma.$transaction((tx) =>
-      this.appendInTransaction(tx, input),
+    return runQuery("append_event", { sandboxId: input.sandboxId }, () =>
+      this.prisma.$transaction((tx) => this.appendInTransaction(tx, input)),
     );
   }
 
@@ -63,10 +64,12 @@ export class EventStore {
   }
 
   async listAfter(sandboxId: string, after: number): Promise<PublicEvent[]> {
-    const events = await this.prisma.sandboxEvent.findMany({
-      where: { sandboxId, sequence: { gt: after } },
-      orderBy: { sequence: "asc" },
-    });
+    const events = await runQuery("list_events", { sandboxId, after }, () =>
+      this.prisma.sandboxEvent.findMany({
+        where: { sandboxId, sequence: { gt: after } },
+        orderBy: { sequence: "asc" },
+      }),
+    );
     return events.map(toPublic);
   }
 }

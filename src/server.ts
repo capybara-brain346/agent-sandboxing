@@ -4,10 +4,19 @@ import express, {
   type Response,
 } from "express";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { logger } from "./logger";
 import { ServiceError } from "./shared/errors";
 import { prisma } from "./db/prisma";
 import { sandboxRouter } from "./routes/sandbox.routes";
+
+const pkgVersion: string = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL("../package.json", import.meta.url)),
+    "utf-8",
+  ),
+).version;
 
 const requestContext = (
   request: Request,
@@ -48,8 +57,11 @@ const describeError = (error: unknown): Record<string, unknown> =>
     ? { name: error.name, message: error.message, stack: error.stack }
     : { value: error };
 
-const notFoundHandler = (_request: Request, _response: Response, next: NextFunction): void =>
-  next(new ServiceError("not_found", "Route was not found", 404));
+const notFoundHandler = (
+  _request: Request,
+  _response: Response,
+  next: NextFunction,
+): void => next(new ServiceError("not_found", "Route was not found", 404));
 
 const errorHandler = (
   error: unknown,
@@ -86,12 +98,27 @@ export const createApp = (): express.Express => {
   app.use(express.json({ limit: "32kb" }));
 
   app.get("/health", async (_request, response) => {
+    const dbStart = process.hrtime.bigint();
     try {
       await prisma.$queryRaw`SELECT 1`;
-      response.json({ status: "ok" });
+      const dbLatencyMs =
+        Number(process.hrtime.bigint() - dbStart) / 1e6;
+      response.json({
+        status: "ok",
+        version: pkgVersion,
+        uptimeSeconds: Math.round(process.uptime()),
+        timestamp: new Date().toISOString(),
+        checks: { database: { status: "ok", latencyMs: Math.round(dbLatencyMs) } },
+      });
     } catch (error) {
       logger.error("health_check_failed", { error: describeError(error) });
-      response.status(503).json({ status: "unavailable" });
+      response.status(503).json({
+        status: "unavailable",
+        version: pkgVersion,
+        uptimeSeconds: Math.round(process.uptime()),
+        timestamp: new Date().toISOString(),
+        checks: { database: { status: "unavailable" } },
+      });
     }
   });
 
