@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SandboxStatus {
+  creating
+  ready
+  stopping
+  stopped
+  failed
+  deleted
+}
+
+enum CommandStatus {
+  running
+  succeeded
+  failed
+  timed_out
+  cancelled
+}
+
+enum SandboxEventActor {
+  api
+  provisioner
+  runtime
+  cleanup
+}
+
+model Sandbox {
+  id                String        @id @default(cuid())
+  status            SandboxStatus
+  containerId       String?       @map("container_id")
+  containerName     String        @unique @map("container_name")
+  image             String
+  workspacePath     String        @map("workspace_path")
+  fixtureRepoPath   String        @map("fixture_repo_path")
+  nextEventSequence Int           @default(1) @map("next_event_sequence")
+  failureCode       String?       @map("failure_code")
+  failureMessage    String?       @map("failure_message")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  readyAt           DateTime?     @map("ready_at")
+  stoppingAt        DateTime?     @map("stopping_at")
+  stoppedAt         DateTime?     @map("stopped_at")
+  failedAt          DateTime?     @map("failed_at")
+  deletedAt         DateTime?     @map("deleted_at")
+  commands          Command[]
+  events            SandboxEvent[]
+
+  @@index([status, createdAt])
+  @@map("sandboxes")
+}
+
+model Command {
+  id              String        @id @default(cuid())
+  sandboxId       String        @map("sandbox_id")
+  sandbox         Sandbox       @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  status          CommandStatus
+  command         String
+  cwd             String
+  env             Json?
+  timeoutMs       Int           @map("timeout_ms")
+  exitCode        Int?          @map("exit_code")
+  outputBytes     Int           @default(0) @map("output_bytes")
+  outputTruncated Boolean       @default(false) @map("output_truncated")
+  failureCode     String?       @map("failure_code")
+  failureMessage  String?       @map("failure_message")
+  startedAt       DateTime      @default(now()) @map("started_at")
+  completedAt     DateTime?     @map("completed_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  events          SandboxEvent[]
+
+  @@index([sandboxId, createdAt])
+  @@index([sandboxId, status])
+  @@map("commands")
+}
+
+model SandboxEvent {
+  id            String            @id @default(cuid())
+  sandboxId     String            @map("sandbox_id")
+  sandbox       Sandbox           @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  commandId     String?           @map("command_id")
+  command       Command?          @relation(fields: [commandId], references: [id], onDelete: SetNull)
+  sequence      Int
+  type          String
+  actor         SandboxEventActor
+  correlationId String?           @map("correlation_id")
+  payload       Json
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  @@unique([sandboxId, sequence])
+  @@index([sandboxId, sequence])
+  @@index([commandId, sequence])
+  @@map("sandbox_events")
+}
