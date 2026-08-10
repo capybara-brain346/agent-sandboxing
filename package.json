@@ -1,0 +1,40 @@
+{
+  "name": "agent-sandboxing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "start:prod": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:runtime": "vitest run --config vitest.runtime.config.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.14.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "zod": "^4.0.17"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.8.1",
+    "prisma": "^6.14.0",
+    "supertest": "^7.1.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^3.2.4"
+  }
+}
