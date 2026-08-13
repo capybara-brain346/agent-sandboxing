@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  Prisma,
   PrismaClient,
   SandboxEventActor,
   SandboxStatus,
@@ -56,6 +57,15 @@ const safeError = (
   retryable: false,
 });
 
+export type TaskSandboxCreation = {
+  sandboxId: string;
+  status: "creating";
+  containerName: string;
+  image: string;
+  workspacePath: string;
+  fixtureRepoPath: string;
+};
+
 export class SandboxService {
   private readonly commands: CommandExecutionService;
 
@@ -76,30 +86,16 @@ export class SandboxService {
   }
 
   async create(input: CreateSandboxRequest): Promise<CreateSandboxResponse> {
-    const id = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
-    const containerName = `sandbox-${id}`;
-    const fixtureRepoPath =
-      input.fixtureRepoPath ?? this.config.FIXTURE_REPO_PATH;
-    const image = input.image ?? this.config.SANDBOX_IMAGE;
-    const result = await runQuery("create_sandbox", { sandboxId: id }, () =>
+    const result = await runQuery("create_sandbox", {}, () =>
       this.prisma.$transaction(async (tx) => {
-        const sandbox = await tx.sandbox.create({
-          data: {
-            id,
-            status: "creating",
-            containerName,
-            image,
-            workspacePath: workspaceRoot,
-            fixtureRepoPath,
-          },
-        });
+        const sandbox = await this.createSandboxRowInTransaction(tx, input);
         const event = await this.events.appendInTransaction(tx, {
-          sandboxId: id,
+          sandboxId: sandbox.sandboxId,
           type: "sandbox_created",
           actor: "api",
           correlationId: randomUUID(),
           payload: {
-            container_name: containerName,
+            container_name: sandbox.containerName,
             workspace_path: sandbox.workspacePath,
           },
         });
@@ -108,17 +104,73 @@ export class SandboxService {
     );
     this.publish(result.event);
     void this.provision(
-      result.sandbox.id,
-      containerName,
-      image,
-      fixtureRepoPath,
+      result.sandbox.sandboxId,
+      result.sandbox.containerName,
+      result.sandbox.image,
+      result.sandbox.fixtureRepoPath,
     );
     return {
-      sandboxId: result.sandbox.id,
+      sandboxId: result.sandbox.sandboxId,
       status: result.sandbox.status,
       workspacePath: result.sandbox.workspacePath,
-      eventsUrl: `/sandboxes/${result.sandbox.id}/events`,
+      eventsUrl: `/sandboxes/${result.sandbox.sandboxId}/events`,
     };
+  }
+
+  /**
+   * Create the sandbox row for a task-owned transaction. The task service
+   * appends the task and sandbox creation events after the task/sandbox link is
+   * complete so the first event in the task stream is always task_created.
+   */
+  async createForTaskInTransaction(
+    tx: Prisma.TransactionClient,
+    input: CreateSandboxRequest,
+    options: { taskId: string },
+  ): Promise<TaskSandboxCreation> {
+    return this.createSandboxRowInTransaction(tx, input, options.taskId);
+  }
+
+  /**
+   * Compatibility helper for internal callers that already have a task row.
+   * TaskService.create uses the transaction-level method above to create both
+   * rows and both initial events atomically.
+   */
+  async createForTask(
+    input: CreateSandboxRequest,
+    options: { taskId: string },
+  ): Promise<{ sandboxId: string; initialEvent: StreamEvent }> {
+    const result = await runQuery(
+      "create_task_sandbox",
+      { taskId: options.taskId },
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const sandbox = await this.createForTaskInTransaction(
+            tx,
+            input,
+            options,
+          );
+          await tx.task.update({
+            where: { id: options.taskId },
+            data: { sandboxId: sandbox.sandboxId },
+          });
+          const event = await this.events.appendInTransaction(tx, {
+            streamId: options.taskId,
+            type: "sandbox_created",
+            producerService: "sandbox",
+            producerId: sandbox.sandboxId,
+            taskId: options.taskId,
+            sandboxId: sandbox.sandboxId,
+            correlationId: randomUUID(),
+            payload: {
+              container_name: sandbox.containerName,
+              workspace_path: sandbox.workspacePath,
+            },
+          });
+          return { sandbox, event };
+        }),
+    );
+    this.publish(result.event);
+    return { sandboxId: result.sandbox.sandboxId, initialEvent: result.event };
   }
 
   async get(sandboxId: string): Promise<unknown> {
@@ -235,6 +287,37 @@ export class SandboxService {
     );
     this.publish(stopped.event);
     return this.snapshot(stopped.row);
+  }
+
+  private async createSandboxRowInTransaction(
+    tx: Prisma.TransactionClient,
+    input: CreateSandboxRequest,
+    taskId?: string,
+  ): Promise<TaskSandboxCreation> {
+    const sandboxId = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
+    const containerName = `sandbox-${sandboxId}`;
+    const fixtureRepoPath =
+      input.fixtureRepoPath ?? this.config.FIXTURE_REPO_PATH;
+    const image = input.image ?? this.config.SANDBOX_IMAGE;
+    const sandbox = await tx.sandbox.create({
+      data: {
+        id: sandboxId,
+        ...(taskId === undefined ? {} : { taskId }),
+        status: "creating",
+        containerName,
+        image,
+        workspacePath: workspaceRoot,
+        fixtureRepoPath,
+      },
+    });
+    return {
+      sandboxId: sandbox.id,
+      status: "creating",
+      containerName: sandbox.containerName,
+      image: sandbox.image,
+      workspacePath: sandbox.workspacePath,
+      fixtureRepoPath: sandbox.fixtureRepoPath,
+    };
   }
 
   private async provision(

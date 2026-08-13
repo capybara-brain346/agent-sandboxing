@@ -38,9 +38,9 @@ export type TaskExitReason = (typeof TASK_EXIT_REASONS)[number];
 
 export const createTaskSchema = z
   .object({
-    repoRef: z.string().min(1),
-    instructions: z.string().min(1),
-    image: z.string().min(1).optional(),
+    repoRef: z.string().trim().min(1),
+    instructions: z.string().trim().min(1),
+    image: z.string().trim().min(1).optional(),
   })
   .strict();
 export type CreateTaskRequest = z.infer<typeof createTaskSchema>;

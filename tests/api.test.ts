@@ -1,9 +1,36 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/db/prisma", () => ({
-  prisma: { $queryRaw: vi.fn().mockResolvedValue([{ "?column?": 1 }]) },
-}));
+vi.mock("../src/db/prisma", () => {
+  const prisma = {
+    $queryRaw: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+    $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => {
+      let nextSequence = 1;
+      const task = {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          if ("nextEventSequence" in data) nextSequence += 1;
+          return data;
+        }),
+      };
+      const tx = {
+        $queryRaw: vi.fn(async () => [{ next_event_sequence: nextSequence }]),
+        task,
+        sandbox: {
+          create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        },
+        event: {
+          create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+            ...data,
+            createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          })),
+        },
+      };
+      return callback(tx);
+    }),
+  };
+  return { prisma };
+});
 
 const { createApp } = await import("../src/server");
 
@@ -36,13 +63,18 @@ describe("HTTP wiring", () => {
     expect(response.body.error.code).toBe("not_found");
   });
 
-  it("does not pretend task execution is implemented during the route phase", async () => {
+  it("creates a task without exposing sandbox internals", async () => {
     const response = await request(app).post("/tasks").send({
       repoRef: "./repo",
       instructions: "No-op",
     });
 
-    expect(response.status).toBe(501);
-    expect(response.body.error.code).toBe("task_service_unavailable");
+    expect(response.status).toBe(202);
+    expect(response.body.taskId).toMatch(/^task_/);
+    expect(response.body.status).toBe("created");
+    expect(response.body.eventsUrl).toBe(
+      `/tasks/${response.body.taskId}/events`,
+    );
+    expect(response.body).not.toHaveProperty("sandboxId");
   });
 });
