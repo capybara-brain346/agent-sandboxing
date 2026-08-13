@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { ServiceError } from "../shared/errors";
 import { taskService } from "../services/task/task";
+import { sseHub, type SseHub } from "../services/events/sse-hub";
 import {
   createTaskSchema,
   type PublicTaskEvent,
@@ -32,8 +33,15 @@ const writeEvent = (response: {
   );
 };
 
+type TaskEventHub = Pick<
+  SseHub,
+  "subscribeTask" | "finishTaskReplay"
+> &
+  Partial<Pick<SseHub, "unsubscribeTask">>;
+
 export const createTaskRouter = (
   service: TaskServicePort = taskService,
+  eventHub: TaskEventHub = sseHub,
 ): Router => {
   const router = Router();
 
@@ -60,6 +68,21 @@ export const createTaskRouter = (
   });
 
   router.get("/tasks/:taskId/events", async (request, response, next) => {
+    let client: ReturnType<SseHub["subscribeTask"]> | undefined;
+    let keepalive: ReturnType<typeof setInterval> | undefined;
+    let closed = false;
+
+    const clearKeepalive = (): void => {
+      if (keepalive !== undefined) clearInterval(keepalive);
+    };
+
+    const onClose = (): void => {
+      closed = true;
+      clearKeepalive();
+      if (client !== undefined)
+        eventHub.unsubscribeTask?.(taskIdFrom(request.params.taskId), client);
+    };
+
     try {
       const taskId = taskIdFrom(request.params.taskId);
       const queryAfter = request.query.after;
@@ -70,7 +93,20 @@ export const createTaskRouter = (
             ? queryAfter
             : "invalid";
       const after = parseCursor(rawAfter);
+
+      // Subscribe before reading persisted events. Events committed while the
+      // replay query is in flight are buffered by SseHub and flushed after the
+      // replay, so a reconnect cannot lose a live event in the gap.
+      client = eventHub.subscribeTask(taskId, response, after);
+      response.on("close", onClose);
       const events = await service.eventsAfter(taskId, after);
+
+      // The task lookup happens inside eventsAfter. Keep headers unsent until
+      // it succeeds so a missing task still receives the normal 404 response.
+      if (closed || response.writableEnded || response.destroyed) {
+        eventHub.unsubscribeTask?.(taskId, client);
+        return;
+      }
 
       response.status(200).set({
         "Content-Type": "text/event-stream",
@@ -80,8 +116,23 @@ export const createTaskRouter = (
       });
       response.flushHeaders();
       for (const event of events) writeEvent(response, event);
-      response.end();
+
+      eventHub.finishTaskReplay(
+        taskId,
+        client,
+        events.at(-1)?.sequence ?? after,
+      );
+
+      if (closed || response.writableEnded || response.destroyed) return;
+      keepalive = setInterval(() => {
+        if (!response.writableEnded && !response.destroyed)
+          response.write(": keepalive\n\n");
+      }, 15000);
+      keepalive.unref();
     } catch (error) {
+      clearKeepalive();
+      if (client !== undefined)
+        eventHub.unsubscribeTask?.(taskIdFrom(request.params.taskId), client);
       if (!response.headersSent) next(error);
       else response.end();
     }

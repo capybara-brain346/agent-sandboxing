@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createTaskRouter } from "../src/routes/task.routes";
+import { SseHub } from "../src/services/events/sse-hub";
 import { ServiceError } from "../src/shared/errors";
 import type {
   PublicTaskEvent,
@@ -38,10 +39,10 @@ const event: PublicTaskEvent = {
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
-const makeApp = (service: TaskServicePort) => {
+const makeApp = (service: TaskServicePort, eventHub = new SseHub()) => {
   const app = express();
   app.use(express.json());
-  app.use(createTaskRouter(service));
+  app.use(createTaskRouter(service, eventHub));
   app.use(
     (
       error: unknown,
@@ -104,7 +105,19 @@ describe("task routes", () => {
     const service = {
       eventsAfter: vi.fn().mockResolvedValue([event]),
     } as unknown as TaskServicePort;
-    const response = await request(makeApp(service)).get(
+    const eventHub = new SseHub();
+    vi.spyOn(eventHub, "finishTaskReplay").mockImplementation(
+      (taskId, client, replayLast) => {
+        SseHub.prototype.finishTaskReplay.call(
+          eventHub,
+          taskId,
+          client,
+          replayLast,
+        );
+        client.response.end();
+      },
+    );
+    const response = await request(makeApp(service, eventHub)).get(
       "/tasks/task_1/events?after=0",
     );
 

@@ -35,6 +35,45 @@ describe("SseHub", () => {
     expect(writes[0]).toContain("event: sandbox_ready");
   });
 
+  it("keeps task events ordered across replay and live delivery", () => {
+    const writes: string[] = [];
+    const response = {
+      write: (data: string) => {
+        writes.push(data);
+        return true;
+      },
+      on: () => response,
+    } as unknown as Response;
+    const hub = new SseHub();
+    const client = hub.subscribeTask("task_1", response, 2);
+
+    const event = (sequence: number) => ({
+      id: `evt_${sequence}`,
+      streamId: "task_1",
+      taskId: "task_1",
+      sandboxId: "sbox_1",
+      commandId: null,
+      sequence,
+      type: "sandbox_ready" as const,
+      producerService: "sandbox" as const,
+      producerId: "sbox_1",
+      correlationId: null,
+      payload: {},
+      createdAt: new Date().toISOString(),
+    });
+
+    hub.publish(event(4));
+    hub.publish(event(3));
+    hub.finishTaskReplay("task_1", client, 2);
+    hub.publish(event(5));
+
+    expect(writes.map((write) => write.match(/^id: (\d+)/m)?.[1])).toEqual([
+      "3",
+      "4",
+      "5",
+    ]);
+  });
+
   it("buffers live events during replay and flushes only newer sequences", () => {
     const writes: string[] = [];
     const response = {
