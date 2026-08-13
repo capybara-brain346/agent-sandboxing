@@ -47,6 +47,16 @@ type TaskFailure = {
   message: string;
 };
 
+type TaskExecution = {
+  taskId: string;
+  sandboxId: string;
+  instructions: string;
+  controller: AbortController;
+  cancellationRequested: boolean;
+  runPromise: Promise<void> | undefined;
+  cancellationPromise: Promise<void> | undefined;
+};
+
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   created: ["provisioning", "failed", "cancelled"],
   provisioning: ["running", "failed", "cancelled"],
@@ -87,6 +97,7 @@ const isTaskRunner = (value: unknown): value is TaskRunner =>
 export class TaskService implements TaskServicePort {
   private readonly publish: PublishEvent;
   private readonly runner: TaskRunner;
+  private readonly executions = new Map<string, TaskExecution>();
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -195,10 +206,23 @@ export class TaskService implements TaskServicePort {
     // A task-owned sandbox is never provisioned through an HTTP request. The
     // run starts only after the create transaction has committed and initial
     // events have been published.
-    if (this.sandbox.provisionForTask)
+    if (this.sandbox.provisionForTask) {
+      const execution: TaskExecution = {
+        taskId: newTaskId,
+        sandboxId: result.sandboxId,
+        instructions: input.instructions,
+        controller: new AbortController(),
+        cancellationRequested: false,
+        runPromise: undefined,
+        cancellationPromise: undefined,
+      };
+      this.executions.set(newTaskId, execution);
       setImmediate(() => {
-        void this.runTask(newTaskId, result.sandboxId, input.instructions);
+        const runPromise = this.runTask(execution);
+        execution.runPromise = runPromise;
+        void runPromise;
       });
+    }
 
     return {
       taskId: newTaskId,
@@ -303,52 +327,135 @@ export class TaskService implements TaskServicePort {
     };
   }
 
-  async cancel(_taskId: string): Promise<TaskCancellationResponse> {
-    return this.unavailable();
+  async cancel(taskId: string): Promise<TaskCancellationResponse> {
+    const task = await runQuery("get_task_for_cancellation", { taskId }, () =>
+      this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { status: true, sandboxId: true },
+      }),
+    );
+    if (!task) throw notFound("task_not_found", "Task was not found");
+
+    if (task.status === "cancelled")
+      return { taskId, status: "cancelled" };
+    if (task.status === "completed" || task.status === "failed")
+      throw new ServiceError(
+        "task_already_terminal",
+        "Task is already terminal and cannot be cancelled",
+        409,
+      );
+
+    const execution = this.executions.get(taskId);
+    if (execution) {
+      execution.cancellationRequested = true;
+      execution.controller.abort();
+      this.startCancellation(execution);
+    } else {
+      // This covers an active task loaded after an in-process execution was
+      // lost (for example, a test double or a process hand-off). Cancellation
+      // remains best effort in this phase, but the task still gets a terminal
+      // result instead of dangling in an active state.
+      const recovered: TaskExecution = {
+        taskId,
+        sandboxId: task.sandboxId ?? "",
+        instructions: "",
+        controller: new AbortController(),
+        cancellationRequested: true,
+        runPromise: undefined,
+        cancellationPromise: undefined,
+      };
+      recovered.controller.abort();
+      this.executions.set(taskId, recovered);
+      this.startCancellation(recovered);
+    }
+
+    return {
+      taskId,
+      status: "cancelling",
+      eventsUrl: `/tasks/${taskId}/events`,
+    };
   }
 
-  private async runTask(
-    taskId: string,
-    sandboxId: string,
-    instructions: string,
-  ): Promise<void> {
+  private startCancellation(execution: TaskExecution): void {
+    if (execution.cancellationPromise !== undefined) return;
+    const cancellation = this.cancelExecution(execution).catch(() => undefined);
+    execution.cancellationPromise = cancellation;
+    void cancellation;
+  }
+
+  private async runTask(execution: TaskExecution): Promise<void> {
+    const { taskId, sandboxId, instructions } = execution;
     try {
+      if (execution.cancellationRequested) {
+        this.startCancellation(execution);
+        await execution.cancellationPromise;
+        return;
+      }
+
       await this.startProvisioning(taskId);
+      if (execution.cancellationRequested) {
+        this.startCancellation(execution);
+        await execution.cancellationPromise;
+        return;
+      }
+
       const provision = this.sandbox.provisionForTask;
       if (!provision) return;
-      const stop = this.sandbox.stop;
-
       const outcome = await provision.call(this.sandbox, sandboxId);
+      if (execution.cancellationRequested) {
+        this.startCancellation(execution);
+        await execution.cancellationPromise;
+        return;
+      }
       if (outcome?.status === "failed") {
         await this.failTask(taskId, outcome.failure, "provision_task");
-        if (stop)
-          await stop.call(this.sandbox, sandboxId).catch(() => undefined);
+        await this.stopSandbox(sandboxId);
         return;
       }
 
       // Keep the phase 5 provisioning seam usable with deliberately narrow
       // test doubles. The production SandboxService supplies both methods.
-      const diff = this.sandbox.diff;
-      if (!diff) return;
+      if (!this.sandbox.diff) return;
 
       await this.startRunning(taskId);
-      const controller = new AbortController();
+      if (execution.cancellationRequested) {
+        this.startCancellation(execution);
+        await execution.cancellationPromise;
+        return;
+      }
+
       const runResult = await this.runner.run({
         taskId,
         sandboxId,
         instructions,
-        signal: controller.signal,
+        signal: execution.controller.signal,
       });
-      const diffResult = await diff.call(this.sandbox, sandboxId);
+      if (execution.cancellationRequested) {
+        this.startCancellation(execution);
+        await execution.cancellationPromise;
+        return;
+      }
+
+      const diffResult = await this.sandbox.diff.call(this.sandbox, sandboxId);
+      if (execution.cancellationRequested) {
+        this.startCancellation(execution);
+        await execution.cancellationPromise;
+        return;
+      }
       const summary = runResult.summary ?? null;
 
       await this.completeTask(taskId, diffResult.diff, summary);
 
       // The task result is durable before cleanup starts. A cleanup failure
       // must not turn an already completed task back into a failed one.
-      if (stop)
-        await stop.call(this.sandbox, sandboxId).catch(() => undefined);
+      await this.stopSandbox(sandboxId);
     } catch (error) {
+      if (execution.cancellationRequested) {
+        this.startCancellation(execution);
+        await execution.cancellationPromise;
+        return;
+      }
+
       // The asynchronous run must not become an unhandled rejection. Any
       // known or unexpected runner/result error is represented as a terminal
       // task failure, and failure persistence is best effort if the database
@@ -361,9 +468,107 @@ export class TaskService implements TaskServicePort {
         }),
         "run_task",
       ).catch(() => undefined);
-      const stop = this.sandbox.stop;
-      if (stop)
-        await stop.call(this.sandbox, sandboxId).catch(() => undefined);
+      await this.stopSandbox(sandboxId);
+    } finally {
+      if (this.executions.get(taskId) === execution)
+        this.executions.delete(taskId);
+    }
+  }
+
+  private async cancelExecution(execution: TaskExecution): Promise<void> {
+    try {
+      let diff = "";
+
+      // Capture before stopping: SandboxService.diff can still read a ready or
+      // stopping workspace, while cleanup may remove the container entirely.
+      if (execution.sandboxId && this.sandbox.diff) {
+        try {
+          diff = (await this.sandbox.diff.call(
+            this.sandbox,
+            execution.sandboxId,
+          )).diff;
+        } catch {
+          // A sandbox that is still being provisioned or has already died has
+          // no readable workspace. The cancellation result remains authoritative
+          // with an empty diff in that case.
+        }
+      }
+
+      await this.stopSandbox(execution.sandboxId);
+      await this.cancelTask(execution.taskId, diff);
+    } finally {
+      // A recovered cancellation has no runTask finally block to remove its
+      // registry entry. Normal executions remove themselves from runTask.
+      if (
+        execution.runPromise === undefined &&
+        this.executions.get(execution.taskId) === execution
+      )
+        this.executions.delete(execution.taskId);
+    }
+  }
+
+  private async cancelTask(taskId: string, diff: string): Promise<void> {
+    const events = await runQuery(
+      "cancel_task",
+      { taskId },
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const task = await tx.task.findUnique({
+            where: { id: taskId },
+            select: { status: true },
+          });
+          if (!task || task.status === "cancelled") return [];
+          if (!canTransition(task.status, "cancelled")) return [];
+
+          const cancelledAt = new Date();
+          await tx.task.update({
+            where: { id: taskId },
+            data: {
+              status: "cancelled",
+              diff,
+              agentSummary: null,
+              exitReason: "cancelled",
+              cancelledAt,
+            },
+          });
+          const cancelled = await this.events.appendInTransaction(tx, {
+            streamId: taskId,
+            type: "task_cancelled",
+            producerService: "task",
+            producerId: taskId,
+            taskId,
+            correlationId: randomUUID(),
+            payload: {
+              exit_reason: "cancelled",
+              operation: "cancel_task",
+            },
+          });
+          const resultReady = await this.events.appendInTransaction(tx, {
+            streamId: taskId,
+            type: "task_result_ready",
+            producerService: "task",
+            producerId: taskId,
+            taskId,
+            correlationId: randomUUID(),
+            payload: {
+              exit_reason: "cancelled",
+              diff_bytes: Buffer.byteLength(diff),
+              agent_summary_present: false,
+            },
+          });
+          return [cancelled, resultReady];
+        }),
+    );
+    for (const event of events) this.publish(event);
+  }
+
+  private async stopSandbox(sandboxId: string): Promise<void> {
+    if (!sandboxId || !this.sandbox.stop) return;
+    try {
+      await this.sandbox.stop.call(this.sandbox, sandboxId);
+    } catch {
+      // Cleanup is best effort; task cancellation/result persistence is
+      // authoritative even when the container is already gone.
     }
   }
 
@@ -570,13 +775,6 @@ export class TaskService implements TaskServicePort {
     for (const event of events) this.publish(event);
   }
 
-  private unavailable(): never {
-    throw new ServiceError(
-      "task_service_unavailable",
-      "Task Service operation is not implemented",
-      501,
-    );
-  }
 }
 
 export const taskService = new TaskService(
