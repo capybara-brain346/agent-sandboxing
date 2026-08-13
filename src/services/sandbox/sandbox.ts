@@ -66,6 +66,10 @@ export type TaskSandboxCreation = {
   fixtureRepoPath: string;
 };
 
+export type SandboxProvisionResult =
+  | { status: "ready" }
+  | { status: "failed"; failure: { code: string; message: string } };
+
 export class SandboxService {
   private readonly commands: CommandExecutionService;
 
@@ -135,6 +139,38 @@ export class SandboxService {
    * TaskService.create uses the transaction-level method above to create both
    * rows and both initial events atomically.
    */
+  async provisionForTask(sandboxId: string): Promise<SandboxProvisionResult> {
+    const sandbox = await runQuery("get_task_sandbox_for_provision", { sandboxId }, () =>
+      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
+    );
+    if (!sandbox)
+      throw notFound("sandbox_not_found", "Sandbox was not found");
+    if (sandbox.status === "ready") return { status: "ready" };
+    if (sandbox.status === "failed")
+      return {
+        status: "failed",
+        failure: {
+          code: sandbox.failureCode ?? "sandbox_provision_failed",
+          message: sandbox.failureMessage ?? "Sandbox provisioning failed",
+        },
+      };
+    if (sandbox.status !== "creating")
+      return {
+        status: "failed",
+        failure: {
+          code: "sandbox_not_provisionable",
+          message: "Sandbox is not available for provisioning",
+        },
+      };
+
+    return this.provision(
+      sandbox.id,
+      sandbox.containerName,
+      sandbox.image,
+      sandbox.fixtureRepoPath,
+    );
+  }
+
   async createForTask(
     input: CreateSandboxRequest,
     options: { taskId: string },
@@ -325,7 +361,7 @@ export class SandboxService {
     containerName: string,
     image: string,
     fixturePath: string,
-  ): Promise<void> {
+  ): Promise<SandboxProvisionResult> {
     try {
       await this.emit({
         sandboxId,
@@ -373,6 +409,7 @@ export class SandboxService {
         }),
       );
       events.forEach((event) => this.publish(event));
+      return { status: "ready" };
     } catch (error) {
       logQueryFailure("provision_sandbox", { sandboxId }, error);
       const safe = safeError(error, "provision");
@@ -398,6 +435,7 @@ export class SandboxService {
       )
         .then((event) => this.publish(event))
         .catch(() => undefined);
+      return { status: "failed", failure: safe };
     }
   }
 

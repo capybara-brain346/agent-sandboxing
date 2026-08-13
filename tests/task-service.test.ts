@@ -32,6 +32,125 @@ const makeEvent = (
   createdAt: "2026-01-01T00:00:00.000Z",
 });
 
+describe("TaskService provisioning", () => {
+  it("marks a created task provisioning and invokes the sandbox in-process after commit", async () => {
+    let status = "created";
+    let committed = false;
+    const tx = {
+      task: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          if (typeof data.status === "string") status = data.status;
+          return data;
+        }),
+        findUnique: vi.fn(async () => ({ status })),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (transaction: unknown) => unknown) => {
+        const result = await callback(tx);
+        committed = true;
+        return result;
+      }),
+    } as unknown as PrismaClient;
+    const sandbox = {
+      createForTaskInTransaction: vi.fn(async () => ({
+        sandboxId: "sbox_1",
+        status: "creating" as const,
+        containerName: "sandbox-sbox_1",
+        image: "node:22",
+        workspacePath: "/workspace/repo",
+        fixtureRepoPath: "./repo",
+      })),
+      provisionForTask: vi.fn(async () => {
+        expect(committed).toBe(true);
+        expect(status).toBe("provisioning");
+        return { status: "ready" as const };
+      }),
+    };
+    const events = {
+      appendInTransaction: vi.fn(async (_transaction: unknown, input: { type: PublicEvent["type"] }) =>
+        makeEvent(input.type, 1, "task_1", null),
+      ),
+    };
+    const publish = vi.fn();
+    const service = new TaskService(
+      prisma,
+      events as unknown as EventStore,
+      sandbox as unknown as SandboxService,
+      publish,
+    );
+
+    const response = await service.create(input);
+    await vi.waitFor(() => expect(sandbox.provisionForTask).toHaveBeenCalledWith("sbox_1"));
+
+    expect(response.status).toBe("created");
+    expect(status).toBe("provisioning");
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "task_provisioning_started" }),
+    );
+  });
+
+  it("fails the task when in-process sandbox provisioning fails", async () => {
+    let status = "created";
+    const tx = {
+      task: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          if (typeof data.status === "string") status = data.status;
+          return data;
+        }),
+        findUnique: vi.fn(async () => ({ status })),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (transaction: unknown) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const sandbox = {
+      createForTaskInTransaction: vi.fn(async () => ({
+        sandboxId: "sbox_1",
+        status: "creating" as const,
+        containerName: "sandbox-sbox_1",
+        image: "node:22",
+        workspacePath: "/workspace/repo",
+        fixtureRepoPath: "./repo",
+      })),
+      provisionForTask: vi.fn(async () => ({
+        status: "failed" as const,
+        failure: { code: "fixture_missing", message: "Local fixture repo was not found" },
+      })),
+    };
+    const events = {
+      appendInTransaction: vi.fn(async (_transaction: unknown, input: { type: PublicEvent["type"] }) =>
+        makeEvent(input.type, 1, "task_1", null),
+      ),
+    };
+    const publish = vi.fn();
+    const service = new TaskService(
+      prisma,
+      events as unknown as EventStore,
+      sandbox as unknown as SandboxService,
+      publish,
+    );
+
+    await service.create(input);
+    await vi.waitFor(() =>
+      expect(publish).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "task_result_ready" }),
+      ),
+    );
+
+    expect(status).toBe("failed");
+    expect(events.appendInTransaction).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        type: "task_failed",
+        payload: expect.objectContaining({ code: "fixture_missing" }),
+      }),
+    );
+  });
+});
+
 describe("TaskService create", () => {
   it("creates and links one sandbox in the same transaction", async () => {
     const calls: string[] = [];

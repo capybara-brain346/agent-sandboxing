@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/db/prisma", () => {
   const prisma = {
     $queryRaw: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+    sandbox: {
+      findUnique: vi.fn(async () => ({ status: "ready" })),
+    },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => {
       let nextSequence = 1;
       const task = {
@@ -12,12 +15,14 @@ vi.mock("../src/db/prisma", () => {
           if ("nextEventSequence" in data) nextSequence += 1;
           return data;
         }),
+        findUnique: vi.fn(async () => ({ status: "created" })),
       };
       const tx = {
         $queryRaw: vi.fn(async () => [{ next_event_sequence: nextSequence }]),
         task,
         sandbox: {
           create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+          findUnique: vi.fn(async () => ({ status: "ready" })),
         },
         event: {
           create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
