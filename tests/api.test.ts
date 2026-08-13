@@ -1,5 +1,6 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PublicEvent } from "../src/types/event.types";
 
 vi.mock("../src/db/prisma", () => {
   const prisma = {
@@ -61,11 +62,71 @@ describe("HTTP wiring", () => {
     expect(response.body.error.code).toBe("invalid_request");
   });
 
-  it("does not expose sandbox routes through the product API", async () => {
-    const response = await request(app).post("/sandboxes").send({});
+  it("mounts sandbox routes alongside task routes", async () => {
+    const response = await request(app).post("/sandboxes").send({
+      unexpected: true,
+    });
 
-    expect(response.status).toBe(404);
-    expect(response.body.error.code).toBe("not_found");
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("invalid_request");
+  });
+
+  it("subscribes sandbox SSE to the linked task stream", async () => {
+    const { sandboxService } = await import("../src/services/sandbox/sandbox");
+    const { SseHub, sseHub } = await import(
+      "../src/services/events/sse-hub"
+    );
+    const sandboxEvent: PublicEvent = {
+      id: "evt_1",
+      streamId: "task_1",
+      taskId: "task_1",
+      sandboxId: "sbox_1",
+      commandId: null,
+      sequence: 1,
+      type: "sandbox_ready",
+      producerService: "sandbox",
+      producerId: "sbox_1",
+      correlationId: null,
+      payload: {},
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const streamId = vi
+      .spyOn(sandboxService, "eventStreamId")
+      .mockResolvedValue("task_1");
+    const eventsAfter = vi
+      .spyOn(sandboxService, "eventsAfter")
+      .mockResolvedValue([sandboxEvent]);
+    const finishReplay = vi
+      .spyOn(sseHub, "finishReplay")
+      .mockImplementation((channel, client, replayLast) => {
+        SseHub.prototype.finishReplay.call(
+          sseHub,
+          channel,
+          client,
+          replayLast,
+        );
+        client.response.end();
+      });
+
+    try {
+      const response = await request(app).get(
+        "/sandboxes/sbox_1/events?after=0",
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.text).toContain("event: sandbox_ready");
+      expect(streamId).toHaveBeenCalledWith("sbox_1");
+      expect(eventsAfter).toHaveBeenCalledWith("sbox_1", 0);
+      expect(finishReplay).toHaveBeenCalledWith(
+        "task_1",
+        expect.any(Object),
+        1,
+      );
+    } finally {
+      streamId.mockRestore();
+      eventsAfter.mockRestore();
+      finishReplay.mockRestore();
+    }
   });
 
   it("creates a task without exposing sandbox internals", async () => {

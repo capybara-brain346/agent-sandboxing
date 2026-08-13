@@ -98,6 +98,78 @@ describe("SandboxService", () => {
     expect(runtime.stop).not.toHaveBeenCalled();
   });
 
+  it("atomically claims a stop when concurrent callers race", async () => {
+    let status: "ready" | "stopping" | "stopped" = "ready";
+    let nextSequence = 1;
+    let releaseRuntimeStop: () => void = () => undefined;
+    const runtimeStopBlocked = new Promise<void>((resolve) => {
+      releaseRuntimeStop = resolve;
+    });
+    const row = () => ({
+      id: "s1",
+      status,
+      containerName: "agent-sandbox-s1",
+      workspacePath: "/workspace/repo",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      readyAt: new Date("2026-01-01T00:00:00Z"),
+      stoppedAt: status === "stopped" ? new Date("2026-01-01T00:00:01Z") : null,
+      failureCode: null,
+      failureMessage: null,
+    });
+    const runtime = {
+      stop: vi.fn(async () => runtimeStopBlocked),
+    } as unknown as SandboxRuntime;
+    const events = {
+      appendInTransaction: vi.fn(async (_tx, input: { type: string }) =>
+        event(input.type, nextSequence++),
+      ),
+    } as unknown as EventStore;
+    const prisma = {
+      sandbox: {
+        findUnique: vi.fn(async () => row()),
+      },
+      $transaction: vi.fn(async (callback) =>
+        callback({
+          sandbox: {
+            update: vi.fn(async ({ data }) => {
+              status = data.status;
+              return row();
+            }),
+            updateMany: vi.fn(async ({ where, data }) => {
+              const matches =
+                typeof where.status === "string"
+                  ? status === where.status
+                  : !where.status.notIn.includes(status);
+              if (!matches) return { count: 0 };
+              status = data.status;
+              return { count: 1 };
+            }),
+            findUnique: vi.fn(async () => row()),
+          },
+        }),
+      ),
+    } as unknown as PrismaClient;
+    const service = new SandboxService(
+      prisma,
+      events,
+      runtime,
+      config,
+      vi.fn(),
+    );
+
+    const first = service.stop("s1");
+    const second = service.stop("s1");
+    await vi.waitFor(() => expect(runtime.stop).toHaveBeenCalledTimes(1));
+    releaseRuntimeStop();
+    await Promise.all([first, second]);
+
+    expect(runtime.stop).toHaveBeenCalledTimes(1);
+    expect(events.appendInTransaction.mock.calls.map((call) => call[1].type)).toEqual([
+      "sandbox_stopping",
+      "sandbox_stopped",
+    ]);
+  });
+
   it("rejects diff before the workspace is available", async () => {
     const runtime = { diff: vi.fn() } as unknown as SandboxRuntime;
     const prisma = {

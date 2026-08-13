@@ -48,8 +48,10 @@ sandboxRouter.get("/sandboxes/:id/events", async (request, response, next) => {
         "Event cursor must be a non-negative integer",
       );
 
-    if (!(await sandboxService.has(sandboxId)))
-      throw new ServiceError("sandbox_not_found", "Sandbox was not found", 404);
+    // Task-owned sandbox events are persisted on the task stream. Subscribe
+    // to that stream (or the sandbox stream for legacy unlinked sandboxes)
+    // before replaying so live events cannot be lost in the query gap.
+    const streamId = await sandboxService.eventStreamId(sandboxId);
 
     response.status(200).set({
       "Content-Type": "text/event-stream",
@@ -59,7 +61,7 @@ sandboxRouter.get("/sandboxes/:id/events", async (request, response, next) => {
     });
     response.flushHeaders();
 
-    const client = sseHub.subscribe(sandboxId, response, after);
+    const client = sseHub.subscribe(streamId, response, after);
 
     const events = await sandboxService.eventsAfter(sandboxId, after);
     for (const event of events)
@@ -67,7 +69,7 @@ sandboxRouter.get("/sandboxes/:id/events", async (request, response, next) => {
         `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
       );
 
-    sseHub.finishReplay(sandboxId, client, events.at(-1)?.sequence ?? after);
+    sseHub.finishReplay(streamId, client, events.at(-1)?.sequence ?? after);
 
     const timer = setInterval(() => {
       if (!response.writableEnded) response.write(": keepalive\n\n");

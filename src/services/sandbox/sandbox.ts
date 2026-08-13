@@ -224,6 +224,17 @@ export class SandboxService {
     return count > 0;
   }
 
+  async eventStreamId(sandboxId: string): Promise<string> {
+    const sandbox = await runQuery("get_sandbox_event_stream", { sandboxId }, () =>
+      this.prisma.sandbox.findUnique({
+        where: { id: sandboxId },
+        select: { taskId: true },
+      }),
+    );
+    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
+    return sandbox.taskId ?? sandboxId;
+  }
+
   async eventsAfter(sandboxId: string, after: number): Promise<StreamEvent[]> {
     if (!(await this.has(sandboxId)))
       throw notFound("sandbox_not_found", "Sandbox was not found");
@@ -284,12 +295,26 @@ export class SandboxService {
     if (sandbox.status === "stopped") return this.snapshot(sandbox);
     if (sandbox.status === "deleted")
       throw new ServiceError("sandbox_deleted", "Sandbox was deleted", 410);
+    if (sandbox.status === "stopping") return this.snapshot(sandbox);
+
+    // Claim the stop with the status predicate. Only the caller that changes
+    // the row can append sandbox_stopping or touch the runtime. A concurrent
+    // caller observes stopping and returns without starting a second cleanup.
     const stopping = await runQuery("mark_sandbox_stopping", { sandboxId }, () =>
       this.prisma.$transaction(async (tx) => {
-        const row = await tx.sandbox.update({
-          where: { id: sandboxId },
+        const claimed = await tx.sandbox.updateMany({
+          where: {
+            id: sandboxId,
+            status: { notIn: ["stopping", "stopped", "deleted"] },
+          },
           data: { status: "stopping", stoppingAt: new Date() },
         });
+        if (claimed.count === 0)
+          return {
+            row: await tx.sandbox.findUnique({ where: { id: sandboxId } }),
+            event: null,
+          };
+
         const event = await this.events.appendInTransaction(tx, {
           sandboxId,
           type: "sandbox_stopping",
@@ -297,9 +322,16 @@ export class SandboxService {
           correlationId: randomUUID(),
           payload: {},
         });
-        return { row, event };
+        return { row: null, event };
       }),
     );
+    if (stopping.event === null) {
+      if (!stopping.row)
+        throw notFound("sandbox_not_found", "Sandbox was not found");
+      if (stopping.row.status === "deleted")
+        throw new ServiceError("sandbox_deleted", "Sandbox was deleted", 410);
+      return this.snapshot(stopping.row);
+    }
     this.publish(stopping.event);
     await this.runtime.stop(
       sandbox.containerName,
@@ -307,10 +339,14 @@ export class SandboxService {
     );
     const stopped = await runQuery("mark_sandbox_stopped", { sandboxId }, () =>
       this.prisma.$transaction(async (tx) => {
-        const row = await tx.sandbox.update({
-          where: { id: sandboxId },
+        const claimed = await tx.sandbox.updateMany({
+          where: { id: sandboxId, status: "stopping" },
           data: { status: "stopped", stoppedAt: new Date() },
         });
+        const row = await tx.sandbox.findUnique({ where: { id: sandboxId } });
+        if (!row) throw notFound("sandbox_not_found", "Sandbox was not found");
+        if (claimed.count === 0) return { row, event: null };
+
         const event = await this.events.appendInTransaction(tx, {
           sandboxId,
           type: "sandbox_stopped",
@@ -321,7 +357,7 @@ export class SandboxService {
         return { row, event };
       }),
     );
-    this.publish(stopped.event);
+    if (stopped.event !== null) this.publish(stopped.event);
     return this.snapshot(stopped.row);
   }
 
