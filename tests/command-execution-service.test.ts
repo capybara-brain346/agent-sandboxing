@@ -4,7 +4,7 @@ import {
   normalizeCommandRequest,
   splitOutput,
   takeUtf8Prefix,
-} from "../src/services/sandbox/command-execution-service";
+} from "../src/services/sandbox/command-execution";
 import { ServiceError } from "../src/shared/errors";
 
 describe("command execution rules", () => {

@@ -13,16 +13,16 @@ import type {
   CreateSandboxResponse,
   DiffResponse,
   EventType,
-  PublicEvent,
   StartCommandResponse,
 } from "../../types/sandbox.types";
+import type { StreamEvent } from "../../types/event.types";
 import { ServiceError, notFound } from "../../shared/errors";
 import { logQueryFailure, runQuery } from "../../shared/query-logging";
 import { workspaceRoot } from "./workspace";
 import { CommandExecutionService } from "./command-execution";
-import { EventStore } from "./event-store";
+import { EventStore } from "../events/event-store";
 import { SandboxRuntime } from "./runtime";
-import { sseHub } from "./sse-hub";
+import { sseHub } from "../events/sse-hub";
 
 const transitions: Record<SandboxStatus, readonly SandboxStatus[]> = {
   creating: ["ready", "failed", "stopping"],
@@ -64,7 +64,7 @@ export class SandboxService {
     private readonly events: EventStore,
     private readonly runtime: SandboxRuntime,
     private readonly config: Config,
-    private readonly publish: (event: PublicEvent) => void,
+    private readonly publish: (event: StreamEvent) => void,
   ) {
     this.commands = new CommandExecutionService(
       prisma,
@@ -136,10 +136,10 @@ export class SandboxService {
     return count > 0;
   }
 
-  async eventsAfter(sandboxId: string, after: number): Promise<PublicEvent[]> {
+  async eventsAfter(sandboxId: string, after: number): Promise<StreamEvent[]> {
     if (!(await this.has(sandboxId)))
       throw notFound("sandbox_not_found", "Sandbox was not found");
-    return this.events.listAfter(sandboxId, after);
+    return this.events.listSandboxAfter(sandboxId, after);
   }
 
   async startCommand(

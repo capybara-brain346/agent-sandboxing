@@ -3,7 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import type { Config } from "../src/config";
 import type { EventStore } from "../src/services/sandbox/event-store";
 import { ServiceError } from "../src/shared/errors";
-import { SandboxService, canTransition } from "../src/services/sandbox/sandbox-service";
+import { SandboxService, canTransition } from "../src/services/sandbox/sandbox";
 import type { SandboxRuntime } from "../src/services/sandbox/runtime";
 import type { PublicEvent } from "../src/types/sandbox.types";
 

@@ -2,7 +2,7 @@ import { loadConfig } from "./config";
 import { logger } from "./logger";
 import { createApp } from "./server";
 import { prisma } from "./db/prisma";
-import { sseHub } from "./services/sandbox/sse-hub";
+import { sseHub } from "./services/events/sse-hub";
 
 const config = loadConfig();
 const app = createApp();

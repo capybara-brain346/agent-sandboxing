@@ -1,27 +1,8 @@
-import type { SandboxEventActor } from "@prisma/client";
 import { z } from "zod";
+import type { LegacyPublicEvent } from "./event.types";
 
-export const EVENT_TYPES = [
-  "sandbox_created",
-  "sandbox_provisioning_started",
-  "fixture_repo_copy_started",
-  "fixture_repo_copied",
-  "sandbox_ready",
-  "sandbox_failed",
-  "sandbox_stopping",
-  "sandbox_stopped",
-  "command_started",
-  "command_output",
-  "command_completed",
-  "command_failed",
-  "command_timed_out",
-  "command_cancelled",
-  "git_diff_requested",
-  "git_diff_completed",
-  "cleanup_started",
-  "cleanup_completed",
-] as const;
-export type EventType = (typeof EVENT_TYPES)[number];
+export { EVENT_TYPES } from "./event.types";
+export type { EventType } from "./event.types";
 
 export type SandboxStatus =
   | "creating"
@@ -38,17 +19,8 @@ export type CommandStatus =
   | "timed_out"
   | "cancelled";
 
-export type PublicEvent = {
-  id: string;
-  sandboxId: string;
-  commandId: string | null;
-  sequence: number;
-  type: EventType;
-  actor: SandboxEventActor;
-  correlationId: string | null;
-  payload: Record<string, unknown>;
-  createdAt: string;
-};
+/** @deprecated Use the first-class event types from `event.types.ts`. */
+export type PublicEvent = LegacyPublicEvent;
 
 export const createSandboxSchema = z
   .object({

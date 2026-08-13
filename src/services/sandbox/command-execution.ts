@@ -12,14 +12,14 @@ import type {
   EventType,
   LimitedOutputEvent,
   NormalizedCommandRequest,
-  PublicEvent,
   RuntimeOutput,
   StartCommandResponse,
 } from "../../types/sandbox.types";
+import type { StreamEvent } from "../../types/event.types";
 import { ServiceError, notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
 import { isWorkspacePath, workspaceRoot } from "./workspace";
-import type { EventStore } from "./event-store";
+import type { EventStore } from "../events/event-store";
 import type { SandboxRuntime } from "./runtime";
 
 const safeEnv = /^[A-Z_][A-Z0-9_]*$/;
@@ -170,7 +170,7 @@ export class CommandExecutionService {
     private readonly events: EventStore,
     private readonly runtime: SandboxRuntime,
     private readonly config: Config,
-    private readonly publish: (event: PublicEvent) => void,
+    private readonly publish: (event: StreamEvent) => void,
   ) {}
 
   async startCommand(

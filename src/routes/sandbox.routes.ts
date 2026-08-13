@@ -2,7 +2,7 @@ import { Router } from "express";
 import { ServiceError } from "../shared/errors";
 import { isWorkspacePath } from "../services/sandbox/workspace";
 import { sandboxService } from "../services/sandbox/sandbox";
-import { sseHub } from "../services/sandbox/sse-hub";
+import { sseHub } from "../services/events/sse-hub";
 import {
   commandRequestSchema,
   createSandboxSchema,
