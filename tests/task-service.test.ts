@@ -43,6 +43,10 @@ describe("TaskService provisioning", () => {
           if (typeof data.status === "string") status = data.status;
           return data;
         }),
+        updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          if (typeof data.status === "string") status = data.status;
+          return { count: 1 };
+        }),
         findUnique: vi.fn(async () => ({ status })),
       },
     };
@@ -99,6 +103,10 @@ describe("TaskService provisioning", () => {
         update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
           if (typeof data.status === "string") status = data.status;
           return data;
+        }),
+        updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          if (typeof data.status === "string") status = data.status;
+          return { count: 1 };
         }),
         findUnique: vi.fn(async () => ({ status })),
       },

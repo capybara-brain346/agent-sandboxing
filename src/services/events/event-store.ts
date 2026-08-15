@@ -5,6 +5,7 @@ import type {
   SandboxEventActor,
 } from "@prisma/client";
 import { runQuery } from "../../shared/query-logging";
+import { notFound } from "../../shared/errors";
 import type {
   EventProducerService,
   EventType,
@@ -12,6 +13,7 @@ import type {
   PublicEvent,
   StreamEvent,
 } from "../../types/event.types";
+import { toLegacySandboxEvent } from "../../types/event.types";
 
 export type AppendEventInput = {
   /** Defaults to taskId for task-owned events. */
@@ -88,6 +90,38 @@ type LegacyEventRow = {
   correlationId: string | null;
   payload: Prisma.JsonValue;
   createdAt: Date;
+};
+
+type TaskEventQueryRow = {
+  id: string | null;
+  streamId: string | null;
+  sequence: number | null;
+  type: string | null;
+  producerService: string | null;
+  producerId: string | null;
+  taskId: string | null;
+  sandboxId: string | null;
+  commandId: string | null;
+  correlationId: string | null;
+  payload: Prisma.JsonValue | null;
+  createdAt: Date | null;
+};
+
+type SandboxLookupClient = { sandbox: unknown };
+
+const findSandbox = async (
+  client: SandboxLookupClient,
+  sandboxId: string,
+): Promise<{ taskId: string | null } | null> => {
+  const sandbox = client.sandbox as {
+    findUnique?: (args: unknown) => Promise<{ taskId: string | null } | null>;
+  };
+  return (
+    (await sandbox.findUnique?.({
+      where: { id: sandboxId },
+      select: { taskId: true },
+    })) ?? null
+  );
 };
 
 const eventId = (): string =>
@@ -282,20 +316,83 @@ export class EventStore {
     return events.map(toPublic);
   }
 
-  /** List the task stream for a sandbox, or legacy sandbox events if unlinked. */
+  async listTaskEventsAfter(
+    taskId: string,
+    after: number,
+  ): Promise<PublicEvent[]> {
+    const rows = await runQuery(
+      "list_task_events_with_task",
+      { taskId, after },
+      () =>
+        this.prisma.$queryRaw<TaskEventQueryRow[]>`
+          SELECT
+            e.id,
+            e.stream_id AS "streamId",
+            e.sequence,
+            e.type,
+            e.producer_service AS "producerService",
+            e.producer_id AS "producerId",
+            e.task_id AS "taskId",
+            e.sandbox_id AS "sandboxId",
+            e.command_id AS "commandId",
+            e.correlation_id AS "correlationId",
+            e.payload,
+            e.created_at AS "createdAt"
+          FROM tasks AS t
+          LEFT JOIN events AS e
+            ON e.stream_id = t.id AND e.sequence > ${after}
+          WHERE t.id = ${taskId}
+          ORDER BY e.sequence ASC
+        `,
+    );
+    if (rows.length === 0)
+      throw notFound("task_not_found", "Task was not found");
+
+    return rows.flatMap((row) => {
+      if (row.id === null) return [];
+      return [
+        toPublic({
+          id: row.id,
+          streamId: row.streamId ?? taskId,
+          sequence: row.sequence ?? 0,
+          type: row.type ?? "task_created",
+          producerService: row.producerService ?? "task",
+          producerId: row.producerId ?? taskId,
+          taskId: row.taskId,
+          sandboxId: row.sandboxId,
+          commandId: row.commandId,
+          correlationId: row.correlationId,
+          payload: row.payload ?? {},
+          createdAt: row.createdAt ?? new Date(0),
+        }),
+      ];
+    });
+  }
+
+  async sandboxStreamId(sandboxId: string): Promise<string> {
+    const sandbox = await runQuery(
+      "get_sandbox_event_stream",
+      { sandboxId },
+      () => findSandbox(this.prisma, sandboxId),
+    );
+    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
+    return sandbox.taskId ?? sandboxId;
+  }
+
+  /** List the sandbox-compatible stream, or legacy events if unlinked. */
   async listSandboxAfter(
     sandboxId: string,
     after: number,
   ): Promise<StreamEvent[]> {
-    const sandboxDelegate = this.prisma.sandbox as unknown as {
-      findUnique?: (args: unknown) => Promise<{ taskId: string | null } | null>;
-    };
-    const sandbox = await sandboxDelegate.findUnique?.({
-      where: { id: sandboxId },
-      select: { taskId: true },
+    const streamId = await this.sandboxStreamId(sandboxId);
+    if (streamId === sandboxId)
+      return this.listLegacySandboxAfter(sandboxId, after);
+
+    const events = await this.listTaskEvents(streamId, after);
+    return events.flatMap((event) => {
+      const legacy = toLegacySandboxEvent(event, sandboxId);
+      return legacy ? [legacy] : [];
     });
-    if (sandbox?.taskId) return this.listTaskEvents(sandbox.taskId, after);
-    return this.listLegacySandboxAfter(sandboxId, after);
   }
 
   private async appendStreamInTransaction(
@@ -366,14 +463,7 @@ export class EventStore {
     tx: Prisma.TransactionClient,
     sandboxId: string,
   ): Promise<string | null> {
-    const sandboxDelegate = tx.sandbox as unknown as {
-      findUnique?: (args: unknown) => Promise<{ taskId: string | null } | null>;
-    };
-    if (!sandboxDelegate.findUnique) return null;
-    const sandbox = await sandboxDelegate.findUnique({
-      where: { id: sandboxId },
-      select: { taskId: true },
-    });
+    const sandbox = await findSandbox(tx, sandboxId);
     return sandbox?.taskId ?? null;
   }
 

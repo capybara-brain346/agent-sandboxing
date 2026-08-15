@@ -113,6 +113,15 @@ describe("TaskService result capture", () => {
             status = data.status;
           return data;
         }),
+        updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          if (
+            data.status === "provisioning" ||
+            data.status === "running" ||
+            data.status === "completed"
+          )
+            status = data.status;
+          return { count: 1 };
+        }),
         findUnique: vi.fn(async () => ({ status })),
       },
     };

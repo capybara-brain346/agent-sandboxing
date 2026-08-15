@@ -41,12 +41,23 @@ type CancellationHarness = {
   runner: TaskRunner;
   stop: ReturnType<typeof vi.fn>;
   events: ReturnType<typeof vi.fn>;
+  cancellationAttempts: { value: number };
 };
 
-const makeHarness = (runner: TaskRunner): CancellationHarness => {
+type CancellationHarnessOptions = {
+  failCancellationOnce?: boolean;
+  loseProvisionClaim?: boolean;
+};
+
+const makeHarness = (
+  runner: TaskRunner,
+  options: CancellationHarnessOptions = {},
+): CancellationHarness => {
   const status = { value: "created" as TaskStatus };
   let taskId = "task_unknown";
   let sequence = 1;
+  let failCancellationOnce = options.failCancellationOnce ?? false;
+  const cancellationAttempts = { value: 0 };
   const tx = {
     task: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -57,6 +68,32 @@ const makeHarness = (runner: TaskRunner): CancellationHarness => {
         if (typeof data.status === "string") status.value = data.status as TaskStatus;
         return data;
       }),
+      updateMany: vi.fn(
+        async ({ where, data }: {
+          where: { status?: TaskStatus | { in: TaskStatus[] } };
+          data: Record<string, unknown>;
+        }) => {
+          const expected = where.status;
+          if (options.loseProvisionClaim && expected === "created") {
+            status.value = "cancelled";
+            return { count: 0 };
+          }
+          if (typeof expected === "object") cancellationAttempts.value += 1;
+          if (failCancellationOnce && typeof expected === "object") {
+            failCancellationOnce = false;
+            throw new Error("database unavailable");
+          }
+          const matches =
+            expected === undefined ||
+            (typeof expected === "object"
+              ? expected.in.includes(status.value)
+              : expected === status.value);
+          if (!matches) return { count: 0 };
+          if (typeof data.status === "string")
+            status.value = data.status as TaskStatus;
+          return { count: 1 };
+        },
+      ),
       findUnique: vi.fn(async () => ({ status: status.value })),
     },
   } as unknown as Prisma.TransactionClient;
@@ -104,7 +141,7 @@ const makeHarness = (runner: TaskRunner): CancellationHarness => {
     vi.fn(),
   );
 
-  return { service, status, runner, stop, events };
+  return { service, status, runner, stop, events, cancellationAttempts };
 };
 
 describe("TaskService cancellation", () => {
@@ -161,6 +198,39 @@ describe("TaskService cancellation", () => {
     });
     await vi.waitFor(() => expect(harness.status.value).toBe("cancelled"));
 
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it("retains a failed cancellation for a later retry", async () => {
+    const runner: TaskRunner = {
+      run: vi.fn(async () => ({ summary: null })),
+    };
+    const harness = makeHarness(runner, { failCancellationOnce: true });
+    const created = await harness.service.create(input);
+
+    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject({
+      status: "cancelling",
+    });
+    await vi.waitFor(() =>
+      expect(harness.cancellationAttempts.value).toBe(1),
+    );
+    expect(harness.status.value).not.toBe("cancelled");
+
+    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject({
+      status: "cancelling",
+    });
+    await vi.waitFor(() => expect(harness.status.value).toBe("cancelled"));
+  });
+
+  it("does not overwrite a cancellation when a phase claim loses the race", async () => {
+    const runner: TaskRunner = {
+      run: vi.fn(async () => ({ summary: null })),
+    };
+    const harness = makeHarness(runner, { loseProvisionClaim: true });
+    await harness.service.create(input);
+
+    await vi.waitFor(() => expect(harness.stop).toHaveBeenCalledWith("sbox_1"));
+    expect(harness.status.value).toBe("cancelled");
     expect(runner.run).not.toHaveBeenCalled();
   });
 

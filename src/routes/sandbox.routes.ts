@@ -3,6 +3,12 @@ import { ServiceError } from "../shared/errors";
 import { isWorkspacePath } from "../services/sandbox/workspace";
 import { sandboxService } from "../services/sandbox/sandbox";
 import { sseHub } from "../services/events/sse-hub";
+import { toLegacySandboxEvent } from "../types/event.types";
+import {
+  parseSseCursor,
+  startSseKeepalive,
+  writeSseEvent,
+} from "./sse";
 import {
   commandRequestSchema,
   createSandboxSchema,
@@ -40,13 +46,7 @@ sandboxRouter.get("/sandboxes/:id/events", async (request, response, next) => {
       typeof request.query.after === "string"
         ? request.query.after
         : (request.header("Last-Event-ID") ?? "0");
-    const after = Number(raw);
-
-    if (!Number.isSafeInteger(after) || after < 0)
-      throw new ServiceError(
-        "invalid_cursor",
-        "Event cursor must be a non-negative integer",
-      );
+    const after = parseSseCursor(raw);
 
     // Task-owned sandbox events are persisted on the task stream. Subscribe
     // to that stream (or the sandbox stream for legacy unlinked sandboxes)
@@ -61,20 +61,19 @@ sandboxRouter.get("/sandboxes/:id/events", async (request, response, next) => {
     });
     response.flushHeaders();
 
-    const client = sseHub.subscribe(streamId, response, after);
+    const client = sseHub.subscribe(streamId, response, after, {
+      transform: (event) => toLegacySandboxEvent(event, sandboxId),
+    });
 
     const events = await sandboxService.eventsAfter(sandboxId, after);
-    for (const event of events)
-      response.write(
-        `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
-      );
+    for (const event of events) {
+      const legacy = toLegacySandboxEvent(event, sandboxId);
+      if (legacy) writeSseEvent(response, legacy);
+    }
 
     sseHub.finishReplay(streamId, client, events.at(-1)?.sequence ?? after);
 
-    const timer = setInterval(() => {
-      if (!response.writableEnded) response.write(": keepalive\n\n");
-    }, 15000);
-
+    const timer = startSseKeepalive(response);
     response.on("close", () => clearInterval(timer));
   } catch (error) {
     if (!response.headersSent) next(error);

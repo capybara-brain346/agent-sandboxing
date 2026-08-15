@@ -16,6 +16,7 @@ vi.mock("../src/db/prisma", () => {
           if ("nextEventSequence" in data) nextSequence += 1;
           return data;
         }),
+        updateMany: vi.fn(async () => ({ count: 1 })),
         findUnique: vi.fn(async () => ({ status: "created" })),
       };
       const tx = {
@@ -23,7 +24,16 @@ vi.mock("../src/db/prisma", () => {
         task,
         sandbox: {
           create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+          update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+          updateMany: vi.fn(async () => ({ count: 1 })),
           findUnique: vi.fn(async () => ({ status: "ready" })),
+        },
+        sandboxEvent: {
+          create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+            ...data,
+            id: "sandbox-event-1",
+            createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          })),
         },
         event: {
           create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -115,6 +125,8 @@ describe("HTTP wiring", () => {
 
       expect(response.status).toBe(200);
       expect(response.text).toContain("event: sandbox_ready");
+      expect(response.text).toContain('"actor":"provisioner"');
+      expect(response.text).not.toContain('"streamId"');
       expect(streamId).toHaveBeenCalledWith("sbox_1");
       expect(eventsAfter).toHaveBeenCalledWith("sbox_1", 0);
       expect(finishReplay).toHaveBeenCalledWith(

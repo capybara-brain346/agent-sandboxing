@@ -131,6 +131,83 @@ describe("EventStore", () => {
     });
   });
 
+  it("lists task events and verifies task existence in one query", async () => {
+    const queryRaw = vi.fn(async () => [
+      {
+        taskOwnerId: "task_1",
+        id: "evt_2",
+        streamId: "task_1",
+        sequence: 2,
+        type: "task_running",
+        producerService: "task",
+        producerId: "task_1",
+        taskId: "task_1",
+        sandboxId: null,
+        commandId: null,
+        correlationId: null,
+        payload: {},
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+      },
+    ]);
+    const store = new EventStore({ $queryRaw: queryRaw } as unknown as PrismaClient);
+
+    await expect(store.listTaskEventsAfter("task_1", 1)).resolves.toMatchObject([
+      { id: "evt_2", sequence: 2, streamId: "task_1" },
+    ]);
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps linked sandbox streams in the legacy sandbox event shape", async () => {
+    const prisma = {
+      sandbox: {
+        findUnique: vi.fn(async () => ({ taskId: "task_1" })),
+      },
+      event: {
+        findMany: vi.fn(async () => [
+          {
+            id: "evt_1",
+            streamId: "task_1",
+            sequence: 1,
+            type: "task_created",
+            producerService: "task",
+            producerId: "task_1",
+            taskId: "task_1",
+            sandboxId: null,
+            commandId: null,
+            correlationId: null,
+            payload: {},
+            createdAt: new Date("2026-01-01T00:00:00Z"),
+          },
+          {
+            id: "evt_2",
+            streamId: "task_1",
+            sequence: 2,
+            type: "sandbox_ready",
+            producerService: "sandbox",
+            producerId: "sbox_1",
+            taskId: "task_1",
+            sandboxId: "sbox_1",
+            commandId: null,
+            correlationId: null,
+            payload: {},
+            createdAt: new Date("2026-01-01T00:00:01Z"),
+          },
+        ]),
+      },
+    } as unknown as PrismaClient;
+    const store = new EventStore(prisma);
+
+    await expect(store.listSandboxAfter("sbox_1", 0)).resolves.toEqual([
+      expect.objectContaining({
+        id: "evt_2",
+        sandboxId: "sbox_1",
+        sequence: 2,
+        type: "sandbox_ready",
+        actor: "provisioner",
+      }),
+    ]);
+  });
+
   it("promotes linked sandbox producers into the task stream", async () => {
     const tx = {
       sandbox: {

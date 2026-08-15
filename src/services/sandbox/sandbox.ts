@@ -121,11 +121,6 @@ export class SandboxService {
     };
   }
 
-  /**
-   * Create the sandbox row for a task-owned transaction. The task service
-   * appends the task and sandbox creation events after the task/sandbox link is
-   * complete so the first event in the task stream is always task_created.
-   */
   async createForTaskInTransaction(
     tx: Prisma.TransactionClient,
     input: CreateSandboxRequest,
@@ -134,17 +129,13 @@ export class SandboxService {
     return this.createSandboxRowInTransaction(tx, input, options.taskId);
   }
 
-  /**
-   * Compatibility helper for internal callers that already have a task row.
-   * TaskService.create uses the transaction-level method above to create both
-   * rows and both initial events atomically.
-   */
   async provisionForTask(sandboxId: string): Promise<SandboxProvisionResult> {
-    const sandbox = await runQuery("get_task_sandbox_for_provision", { sandboxId }, () =>
-      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
+    const sandbox = await runQuery(
+      "get_task_sandbox_for_provision",
+      { sandboxId },
+      () => this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
     );
-    if (!sandbox)
-      throw notFound("sandbox_not_found", "Sandbox was not found");
+    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
     if (sandbox.status === "ready") return { status: "ready" };
     if (sandbox.status === "failed")
       return {
@@ -225,19 +216,10 @@ export class SandboxService {
   }
 
   async eventStreamId(sandboxId: string): Promise<string> {
-    const sandbox = await runQuery("get_sandbox_event_stream", { sandboxId }, () =>
-      this.prisma.sandbox.findUnique({
-        where: { id: sandboxId },
-        select: { taskId: true },
-      }),
-    );
-    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
-    return sandbox.taskId ?? sandboxId;
+    return this.events.sandboxStreamId(sandboxId);
   }
 
   async eventsAfter(sandboxId: string, after: number): Promise<StreamEvent[]> {
-    if (!(await this.has(sandboxId)))
-      throw notFound("sandbox_not_found", "Sandbox was not found");
     return this.events.listSandboxAfter(sandboxId, after);
   }
 
@@ -300,30 +282,33 @@ export class SandboxService {
     // Claim the stop with the status predicate. Only the caller that changes
     // the row can append sandbox_stopping or touch the runtime. A concurrent
     // caller observes stopping and returns without starting a second cleanup.
-    const stopping = await runQuery("mark_sandbox_stopping", { sandboxId }, () =>
-      this.prisma.$transaction(async (tx) => {
-        const claimed = await tx.sandbox.updateMany({
-          where: {
-            id: sandboxId,
-            status: { notIn: ["stopping", "stopped", "deleted"] },
-          },
-          data: { status: "stopping", stoppingAt: new Date() },
-        });
-        if (claimed.count === 0)
-          return {
-            row: await tx.sandbox.findUnique({ where: { id: sandboxId } }),
-            event: null,
-          };
+    const stopping = await runQuery(
+      "mark_sandbox_stopping",
+      { sandboxId },
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const claimed = await tx.sandbox.updateMany({
+            where: {
+              id: sandboxId,
+              status: { notIn: ["stopping", "stopped", "deleted"] },
+            },
+            data: { status: "stopping", stoppingAt: new Date() },
+          });
+          if (claimed.count === 0)
+            return {
+              row: await tx.sandbox.findUnique({ where: { id: sandboxId } }),
+              event: null,
+            };
 
-        const event = await this.events.appendInTransaction(tx, {
-          sandboxId,
-          type: "sandbox_stopping",
-          actor: "api",
-          correlationId: randomUUID(),
-          payload: {},
-        });
-        return { row: null, event };
-      }),
+          const event = await this.events.appendInTransaction(tx, {
+            sandboxId,
+            type: "sandbox_stopping",
+            actor: "api",
+            correlationId: randomUUID(),
+            payload: {},
+          });
+          return { row: null, event };
+        }),
     );
     if (stopping.event === null) {
       if (!stopping.row)

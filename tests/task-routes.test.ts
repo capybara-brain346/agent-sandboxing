@@ -1,14 +1,11 @@
 import express from "express";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
-import { createTaskRouter } from "../src/routes/task.routes";
-import { SseHub } from "../src/services/events/sse-hub";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { taskRouter } from "../src/routes/task.routes";
+import { sseHub } from "../src/services/events/sse-hub";
+import { taskService } from "../src/services/task/task";
 import { ServiceError } from "../src/shared/errors";
-import type {
-  PublicTaskEvent,
-  TaskServicePort,
-  TaskSnapshot,
-} from "../src/types/task.types";
+import type { PublicTaskEvent, TaskSnapshot } from "../src/types/task.types";
 
 const snapshot: TaskSnapshot = {
   taskId: "task_1",
@@ -39,10 +36,10 @@ const event: PublicTaskEvent = {
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
-const makeApp = (service: TaskServicePort, eventHub = new SseHub()) => {
+const makeApp = () => {
   const app = express();
   app.use(express.json());
-  app.use(createTaskRouter(service, eventHub));
+  app.use(taskRouter);
   app.use(
     (
       error: unknown,
@@ -59,16 +56,19 @@ const makeApp = (service: TaskServicePort, eventHub = new SseHub()) => {
   return app;
 };
 
+afterEach(() => {
+  sseHub.closeAll();
+  vi.restoreAllMocks();
+});
+
 describe("task routes", () => {
   it("strictly validates task creation and dispatches task fields", async () => {
-    const service = {
-      create: vi.fn().mockResolvedValue({
-        taskId: "task_1",
-        status: "created",
-        eventsUrl: "/tasks/task_1/events",
-      }),
-    } as unknown as TaskServicePort;
-    const app = makeApp(service);
+    const create = vi.spyOn(taskService, "create").mockResolvedValue({
+      taskId: "task_1",
+      status: "created",
+      eventsUrl: "/tasks/task_1/events",
+    });
+    const app = makeApp();
 
     const response = await request(app).post("/tasks").send({
       repoRef: "./repo",
@@ -82,7 +82,7 @@ describe("task routes", () => {
       status: "created",
       eventsUrl: "/tasks/task_1/events",
     });
-    expect(service.create).toHaveBeenCalledWith({
+    expect(create).toHaveBeenCalledWith({
       repoRef: "./repo",
       instructions: "No-op",
       image: "node:22",
@@ -90,53 +90,45 @@ describe("task routes", () => {
   });
 
   it("rejects unknown task creation fields before dispatch", async () => {
-    const service = { create: vi.fn() } as unknown as TaskServicePort;
-    const response = await request(makeApp(service)).post("/tasks").send({
+    const create = vi.spyOn(taskService, "create");
+    const response = await request(makeApp()).post("/tasks").send({
       repoRef: "./repo",
       instructions: "No-op",
       sandboxId: "sbox_1",
     });
 
     expect(response.status).toBe(400);
-    expect(service.create).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("replays task events as SSE", async () => {
-    const service = {
-      eventsAfter: vi.fn().mockResolvedValue([event]),
-    } as unknown as TaskServicePort;
-    const eventHub = new SseHub();
-    vi.spyOn(eventHub, "finishTaskReplay").mockImplementation(
+    const eventsAfter = vi
+      .spyOn(taskService, "eventsAfter")
+      .mockResolvedValue([event]);
+    vi.spyOn(sseHub, "finishTaskReplay").mockImplementation(
       (taskId, client, replayLast) => {
-        SseHub.prototype.finishTaskReplay.call(
-          eventHub,
-          taskId,
-          client,
-          replayLast,
-        );
+        sseHub.finishReplay(taskId, client, replayLast);
         client.response.end();
       },
     );
-    const response = await request(makeApp(service, eventHub)).get(
+    const response = await request(makeApp()).get(
       "/tasks/task_1/events?after=0",
     );
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
     expect(response.text).toContain("event: task_created");
-    expect(service.eventsAfter).toHaveBeenCalledWith("task_1", 0);
+    expect(eventsAfter).toHaveBeenCalledWith("task_1", 0);
   });
 
   it("dispatches task snapshots and asynchronous cancellation", async () => {
-    const service = {
-      get: vi.fn().mockResolvedValue(snapshot),
-      cancel: vi.fn().mockResolvedValue({
-        taskId: "task_1",
-        status: "cancelling",
-        eventsUrl: "/tasks/task_1/events",
-      }),
-    } as unknown as TaskServicePort;
-    const app = makeApp(service);
+    const get = vi.spyOn(taskService, "get").mockResolvedValue(snapshot);
+    const cancel = vi.spyOn(taskService, "cancel").mockResolvedValue({
+      taskId: "task_1",
+      status: "cancelling",
+      eventsUrl: "/tasks/task_1/events",
+    });
+    const app = makeApp();
 
     await expect(request(app).get("/tasks/task_1")).resolves.toMatchObject({
       status: 200,
@@ -144,6 +136,7 @@ describe("task routes", () => {
     });
     const response = await request(app).delete("/tasks/task_1");
     expect(response.status).toBe(202);
-    expect(service.cancel).toHaveBeenCalledWith("task_1");
+    expect(get).toHaveBeenCalledWith("task_1");
+    expect(cancel).toHaveBeenCalledWith("task_1");
   });
 });

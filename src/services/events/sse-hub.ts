@@ -1,12 +1,21 @@
 import type { Response } from "express";
 import type { StreamEvent } from "../../types/event.types";
 
+export type SseEventTransform = (
+  event: StreamEvent,
+) => StreamEvent | undefined;
+
+export type SseSubscribeOptions = {
+  transform?: SseEventTransform;
+};
+
 export type SseClient = {
   response: Response;
   buffered: StreamEvent[];
   replaying: boolean;
   lastSent: number;
   closed: boolean;
+  transform?: SseEventTransform;
 };
 
 const channelFor = (event: StreamEvent): string =>
@@ -16,7 +25,12 @@ const channelFor = (event: StreamEvent): string =>
 export class SseHub {
   private readonly clients = new Map<string, Set<SseClient>>();
 
-  subscribe(streamId: string, response: Response, after: number): SseClient {
+  subscribe(
+    streamId: string,
+    response: Response,
+    after: number,
+    options?: SseSubscribeOptions,
+  ): SseClient {
     const client: SseClient = {
       response,
       buffered: [],
@@ -24,6 +38,7 @@ export class SseHub {
       lastSent: after,
       closed: false,
     };
+    if (options?.transform) client.transform = options.transform;
     const clients = this.clients.get(streamId) ?? new Set<SseClient>();
     clients.add(client);
     this.clients.set(streamId, clients);
@@ -90,10 +105,15 @@ export class SseHub {
     )
       return;
 
+    const transformed = client.transform
+      ? client.transform(event)
+      : event;
+    if (!transformed) return;
+
     client.response.write(
-      `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      `id: ${transformed.sequence}\nevent: ${transformed.type}\ndata: ${JSON.stringify(transformed)}\n\n`,
     );
-    client.lastSent = event.sequence;
+    client.lastSent = transformed.sequence;
   }
 
   private unsubscribeOnClose(streamId: string, client: SseClient): void {
