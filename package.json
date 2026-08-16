@@ -11,9 +11,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:runtime": "vitest run --config vitest.runtime.config.ts",
+    "prepare": "husky",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev"
@@ -30,11 +32,17 @@
     "@types/node": "^24.3.0",
     "esbuild": "^0.28.2",
     "eslint": "^10.8.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "prettier": "^3.9.6",
     "prisma": "^6.14.0",
     "supertest": "^7.1.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.66.0",
     "vitest": "^3.2.4"
+  },
+  "lint-staged": {
+    "*.{js,cjs,mjs,ts,tsx,json,md,yml,yaml}": "prettier --write"
   }
 }
