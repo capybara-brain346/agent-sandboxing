@@ -15,6 +15,7 @@ call Docker or sandbox routes directly.
 ## Read first
 
 - [`docs/agent-sandboxing-project.md`](../../agent-sandboxing-project.md) — product direction
+- [`Event Service`](../event-service/README.md) — durable task events and SSE delivery
 - [`Sandbox Service`](../sandbox-service/README.md) — internal execution plane
 - [`task-service-product-boundary.excalidraw`](./task-service-product-boundary.excalidraw) — component diagram
 - [`docs/planning/task-service-atomic-mvp-plan.md`](../../planning/task-service-atomic-mvp-plan.md) — implementation decisions and scope

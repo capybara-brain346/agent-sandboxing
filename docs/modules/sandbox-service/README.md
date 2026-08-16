@@ -132,6 +132,8 @@ that can appear in the stream include:
 The durable `EventStore` is canonical. `SseHub` provides live fanout and
 buffers events during replay; reconnects use the task event sequence via the
 `after` query parameter or `Last-Event-ID` header.
+See the [Event Service documentation](../event-service/README.md) for the
+shared event contract and append/publish invariants.
 
 ## Development and smoke test
 
