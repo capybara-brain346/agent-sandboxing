@@ -15,6 +15,8 @@ export const EVENT_TYPES = [
   "command_failed",
   "command_timed_out",
   "command_cancelled",
+  "agent_tool_call",
+  "agent_tool_result",
   "git_diff_requested",
   "git_diff_completed",
   "cleanup_started",
@@ -36,6 +38,7 @@ export const EVENT_PRODUCER_SERVICES = [
   "command",
   "runtime",
   "cleanup",
+  "agent",
 ] as const;
 
 export const eventProducerServiceSchema = z.enum(EVENT_PRODUCER_SERVICES);

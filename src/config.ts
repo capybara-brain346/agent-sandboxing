@@ -29,6 +29,13 @@ const schema = z.object({
     .int()
     .positive()
     .default(10485760),
+  AGENT_MODEL: z.string().default("openrouter:deepseek/deepseek-v4-flash"),
+  AGENT_MAX_STEPS: z.coerce.number().int().min(1).max(100).default(25),
+  AGENT_BASH_TIMEOUT_MS: z.coerce.number().int().min(1000).default(120000),
+  AGENT_BASH_OUTPUT_MAX_BYTES: z.coerce.number().int().min(1024).default(51200),
+  AGENT_READ_MAX_BYTES: z.coerce.number().int().min(1024).default(262144),
+  AGENT_WRITE_MAX_BYTES: z.coerce.number().int().min(1024).default(1048576),
+  AGENT_TOOL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),
 });
 
 export type Config = z.infer<typeof schema>;

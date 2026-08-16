@@ -50,8 +50,13 @@ operations are:
 - `stop(sandboxId)` — stops and removes the Docker container and persists the
   stopping/stopped lifecycle.
 
-The future Agent Service should use the command seam through an in-process
-collaborator. It must not receive raw Docker access.
+The Agent Service uses an in-process runtime seam and never receives raw Docker
+access. `SandboxRuntime.simpleExec(containerName, command, cwd, options)` runs a
+single command and captures bounded `stdout` and `stderr` asynchronously. It
+returns non-zero exit codes as normal results, reports a killed timeout with
+`timedOut: true`, and rejects cancellation with an `AbortError`. Environment
+variables and an `AbortSignal` are optional inputs. Tool code remains
+responsible for workspace path validation and command allowlisting.
 
 ## Sandbox lifecycle
 
@@ -116,6 +121,11 @@ and timestamps. Command execution failures are represented as structured
 events and safe service errors; raw runtime failures do not cross the service
 boundary.
 
+Agent tools use `simpleExec` for one-shot capture rather than the persisted
+command API. Captured output is bounded by `COMMAND_OUTPUT_MAX_BYTES`, remains
+valid UTF-8 at the boundary, and reports `truncated` when the combined output
+exceeds the limit.
+
 ## Event stream
 
 There is no sandbox-specific event stream. Every event has an owning `taskId`
@@ -127,6 +137,8 @@ that can appear in the stream include:
   `sandbox_failed`, `sandbox_stopping`, and `sandbox_stopped`
 - commands: `command_started`, `command_output`, `command_completed`,
   `command_failed`, and `command_timed_out`
+- agent tools: `agent_tool_call` and `agent_tool_result`, appended by the
+  future Agent Service to the same owning task stream
 - diff capture: `git_diff_requested` and `git_diff_completed`
 
 The durable `EventStore` is canonical. `SseHub` provides live fanout and
@@ -189,6 +201,17 @@ All runtime configuration is loaded and validated by `src/config.ts`:
 - `SANDBOX_PIDS_LIMIT`
 - `SANDBOX_STOP_GRACE_MS`
 - `COMMAND_OUTPUT_MAX_BYTES`
+
+Agent-facing limits are also validated centrally here so tool implementations do
+not read `process.env` directly:
+
+- `AGENT_MODEL` (default `openrouter:deepseek/deepseek-v4-flash`)
+- `AGENT_MAX_STEPS` (default `25`, range `1..100`)
+- `AGENT_BASH_TIMEOUT_MS` (default `120000`, minimum `1000`)
+- `AGENT_BASH_OUTPUT_MAX_BYTES` (default `51200`, minimum `1024`)
+- `AGENT_READ_MAX_BYTES` (default `262144`, minimum `1024`)
+- `AGENT_WRITE_MAX_BYTES` (default `1048576`, minimum `1024`)
+- `AGENT_TOOL_TIMEOUT_MS` (default `30000`, minimum `1000`)
 
 Do not read `process.env` directly from sandbox modules. Add new runtime
 settings to the Zod config schema with an explicit default.

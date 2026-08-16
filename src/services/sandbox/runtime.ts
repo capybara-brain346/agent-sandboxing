@@ -1,9 +1,83 @@
 import { access, lstat, realpath } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
-import type { RuntimeOutput, RuntimeResult } from "../../types/sandbox.types";
+import type {
+  RuntimeOutput,
+  RuntimeResult,
+  SimpleExecOptions,
+  SimpleExecResult,
+} from "../../types/sandbox.types";
+
+const takeUtf8Prefix = (text: string, maxBytes: number): string => {
+  let result = "";
+  let bytesUsed = 0;
+
+  for (const character of text) {
+    const bytes = Buffer.byteLength(character);
+    if (bytesUsed + bytes > maxBytes) break;
+    result += character;
+    bytesUsed += bytes;
+  }
+
+  return result;
+};
+
+class OutputBudget {
+  remaining: number;
+  truncated = false;
+
+  constructor(maxBytes: number) {
+    this.remaining = maxBytes;
+  }
+}
+
+class BoundedOutput {
+  private readonly decoder = new StringDecoder("utf8");
+  private readonly chunks: string[] = [];
+
+  constructor(private readonly budget: OutputBudget) {}
+
+  append(data: Buffer | Uint8Array | string): void {
+    const buffer =
+      typeof data === "string"
+        ? Buffer.from(data)
+        : Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(data);
+    this.consume(this.decoder.write(buffer));
+  }
+
+  finish(): void {
+    this.consume(this.decoder.end());
+  }
+
+  value(): string {
+    return this.chunks.join("");
+  }
+
+  private consume(text: string): void {
+    if (!text) return;
+
+    if (this.budget.remaining <= 0) {
+      this.budget.truncated = true;
+      return;
+    }
+
+    const bounded = takeUtf8Prefix(text, this.budget.remaining);
+    this.chunks.push(bounded);
+    this.budget.remaining -= Buffer.byteLength(bounded);
+    if (bounded.length < text.length) this.budget.truncated = true;
+  }
+}
+
+const abortError = (): Error => {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+};
 
 const execFile = (
   args: string[],
@@ -60,6 +134,98 @@ const execFile = (
 
 export class SandboxRuntime {
   constructor(private readonly config: Config) {}
+
+  async simpleExec(
+    containerName: string,
+    command: string,
+    cwd: string,
+    options: SimpleExecOptions = {},
+  ): Promise<SimpleExecResult> {
+    if (options.signal?.aborted) throw abortError();
+
+    const args = ["exec", "-i", "-w", cwd];
+    for (const [key, value] of Object.entries(options.env ?? {}))
+      args.push("-e", `${key}=${value}`);
+    args.push(containerName, "sh", "-lc", command);
+
+    return new Promise<SimpleExecResult>((resolve, reject) => {
+      const budget = new OutputBudget(this.config.COMMAND_OUTPUT_MAX_BYTES);
+      const stdout = new BoundedOutput(budget);
+      const stderr = new BoundedOutput(budget);
+      let timedOut = false;
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      let child: ReturnType<typeof spawn>;
+
+      const clearResources = (): void => {
+        if (timer) clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+
+      const resolveResult = (exitCode: number | null): void => {
+        if (settled) return;
+        settled = true;
+        clearResources();
+        stdout.finish();
+        stderr.finish();
+        resolve({
+          stdout: stdout.value(),
+          stderr: stderr.value(),
+          exitCode: timedOut ? null : exitCode,
+          timedOut,
+          truncated: budget.truncated,
+        });
+      };
+
+      const rejectWith = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        clearResources();
+        reject(error);
+      };
+
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        clearResources();
+        child.kill("SIGKILL");
+        reject(abortError());
+      };
+
+      try {
+        child = spawn("docker", args, {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (error) {
+        rejectWith(error);
+        return;
+      }
+
+      child.stdout?.on("data", (data: Buffer | Uint8Array | string) =>
+        stdout.append(data),
+      );
+      child.stderr?.on("data", (data: Buffer | Uint8Array | string) =>
+        stderr.append(data),
+      );
+      child.once("error", (error) => {
+        if (!timedOut) rejectWith(error);
+      });
+      child.once("close", (code) => resolveResult(code));
+
+      if (options.signal) {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+        if (options.signal.aborted) onAbort();
+      }
+
+      if (!settled && options.timeoutMs !== undefined) {
+        timer = setTimeout(() => {
+          if (settled) return;
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, options.timeoutMs);
+      }
+    });
+  }
 
   async provision(
     sandboxId: string,
