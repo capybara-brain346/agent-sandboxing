@@ -24,13 +24,6 @@ enum CommandStatus {
   cancelled
 }
 
-enum SandboxEventActor {
-  api
-  provisioner
-  runtime
-  cleanup
-}
-
 enum TaskStatus {
   created
   provisioning
@@ -51,7 +44,6 @@ model Sandbox {
   image             String
   workspacePath     String         @map("workspace_path")
   fixtureRepoPath   String         @map("fixture_repo_path")
-  nextEventSequence Int            @default(1) @map("next_event_sequence")
   failureCode       String?        @map("failure_code")
   failureMessage    String?        @map("failure_message")
   createdAt         DateTime       @default(now()) @map("created_at")
@@ -62,7 +54,6 @@ model Sandbox {
   failedAt          DateTime?      @map("failed_at")
   deletedAt         DateTime?      @map("deleted_at")
   commands          Command[]
-  events            SandboxEvent[]
   streamEvents      Event[]        @relation("SandboxEvents")
 
   @@index([status, createdAt])
@@ -117,32 +108,11 @@ model Command {
   completedAt     DateTime?      @map("completed_at")
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
-  events          SandboxEvent[]
   streamEvents    Event[]        @relation("CommandEvents")
 
   @@index([sandboxId, createdAt])
   @@index([sandboxId, status])
   @@map("commands")
-}
-
-// Transitional compatibility model. SandboxService moves to Event in Phase 3.
-model SandboxEvent {
-  id            String            @id @default(cuid())
-  sandboxId     String            @map("sandbox_id")
-  sandbox       Sandbox           @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
-  commandId     String?           @map("command_id")
-  command       Command?          @relation(fields: [commandId], references: [id], onDelete: SetNull)
-  sequence      Int
-  type          String
-  actor         SandboxEventActor
-  correlationId String?           @map("correlation_id")
-  payload       Json
-  createdAt     DateTime          @default(now()) @map("created_at")
-
-  @@unique([sandboxId, sequence])
-  @@index([sandboxId, sequence])
-  @@index([commandId, sequence])
-  @@map("sandbox_events")
 }
 
 model Event {
@@ -152,14 +122,14 @@ model Event {
   type            String
   producerService String   @map("producer_service")
   producerId      String   @map("producer_id")
-  taskId          String?  @map("task_id")
+  taskId          String   @map("task_id")
   sandboxId       String?  @map("sandbox_id")
   commandId       String?  @map("command_id")
   correlationId   String?  @map("correlation_id")
   payload         Json
   createdAt       DateTime @default(now()) @map("created_at")
 
-  task    Task?    @relation("TaskEvents", fields: [taskId], references: [id], onDelete: SetNull)
+  task    Task     @relation("TaskEvents", fields: [taskId], references: [id], onDelete: Cascade)
   sandbox Sandbox? @relation("SandboxEvents", fields: [sandboxId], references: [id], onDelete: SetNull)
   command Command? @relation("CommandEvents", fields: [commandId], references: [id], onDelete: SetNull)
 

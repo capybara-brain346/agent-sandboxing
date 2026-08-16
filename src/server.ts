@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 import { logger } from "./logger";
 import { ServiceError } from "./shared/errors";
 import { prisma } from "./db/prisma";
-import { sandboxRouter } from "./routes/sandbox.routes";
 import { taskRouter } from "./routes/task.routes";
 
 const pkgVersion: string = JSON.parse(
@@ -123,7 +122,6 @@ export const createApp = (): express.Express => {
     }
   });
 
-  app.use(sandboxRouter);
   app.use(taskRouter);
 
   app.use(notFoundHandler);

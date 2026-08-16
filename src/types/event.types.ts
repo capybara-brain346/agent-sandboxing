@@ -1,4 +1,3 @@
-import type { SandboxEventActor } from "@prisma/client";
 import { z } from "zod";
 
 export const EVENT_TYPES = [
@@ -46,7 +45,7 @@ export type EventProducerService = (typeof EVENT_PRODUCER_SERVICES)[number];
 export type PublicEvent = {
   id: string;
   streamId: string;
-  taskId: string | null;
+  taskId: string;
   sandboxId: string | null;
   commandId: string | null;
   sequence: number;
@@ -56,59 +55,4 @@ export type PublicEvent = {
   correlationId: string | null;
   payload: Record<string, unknown>;
   createdAt: string;
-};
-
-/**
- * Shape used by the pre-task sandbox service while the old HTTP surface is
- * retired. It is accepted by the fanout hub so existing internal producers
- * can be migrated without changing the delivery mechanism.
- */
-export type LegacyPublicEvent = {
-  id: string;
-  sandboxId: string;
-  commandId: string | null;
-  sequence: number;
-  type: EventType;
-  actor: SandboxEventActor;
-  correlationId: string | null;
-  payload: Record<string, unknown>;
-  createdAt: string;
-};
-
-export type StreamEvent = PublicEvent | LegacyPublicEvent;
-
-const legacyActorFor = (event: PublicEvent): SandboxEventActor => {
-  if (event.producerService === "cleanup") return "cleanup";
-  if (event.producerService === "runtime") return "runtime";
-  if (event.producerService === "command")
-    return event.type === "command_started" ? "api" : "runtime";
-  if (event.producerService === "sandbox")
-    return event.type === "sandbox_created" ||
-      event.type === "sandbox_stopping" ||
-      event.type === "git_diff_requested"
-      ? "api"
-      : "provisioner";
-  return "api";
-};
-
-/** Convert a task-stream event to the legacy sandbox SSE shape when relevant. */
-export const toLegacySandboxEvent = (
-  event: StreamEvent,
-  sandboxId: string,
-): LegacyPublicEvent | undefined => {
-  if ("actor" in event)
-    return event.sandboxId === sandboxId ? event : undefined;
-  if (event.sandboxId !== sandboxId) return undefined;
-
-  return {
-    id: event.id,
-    sandboxId,
-    commandId: event.commandId,
-    sequence: event.sequence,
-    type: event.type,
-    actor: legacyActorFor(event),
-    correlationId: event.correlationId,
-    payload: event.payload,
-    createdAt: event.createdAt,
-  };
 };

@@ -1,6 +1,6 @@
 import type { Response } from "express";
 import { ServiceError } from "../shared/errors";
-import type { StreamEvent } from "../types/event.types";
+import type { PublicEvent } from "../types/event.types";
 
 export const parseSseCursor = (raw: string | undefined): number => {
   const cursor = Number(raw ?? "0");
@@ -18,7 +18,7 @@ export const parseSseCursor = (raw: string | undefined): number => {
 
 export const writeSseEvent = (
   response: Pick<Response, "write">,
-  event: StreamEvent,
+  event: PublicEvent,
 ): void => {
   response.write(
     `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,

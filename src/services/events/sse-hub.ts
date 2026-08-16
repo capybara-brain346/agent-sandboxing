@@ -1,36 +1,19 @@
 import type { Response } from "express";
-import type { StreamEvent } from "../../types/event.types";
-
-export type SseEventTransform = (
-  event: StreamEvent,
-) => StreamEvent | undefined;
-
-export type SseSubscribeOptions = {
-  transform?: SseEventTransform;
-};
+import type { PublicEvent } from "../../types/event.types";
 
 export type SseClient = {
   response: Response;
-  buffered: StreamEvent[];
+  buffered: PublicEvent[];
   replaying: boolean;
   lastSent: number;
   closed: boolean;
-  transform?: SseEventTransform;
 };
 
-const channelFor = (event: StreamEvent): string =>
-  "streamId" in event ? event.streamId : event.sandboxId;
-
-/** In-memory live fanout. Persisted Event rows remain the source of truth. */
+/** In-memory live fanout for task streams. Persisted Event rows are canonical. */
 export class SseHub {
   private readonly clients = new Map<string, Set<SseClient>>();
 
-  subscribe(
-    streamId: string,
-    response: Response,
-    after: number,
-    options?: SseSubscribeOptions,
-  ): SseClient {
+  subscribe(taskId: string, response: Response, after: number): SseClient {
     const client: SseClient = {
       response,
       buffered: [],
@@ -38,23 +21,14 @@ export class SseHub {
       lastSent: after,
       closed: false,
     };
-    if (options?.transform) client.transform = options.transform;
-    const clients = this.clients.get(streamId) ?? new Set<SseClient>();
+    const clients = this.clients.get(taskId) ?? new Set<SseClient>();
     clients.add(client);
-    this.clients.set(streamId, clients);
-    response.on("close", () => this.unsubscribeOnClose(streamId, client));
+    this.clients.set(taskId, clients);
+    response.on("close", () => this.unsubscribe(taskId, client));
     return client;
   }
 
-  subscribeTask(taskId: string, response: Response, after: number): SseClient {
-    return this.subscribe(taskId, response, after);
-  }
-
-  finishReplay(
-    streamId: string,
-    client: SseClient,
-    replayLast: number,
-  ): void {
+  finishReplay(taskId: string, client: SseClient, replayLast: number): void {
     if (client.closed) return;
 
     client.lastSent = Math.max(client.lastSent, replayLast);
@@ -67,37 +41,23 @@ export class SseHub {
     }
   }
 
-  finishTaskReplay(
-    taskId: string,
-    client: SseClient,
-    replayLast: number,
-  ): void {
-    this.finishReplay(taskId, client, replayLast);
-  }
-
-  publish(event: StreamEvent): void {
-    const streamId = channelFor(event);
-    for (const client of this.clients.get(streamId) ?? []) {
+  publish(event: PublicEvent): void {
+    for (const client of this.clients.get(event.streamId) ?? []) {
       if (client.closed) continue;
       if (client.replaying) client.buffered.push(event);
       else if (event.sequence > client.lastSent) this.send(client, event);
     }
   }
 
-  /** Remove a client when replay cannot be completed before headers are sent. */
-  unsubscribe(streamId: string, client: SseClient): void {
+  unsubscribe(taskId: string, client: SseClient): void {
     client.closed = true;
     client.buffered.length = 0;
-    const clients = this.clients.get(streamId);
+    const clients = this.clients.get(taskId);
     clients?.delete(client);
-    if (clients?.size === 0) this.clients.delete(streamId);
+    if (clients?.size === 0) this.clients.delete(taskId);
   }
 
-  unsubscribeTask(taskId: string, client: SseClient): void {
-    this.unsubscribe(taskId, client);
-  }
-
-  private send(client: SseClient, event: StreamEvent): void {
+  private send(client: SseClient, event: PublicEvent): void {
     if (
       client.closed ||
       client.response.writableEnded ||
@@ -105,19 +65,10 @@ export class SseHub {
     )
       return;
 
-    const transformed = client.transform
-      ? client.transform(event)
-      : event;
-    if (!transformed) return;
-
     client.response.write(
-      `id: ${transformed.sequence}\nevent: ${transformed.type}\ndata: ${JSON.stringify(transformed)}\n\n`,
+      `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
     );
-    client.lastSent = transformed.sequence;
-  }
-
-  private unsubscribeOnClose(streamId: string, client: SseClient): void {
-    this.unsubscribe(streamId, client);
+    client.lastSent = event.sequence;
   }
 
   closeAll(): void {

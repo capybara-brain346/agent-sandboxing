@@ -42,7 +42,7 @@ taskRouter.get("/tasks/:taskId", async (request, response, next) => {
 });
 
 taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
-  let client: ReturnType<SseHub["subscribeTask"]> | undefined;
+  let client: ReturnType<SseHub["subscribe"]> | undefined;
   let keepalive: ReturnType<typeof setInterval> | undefined;
   let closed = false;
 
@@ -54,7 +54,7 @@ taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
     closed = true;
     clearKeepalive();
     if (client !== undefined)
-      sseHub.unsubscribeTask(taskIdFrom(request.params.taskId), client);
+      sseHub.unsubscribe(taskIdFrom(request.params.taskId), client);
   };
 
   try {
@@ -71,14 +71,14 @@ taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
     // Subscribe before reading persisted events. Events committed while the
     // replay query is in flight are buffered by SseHub and flushed after the
     // replay, so a reconnect cannot lose a live event in the gap.
-    client = sseHub.subscribeTask(taskId, response, after);
+    client = sseHub.subscribe(taskId, response, after);
     response.on("close", onClose);
     const events = await taskService.eventsAfter(taskId, after);
 
     // The task lookup happens inside eventsAfter. Keep headers unsent until
     // it succeeds so a missing task still receives the normal 404 response.
     if (closed || response.writableEnded || response.destroyed) {
-      sseHub.unsubscribeTask(taskId, client);
+      sseHub.unsubscribe(taskId, client);
       return;
     }
 
@@ -91,14 +91,14 @@ taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
     response.flushHeaders();
     for (const event of events) writeSseEvent(response, event);
 
-    sseHub.finishTaskReplay(taskId, client, events.at(-1)?.sequence ?? after);
+    sseHub.finishReplay(taskId, client, events.at(-1)?.sequence ?? after);
 
     if (closed || response.writableEnded || response.destroyed) return;
     keepalive = startSseKeepalive(response);
   } catch (error) {
     clearKeepalive();
     if (client !== undefined)
-      sseHub.unsubscribeTask(taskIdFrom(request.params.taskId), client);
+      sseHub.unsubscribe(taskIdFrom(request.params.taskId), client);
     if (!response.headersSent) next(error);
     else response.end();
   }

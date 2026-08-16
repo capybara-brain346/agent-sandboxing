@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
   Prisma,
   PrismaClient,
-  SandboxEventActor,
   SandboxStatus,
 } from "@prisma/client";
 import type { Config } from "../../config";
@@ -10,13 +9,13 @@ import { loadConfig } from "../../config";
 import { prisma } from "../../db/prisma";
 import type {
   CommandRequest,
-  CreateSandboxRequest,
-  CreateSandboxResponse,
-  DiffResponse,
+  CommandStartResult,
   EventType,
-  StartCommandResponse,
+  SandboxDiffResult,
+  SandboxStatus as SandboxStatusType,
+  TaskSandboxInput,
 } from "../../types/sandbox.types";
-import type { StreamEvent } from "../../types/event.types";
+import type { PublicEvent } from "../../types/event.types";
 import { ServiceError, notFound } from "../../shared/errors";
 import { logQueryFailure, runQuery } from "../../shared/query-logging";
 import { workspaceRoot } from "./workspace";
@@ -35,8 +34,8 @@ const transitions: Record<SandboxStatus, readonly SandboxStatus[]> = {
 };
 
 export const canTransition = (
-  from: SandboxStatus,
-  to: SandboxStatus,
+  from: SandboxStatusType,
+  to: SandboxStatusType,
 ): boolean => transitions[from].includes(to);
 
 const safeError = (
@@ -78,7 +77,7 @@ export class SandboxService {
     private readonly events: EventStore,
     private readonly runtime: SandboxRuntime,
     private readonly config: Config,
-    private readonly publish: (event: StreamEvent) => void,
+    private readonly publish: (event: PublicEvent) => void,
   ) {
     this.commands = new CommandExecutionService(
       prisma,
@@ -89,44 +88,77 @@ export class SandboxService {
     );
   }
 
-  async create(input: CreateSandboxRequest): Promise<CreateSandboxResponse> {
-    const result = await runQuery("create_sandbox", {}, () =>
-      this.prisma.$transaction(async (tx) => {
-        const sandbox = await this.createSandboxRowInTransaction(tx, input);
-        const event = await this.events.appendInTransaction(tx, {
-          sandboxId: sandbox.sandboxId,
-          type: "sandbox_created",
-          actor: "api",
-          correlationId: randomUUID(),
-          payload: {
-            container_name: sandbox.containerName,
-            workspace_path: sandbox.workspacePath,
-          },
-        });
-        return { sandbox, event };
-      }),
-    );
-    this.publish(result.event);
-    void this.provision(
-      result.sandbox.sandboxId,
-      result.sandbox.containerName,
-      result.sandbox.image,
-      result.sandbox.fixtureRepoPath,
-    );
+  /** Creates the task-owned sandbox row inside the caller's task transaction. */
+  async createForTaskInTransaction(
+    tx: Prisma.TransactionClient,
+    input: TaskSandboxInput,
+    options: { taskId: string },
+  ): Promise<TaskSandboxCreation> {
+    const sandboxId = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
+    const containerName = `sandbox-${sandboxId}`;
+    const fixtureRepoPath =
+      input.fixtureRepoPath ?? this.config.FIXTURE_REPO_PATH;
+    const image = input.image ?? this.config.SANDBOX_IMAGE;
+    const sandbox = await tx.sandbox.create({
+      data: {
+        id: sandboxId,
+        taskId: options.taskId,
+        status: "creating",
+        containerName,
+        image,
+        workspacePath: workspaceRoot,
+        fixtureRepoPath,
+      },
+    });
     return {
-      sandboxId: result.sandbox.sandboxId,
-      status: result.sandbox.status,
-      workspacePath: result.sandbox.workspacePath,
-      eventsUrl: `/sandboxes/${result.sandbox.sandboxId}/events`,
+      sandboxId: sandbox.id,
+      status: "creating",
+      containerName: sandbox.containerName,
+      image: sandbox.image,
+      workspacePath: sandbox.workspacePath,
+      fixtureRepoPath: sandbox.fixtureRepoPath,
     };
   }
 
-  async createForTaskInTransaction(
-    tx: Prisma.TransactionClient,
-    input: CreateSandboxRequest,
+  /** Creates and links a sandbox for an already-created task. */
+  async createForTask(
+    input: TaskSandboxInput,
     options: { taskId: string },
-  ): Promise<TaskSandboxCreation> {
-    return this.createSandboxRowInTransaction(tx, input, options.taskId);
+  ): Promise<{ sandboxId: string; initialEvent: PublicEvent }> {
+    const result = await runQuery(
+      "create_task_sandbox",
+      { taskId: options.taskId },
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const sandbox = await this.createForTaskInTransaction(
+            tx,
+            input,
+            options,
+          );
+          await tx.task.update({
+            where: { id: options.taskId },
+            data: { sandboxId: sandbox.sandboxId },
+          });
+          const initialEvent = await this.events.appendInTransaction(tx, {
+            taskId: options.taskId,
+            sandboxId: sandbox.sandboxId,
+            type: "sandbox_created",
+            producerService: "sandbox",
+            producerId: sandbox.sandboxId,
+            correlationId: randomUUID(),
+            payload: {
+              container_name: sandbox.containerName,
+              workspace_path: sandbox.workspacePath,
+            },
+          });
+          return { sandbox, initialEvent };
+        }),
+    );
+    this.publish(result.initialEvent);
+    return {
+      sandboxId: result.sandbox.sandboxId,
+      initialEvent: result.initialEvent,
+    };
   }
 
   async provisionForTask(sandboxId: string): Promise<SandboxProvisionResult> {
@@ -136,6 +168,13 @@ export class SandboxService {
       () => this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
     );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
+    if (!sandbox.taskId)
+      throw new ServiceError(
+        "sandbox_not_task_owned",
+        "Sandbox is not owned by a task",
+        409,
+      );
+    const taskId = sandbox.taskId;
     if (sandbox.status === "ready") return { status: "ready" };
     if (sandbox.status === "failed")
       return {
@@ -155,6 +194,7 @@ export class SandboxService {
       };
 
     return this.provision(
+      taskId,
       sandbox.id,
       sandbox.containerName,
       sandbox.image,
@@ -162,83 +202,33 @@ export class SandboxService {
     );
   }
 
-  async createForTask(
-    input: CreateSandboxRequest,
-    options: { taskId: string },
-  ): Promise<{ sandboxId: string; initialEvent: StreamEvent }> {
-    const result = await runQuery(
-      "create_task_sandbox",
-      { taskId: options.taskId },
-      () =>
-        this.prisma.$transaction(async (tx) => {
-          const sandbox = await this.createForTaskInTransaction(
-            tx,
-            input,
-            options,
-          );
-          await tx.task.update({
-            where: { id: options.taskId },
-            data: { sandboxId: sandbox.sandboxId },
-          });
-          const event = await this.events.appendInTransaction(tx, {
-            streamId: options.taskId,
-            type: "sandbox_created",
-            producerService: "sandbox",
-            producerId: sandbox.sandboxId,
-            taskId: options.taskId,
-            sandboxId: sandbox.sandboxId,
-            correlationId: randomUUID(),
-            payload: {
-              container_name: sandbox.containerName,
-              workspace_path: sandbox.workspacePath,
-            },
-          });
-          return { sandbox, event };
-        }),
-    );
-    this.publish(result.event);
-    return { sandboxId: result.sandbox.sandboxId, initialEvent: result.event };
-  }
-
-  async get(sandboxId: string): Promise<unknown> {
-    const sandbox = await runQuery("get_sandbox", { sandboxId }, () =>
-      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
-    );
-    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
-    return this.snapshot(sandbox);
-  }
-
-  async has(sandboxId: string): Promise<boolean> {
-    const count = await runQuery("has_sandbox", { sandboxId }, () =>
-      this.prisma.sandbox.count({ where: { id: sandboxId } }),
-    );
-    return count > 0;
-  }
-
-  async eventStreamId(sandboxId: string): Promise<string> {
-    return this.events.sandboxStreamId(sandboxId);
-  }
-
-  async eventsAfter(sandboxId: string, after: number): Promise<StreamEvent[]> {
-    return this.events.listSandboxAfter(sandboxId, after);
-  }
-
-  async startCommand(
-    sandboxId: string,
+  /** Runs a command for a task-owned sandbox. The sandbox ID is never caller-supplied. */
+  async runCommand(
+    taskId: string,
     input: CommandRequest,
-  ): Promise<StartCommandResponse> {
-    return this.commands.startCommand(sandboxId, input);
+  ): Promise<CommandStartResult> {
+    return this.commands.runCommand(taskId, input);
   }
 
-  async getCommand(sandboxId: string, commandId: string): Promise<unknown> {
-    return this.commands.getCommand(sandboxId, commandId);
+  async getCommand(
+    taskId: string,
+    commandId: string,
+  ): ReturnType<CommandExecutionService["getCommand"]> {
+    return this.commands.getCommand(taskId, commandId);
   }
 
-  async diff(sandboxId: string): Promise<DiffResponse> {
-    const sandbox = await runQuery("get_sandbox_for_diff", { sandboxId }, () =>
+  async diff(sandboxId: string): Promise<SandboxDiffResult> {
+    const sandbox = await runQuery("get_task_sandbox_for_diff", { sandboxId }, () =>
       this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
     );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
+    if (!sandbox.taskId)
+      throw new ServiceError(
+        "sandbox_not_task_owned",
+        "Sandbox is not owned by a task",
+        409,
+      );
+    const taskId = sandbox.taskId;
     if (!["ready", "stopping", "stopped", "failed"].includes(sandbox.status))
       throw new ServiceError(
         "workspace_unavailable",
@@ -246,17 +236,21 @@ export class SandboxService {
         409,
       );
     await this.emit({
+      taskId,
       sandboxId,
       type: "git_diff_requested",
-      actor: "api",
+      producerService: "sandbox",
+      producerId: sandboxId,
       payload: {},
     });
     try {
       const diff = await this.runtime.diff(sandbox.containerName);
       await this.emit({
+        taskId,
         sandboxId,
         type: "git_diff_completed",
-        actor: "runtime",
+        producerService: "runtime",
+        producerId: sandboxId,
         payload: { bytes: Buffer.byteLength(diff) },
       });
       return { sandboxId, diff, generatedAt: new Date().toISOString() };
@@ -269,19 +263,23 @@ export class SandboxService {
     }
   }
 
-  async stop(sandboxId: string): Promise<unknown> {
-    const sandbox = await runQuery("get_sandbox_for_stop", { sandboxId }, () =>
+  async stop(sandboxId: string): Promise<void> {
+    const sandbox = await runQuery("get_task_sandbox_for_stop", { sandboxId }, () =>
       this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
     );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
-    if (sandbox.status === "stopped") return this.snapshot(sandbox);
+    if (!sandbox.taskId)
+      throw new ServiceError(
+        "sandbox_not_task_owned",
+        "Sandbox is not owned by a task",
+        409,
+      );
+    const taskId = sandbox.taskId;
+    if (sandbox.status === "stopped") return;
     if (sandbox.status === "deleted")
       throw new ServiceError("sandbox_deleted", "Sandbox was deleted", 410);
-    if (sandbox.status === "stopping") return this.snapshot(sandbox);
+    if (sandbox.status === "stopping") return;
 
-    // Claim the stop with the status predicate. Only the caller that changes
-    // the row can append sandbox_stopping or touch the runtime. A concurrent
-    // caller observes stopping and returns without starting a second cleanup.
     const stopping = await runQuery(
       "mark_sandbox_stopping",
       { sandboxId },
@@ -294,30 +292,21 @@ export class SandboxService {
             },
             data: { status: "stopping", stoppingAt: new Date() },
           });
-          if (claimed.count === 0)
-            return {
-              row: await tx.sandbox.findUnique({ where: { id: sandboxId } }),
-              event: null,
-            };
+          if (claimed.count === 0) return null;
 
-          const event = await this.events.appendInTransaction(tx, {
+          return this.events.appendInTransaction(tx, {
+            taskId,
             sandboxId,
             type: "sandbox_stopping",
-            actor: "api",
+            producerService: "sandbox",
+            producerId: sandboxId,
             correlationId: randomUUID(),
             payload: {},
           });
-          return { row: null, event };
         }),
     );
-    if (stopping.event === null) {
-      if (!stopping.row)
-        throw notFound("sandbox_not_found", "Sandbox was not found");
-      if (stopping.row.status === "deleted")
-        throw new ServiceError("sandbox_deleted", "Sandbox was deleted", 410);
-      return this.snapshot(stopping.row);
-    }
-    this.publish(stopping.event);
+    if (stopping === null) return;
+    this.publish(stopping);
     await this.runtime.stop(
       sandbox.containerName,
       this.config.SANDBOX_STOP_GRACE_MS,
@@ -328,56 +317,24 @@ export class SandboxService {
           where: { id: sandboxId, status: "stopping" },
           data: { status: "stopped", stoppedAt: new Date() },
         });
-        const row = await tx.sandbox.findUnique({ where: { id: sandboxId } });
-        if (!row) throw notFound("sandbox_not_found", "Sandbox was not found");
-        if (claimed.count === 0) return { row, event: null };
+        if (claimed.count === 0) return null;
 
-        const event = await this.events.appendInTransaction(tx, {
+        return this.events.appendInTransaction(tx, {
+          taskId,
           sandboxId,
           type: "sandbox_stopped",
-          actor: "cleanup",
+          producerService: "cleanup",
+          producerId: sandboxId,
           correlationId: randomUUID(),
           payload: {},
         });
-        return { row, event };
       }),
     );
-    if (stopped.event !== null) this.publish(stopped.event);
-    return this.snapshot(stopped.row);
-  }
-
-  private async createSandboxRowInTransaction(
-    tx: Prisma.TransactionClient,
-    input: CreateSandboxRequest,
-    taskId?: string,
-  ): Promise<TaskSandboxCreation> {
-    const sandboxId = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
-    const containerName = `sandbox-${sandboxId}`;
-    const fixtureRepoPath =
-      input.fixtureRepoPath ?? this.config.FIXTURE_REPO_PATH;
-    const image = input.image ?? this.config.SANDBOX_IMAGE;
-    const sandbox = await tx.sandbox.create({
-      data: {
-        id: sandboxId,
-        ...(taskId === undefined ? {} : { taskId }),
-        status: "creating",
-        containerName,
-        image,
-        workspacePath: workspaceRoot,
-        fixtureRepoPath,
-      },
-    });
-    return {
-      sandboxId: sandbox.id,
-      status: "creating",
-      containerName: sandbox.containerName,
-      image: sandbox.image,
-      workspacePath: sandbox.workspacePath,
-      fixtureRepoPath: sandbox.fixtureRepoPath,
-    };
+    if (stopped !== null) this.publish(stopped);
   }
 
   private async provision(
+    taskId: string,
     sandboxId: string,
     containerName: string,
     image: string,
@@ -385,15 +342,19 @@ export class SandboxService {
   ): Promise<SandboxProvisionResult> {
     try {
       await this.emit({
+        taskId,
         sandboxId,
         type: "sandbox_provisioning_started",
-        actor: "provisioner",
+        producerService: "sandbox",
+        producerId: sandboxId,
         payload: {},
       });
       await this.emit({
+        taskId,
         sandboxId,
         type: "fixture_repo_copy_started",
-        actor: "provisioner",
+        producerService: "sandbox",
+        producerId: sandboxId,
         payload: { fixture_repo_path: fixturePath },
       });
       const provisioned = await this.runtime.provision(
@@ -413,16 +374,20 @@ export class SandboxService {
             },
           });
           const copied = await this.events.appendInTransaction(tx, {
+            taskId,
             sandboxId,
             type: "fixture_repo_copied",
-            actor: "provisioner",
+            producerService: "sandbox",
+            producerId: sandboxId,
             correlationId: randomUUID(),
             payload: { workspace_path: workspaceRoot },
           });
           const ready = await this.events.appendInTransaction(tx, {
+            taskId,
             sandboxId,
             type: "sandbox_ready",
-            actor: "provisioner",
+            producerService: "sandbox",
+            producerId: sandboxId,
             correlationId: randomUUID(),
             payload: { container_id: provisioned.containerId },
           });
@@ -446,9 +411,11 @@ export class SandboxService {
             },
           });
           return this.events.appendInTransaction(tx, {
+            taskId,
             sandboxId,
             type: "sandbox_failed",
-            actor: "provisioner",
+            producerService: "sandbox",
+            producerId: sandboxId,
             correlationId: randomUUID(),
             payload: safe,
           });
@@ -461,10 +428,12 @@ export class SandboxService {
   }
 
   private async emit(input: {
+    taskId: string;
     sandboxId: string;
     commandId?: string;
     type: EventType;
-    actor: SandboxEventActor;
+    producerService: "sandbox" | "runtime" | "cleanup" | "command";
+    producerId: string;
     payload: Record<string, unknown>;
   }): Promise<void> {
     const event = await this.events.append({
@@ -472,31 +441,6 @@ export class SandboxService {
       correlationId: randomUUID(),
     });
     this.publish(event);
-  }
-
-  private snapshot(sandbox: {
-    id: string;
-    status: SandboxStatus;
-    containerName: string;
-    workspacePath: string;
-    createdAt: Date;
-    readyAt: Date | null;
-    stoppedAt: Date | null;
-    failureCode: string | null;
-    failureMessage: string | null;
-  }): Record<string, unknown> {
-    return {
-      sandboxId: sandbox.id,
-      status: sandbox.status,
-      containerName: sandbox.containerName,
-      workspacePath: sandbox.workspacePath,
-      createdAt: sandbox.createdAt.toISOString(),
-      readyAt: sandbox.readyAt?.toISOString() ?? null,
-      stoppedAt: sandbox.stoppedAt?.toISOString() ?? null,
-      failure: sandbox.failureCode
-        ? { code: sandbox.failureCode, message: sandbox.failureMessage }
-        : null,
-    };
   }
 }
 

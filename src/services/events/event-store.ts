@@ -1,27 +1,20 @@
 import { randomUUID } from "node:crypto";
-import type {
-  Prisma,
-  PrismaClient,
-  SandboxEventActor,
-} from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { runQuery } from "../../shared/query-logging";
 import { notFound } from "../../shared/errors";
 import type {
   EventProducerService,
   EventType,
-  LegacyPublicEvent,
   PublicEvent,
-  StreamEvent,
 } from "../../types/event.types";
-import { toLegacySandboxEvent } from "../../types/event.types";
 
 export type AppendEventInput = {
-  /** Defaults to taskId for task-owned events. */
+  /** The task stream is the only supported event stream. */
+  taskId: string;
   streamId?: string;
   type: EventType;
   producerService: EventProducerService;
   producerId: string;
-  taskId?: string | null;
   sandboxId?: string | null;
   commandId?: string | null;
   correlationId?: string | null;
@@ -32,39 +25,6 @@ export type TaskEventInput = Omit<AppendEventInput, "streamId" | "taskId"> & {
   taskId: string;
 };
 
-export type SandboxEventInput = Omit<
-  AppendEventInput,
-  "streamId" | "sandboxId" | "taskId"
-> & {
-  sandboxId: string;
-  taskId?: string | null;
-};
-
-export type CommandEventInput = Omit<
-  AppendEventInput,
-  "streamId" | "sandboxId" | "commandId" | "taskId"
-> & {
-  sandboxId: string;
-  commandId: string;
-  taskId?: string | null;
-};
-
-/**
- * Compatibility input for the internal sandbox service. When the sandbox is
- * linked to a task it is promoted to an Event row; an unlinked sandbox still
- * uses the transitional sandbox_events table until it is removed.
- */
-type LegacyAppendInput = {
-  sandboxId: string;
-  type: EventType;
-  actor: SandboxEventActor;
-  payload: Record<string, unknown>;
-  commandId?: string;
-  correlationId?: string;
-};
-
-type AppendInput = AppendEventInput | LegacyAppendInput;
-
 type EventRow = {
   id: string;
   streamId: string;
@@ -72,21 +32,9 @@ type EventRow = {
   type: string;
   producerService: string;
   producerId: string;
-  taskId: string | null;
+  taskId: string;
   sandboxId: string | null;
   commandId: string | null;
-  correlationId: string | null;
-  payload: Prisma.JsonValue;
-  createdAt: Date;
-};
-
-type LegacyEventRow = {
-  id: string;
-  sandboxId: string;
-  commandId: string | null;
-  sequence: number;
-  type: string;
-  actor: SandboxEventActor;
   correlationId: string | null;
   payload: Prisma.JsonValue;
   createdAt: Date;
@@ -107,200 +55,61 @@ type TaskEventQueryRow = {
   createdAt: Date | null;
 };
 
-type SandboxLookupClient = { sandbox: unknown };
-
-const findSandbox = async (
-  client: SandboxLookupClient,
-  sandboxId: string,
-): Promise<{ taskId: string | null } | null> => {
-  const sandbox = client.sandbox as {
-    findUnique?: (args: unknown) => Promise<{ taskId: string | null } | null>;
-  };
-  return (
-    (await sandbox.findUnique?.({
-      where: { id: sandboxId },
-      select: { taskId: true },
-    })) ?? null
-  );
-};
-
 const eventId = (): string =>
   `evt_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
 
-const toPublic = (event: EventRow): PublicEvent => ({
-  id: event.id,
-  streamId: event.streamId,
-  taskId: event.taskId ?? null,
-  sandboxId: event.sandboxId ?? null,
-  commandId: event.commandId ?? null,
-  sequence: event.sequence,
-  type: event.type as EventType,
-  producerService: event.producerService as EventProducerService,
-  producerId: event.producerId,
-  correlationId: event.correlationId ?? null,
-  payload: event.payload as Record<string, unknown>,
-  createdAt: event.createdAt.toISOString(),
-});
-
-const toLegacyPublic = (event: LegacyEventRow): LegacyPublicEvent => ({
-  ...event,
-  type: event.type as EventType,
-  payload: event.payload as Record<string, unknown>,
-  createdAt: event.createdAt.toISOString(),
-});
-
-const isLegacyInput = (input: AppendInput): input is LegacyAppendInput =>
-  "actor" in input;
-
-const producerForLegacy = (
-  input: LegacyAppendInput,
-): { service: EventProducerService; id: string } => {
-  if (input.commandId) {
-    return {
-      service: input.actor === "runtime" ? "runtime" : "command",
-      id: input.commandId,
-    };
-  }
-
+const toPublic = (event: EventRow): PublicEvent => {
+  if (!event.taskId) throw new Error("Event is missing its owning task");
   return {
-    service:
-      input.actor === "cleanup"
-        ? "cleanup"
-        : input.actor === "runtime"
-          ? "runtime"
-          : "sandbox",
-    id: input.sandboxId,
+    id: event.id,
+    streamId: event.streamId,
+    taskId: event.taskId,
+    sandboxId: event.sandboxId,
+    commandId: event.commandId,
+    sequence: event.sequence,
+    type: event.type as EventType,
+    producerService: event.producerService as EventProducerService,
+    producerId: event.producerId,
+    correlationId: event.correlationId,
+    payload: event.payload as Record<string, unknown>,
+    createdAt: event.createdAt.toISOString(),
   };
 };
 
 export class EventStore {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async append(input: AppendEventInput): Promise<PublicEvent>;
-  async append(input: LegacyAppendInput): Promise<StreamEvent>;
-  async append(input: AppendInput): Promise<StreamEvent> {
+  async append(input: AppendEventInput): Promise<PublicEvent> {
     return runQuery(
       "append_event",
-      {
-        streamId: isLegacyInput(input)
-          ? input.sandboxId
-          : (input.streamId ?? input.taskId ?? "unknown"),
-      },
+      { taskId: input.taskId },
       () =>
         this.prisma.$transaction((tx) =>
-          this.appendAnyInTransaction(tx, input),
+          this.appendInTransaction(tx, input),
         ),
     );
   }
 
   async appendTaskEvent(input: TaskEventInput): Promise<PublicEvent> {
-    return runQuery(
-      "append_task_event",
-      { taskId: input.taskId },
-      () =>
-        this.prisma.$transaction((tx) =>
-          this.appendTaskEventInTransaction(tx, input),
-        ),
-    );
-  }
-
-  async appendSandboxEvent(input: SandboxEventInput): Promise<PublicEvent> {
-    return runQuery(
-      "append_sandbox_event",
-      { sandboxId: input.sandboxId },
-      () =>
-        this.prisma.$transaction((tx) =>
-          this.appendSandboxEventInTransaction(tx, input),
-        ),
-    );
+    return this.append(input);
   }
 
   async appendInTransaction(
     tx: Prisma.TransactionClient,
     input: AppendEventInput,
-  ): Promise<PublicEvent>;
-  async appendInTransaction(
-    tx: Prisma.TransactionClient,
-    input: LegacyAppendInput,
-  ): Promise<StreamEvent>;
-  async appendInTransaction(
-    tx: Prisma.TransactionClient,
-    input: AppendInput,
-  ): Promise<StreamEvent> {
-    return this.appendAnyInTransaction(tx, input);
-  }
-
-  private async appendAnyInTransaction(
-    tx: Prisma.TransactionClient,
-    input: AppendInput,
-  ): Promise<StreamEvent> {
-    if (!isLegacyInput(input)) return this.appendStreamInTransaction(tx, input);
-
-    const taskId = await this.findSandboxTaskId(tx, input.sandboxId);
-    if (taskId) {
-      const producer = producerForLegacy(input);
-      return this.appendStreamInTransaction(tx, {
-        streamId: taskId,
-        taskId,
-        sandboxId: input.sandboxId,
-        commandId: input.commandId ?? null,
-        type: input.type,
-        producerService: producer.service,
-        producerId: producer.id,
-        correlationId: input.correlationId ?? null,
-        payload: input.payload,
-      });
-    }
-
-    return this.appendLegacySandboxInTransaction(tx, input);
+  ): Promise<PublicEvent> {
+    return this.appendStreamInTransaction(tx, input);
   }
 
   async appendTaskEventInTransaction(
     tx: Prisma.TransactionClient,
     input: TaskEventInput,
   ): Promise<PublicEvent> {
-    return this.appendStreamInTransaction(tx, {
-      ...input,
-      streamId: input.taskId,
-      taskId: input.taskId,
-    });
+    return this.appendInTransaction(tx, input);
   }
 
-  async appendSandboxEventInTransaction(
-    tx: Prisma.TransactionClient,
-    input: SandboxEventInput,
-  ): Promise<PublicEvent> {
-    const taskId = input.taskId ?? (await this.findSandboxTaskId(tx, input.sandboxId));
-    if (!taskId)
-      throw new Error("Cannot append a sandbox event without a task stream");
-
-    return this.appendStreamInTransaction(tx, {
-      ...input,
-      streamId: taskId,
-      taskId,
-      sandboxId: input.sandboxId,
-    });
-  }
-
-  async appendCommandEventInTransaction(
-    tx: Prisma.TransactionClient,
-    input: CommandEventInput,
-  ): Promise<PublicEvent> {
-    const taskId = input.taskId ?? (await this.findSandboxTaskId(tx, input.sandboxId));
-    if (!taskId)
-      throw new Error("Cannot append a command event without a task stream");
-
-    return this.appendStreamInTransaction(tx, {
-      ...input,
-      streamId: taskId,
-      taskId,
-      sandboxId: input.sandboxId,
-      commandId: input.commandId,
-    });
-  }
-
-  async listAfter(streamId: string, after: number): Promise<PublicEvent[]> {
-    return this.listTaskEvents(streamId, after);
+  async listAfter(taskId: string, after: number): Promise<PublicEvent[]> {
+    return this.listTaskEvents(taskId, after);
   }
 
   async listTaskEvents(taskId: string, after: number): Promise<PublicEvent[]> {
@@ -358,7 +167,7 @@ export class EventStore {
           type: row.type ?? "task_created",
           producerService: row.producerService ?? "task",
           producerId: row.producerId ?? taskId,
-          taskId: row.taskId,
+          taskId: row.taskId ?? taskId,
           sandboxId: row.sandboxId,
           commandId: row.commandId,
           correlationId: row.correlationId,
@@ -369,43 +178,17 @@ export class EventStore {
     });
   }
 
-  async sandboxStreamId(sandboxId: string): Promise<string> {
-    const sandbox = await runQuery(
-      "get_sandbox_event_stream",
-      { sandboxId },
-      () => findSandbox(this.prisma, sandboxId),
-    );
-    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
-    return sandbox.taskId ?? sandboxId;
-  }
-
-  /** List the sandbox-compatible stream, or legacy events if unlinked. */
-  async listSandboxAfter(
-    sandboxId: string,
-    after: number,
-  ): Promise<StreamEvent[]> {
-    const streamId = await this.sandboxStreamId(sandboxId);
-    if (streamId === sandboxId)
-      return this.listLegacySandboxAfter(sandboxId, after);
-
-    const events = await this.listTaskEvents(streamId, after);
-    return events.flatMap((event) => {
-      const legacy = toLegacySandboxEvent(event, sandboxId);
-      return legacy ? [legacy] : [];
-    });
-  }
-
   private async appendStreamInTransaction(
     tx: Prisma.TransactionClient,
     input: AppendEventInput,
   ): Promise<PublicEvent> {
     const streamId = input.streamId ?? input.taskId;
-    if (!streamId)
-      throw new Error("Task stream ID is required to append an event");
+    if (streamId !== input.taskId)
+      throw new Error("Event stream must be the owning task stream");
 
     const rows = await tx.$queryRaw<
       Array<{ next_event_sequence: number }>
-    >`SELECT next_event_sequence FROM tasks WHERE id = ${streamId} FOR UPDATE`;
+    >`SELECT next_event_sequence FROM tasks WHERE id = ${input.taskId} FOR UPDATE`;
     const row = rows[0];
     if (!row) throw new Error("Task disappeared while appending event");
 
@@ -417,7 +200,7 @@ export class EventStore {
         type: input.type,
         producerService: input.producerService,
         producerId: input.producerId,
-        taskId: input.taskId ?? streamId,
+        taskId: input.taskId,
         sandboxId: input.sandboxId ?? null,
         commandId: input.commandId ?? null,
         correlationId: input.correlationId ?? null,
@@ -425,61 +208,9 @@ export class EventStore {
       },
     });
     await tx.task.update({
-      where: { id: streamId },
+      where: { id: input.taskId },
       data: { nextEventSequence: { increment: 1 } },
     });
     return toPublic(event);
-  }
-
-  private async appendLegacySandboxInTransaction(
-    tx: Prisma.TransactionClient,
-    input: LegacyAppendInput,
-  ): Promise<LegacyPublicEvent> {
-    const rows = await tx.$queryRaw<
-      Array<{ next_event_sequence: number }>
-    >`SELECT next_event_sequence FROM sandboxes WHERE id = ${input.sandboxId} FOR UPDATE`;
-    const row = rows[0];
-    if (!row) throw new Error("Sandbox disappeared while appending event");
-
-    const event = await tx.sandboxEvent.create({
-      data: {
-        sandboxId: input.sandboxId,
-        commandId: input.commandId ?? null,
-        sequence: row.next_event_sequence,
-        type: input.type,
-        actor: input.actor,
-        correlationId: input.correlationId ?? null,
-        payload: input.payload as Prisma.InputJsonValue,
-      },
-    });
-    await tx.sandbox.update({
-      where: { id: input.sandboxId },
-      data: { nextEventSequence: { increment: 1 } },
-    });
-    return toLegacyPublic(event);
-  }
-
-  private async findSandboxTaskId(
-    tx: Prisma.TransactionClient,
-    sandboxId: string,
-  ): Promise<string | null> {
-    const sandbox = await findSandbox(tx, sandboxId);
-    return sandbox?.taskId ?? null;
-  }
-
-  private async listLegacySandboxAfter(
-    sandboxId: string,
-    after: number,
-  ): Promise<LegacyPublicEvent[]> {
-    const events = await runQuery(
-      "list_sandbox_events",
-      { sandboxId, after },
-      () =>
-        this.prisma.sandboxEvent.findMany({
-          where: { sandboxId, sequence: { gt: after } },
-          orderBy: { sequence: "asc" },
-        }),
-    );
-    return events.map(toLegacyPublic);
   }
 }

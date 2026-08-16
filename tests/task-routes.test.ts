@@ -105,9 +105,8 @@ describe("task routes", () => {
     const eventsAfter = vi
       .spyOn(taskService, "eventsAfter")
       .mockResolvedValue([event]);
-    vi.spyOn(sseHub, "finishTaskReplay").mockImplementation(
-      (taskId, client, replayLast) => {
-        sseHub.finishReplay(taskId, client, replayLast);
+    vi.spyOn(sseHub, "finishReplay").mockImplementation(
+      (_taskId, client, _replayLast) => {
         client.response.end();
       },
     );

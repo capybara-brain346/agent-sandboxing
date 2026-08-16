@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { LegacyPublicEvent } from "./event.types";
 
 export { EVENT_TYPES } from "./event.types";
 export type { EventType } from "./event.types";
@@ -19,16 +18,10 @@ export type CommandStatus =
   | "timed_out"
   | "cancelled";
 
-/** @deprecated Use the first-class event types from `event.types.ts`. */
-export type PublicEvent = LegacyPublicEvent;
-
-export const createSandboxSchema = z
-  .object({
-    fixtureRepoPath: z.string().min(1).optional(),
-    image: z.string().min(1).optional(),
-  })
-  .strict();
-export type CreateSandboxRequest = z.infer<typeof createSandboxSchema>;
+export type TaskSandboxInput = {
+  fixtureRepoPath?: string;
+  image?: string;
+};
 
 export const commandRequestSchema = z
   .object({
@@ -40,20 +33,24 @@ export const commandRequestSchema = z
   .strict();
 export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
-export type CreateSandboxResponse = {
-  sandboxId: string;
-  status: string;
-  workspacePath: string;
-  eventsUrl: string;
-};
-
-export type StartCommandResponse = {
+export type CommandStartResult = {
   commandId: string;
-  sandboxId: string;
-  status: string;
+  taskId: string;
+  status: CommandStatus;
 };
 
-export type DiffResponse = {
+export type CommandStatusResult = {
+  commandId: string;
+  taskId: string;
+  status: CommandStatus;
+  exitCode: number | null;
+  outputBytes: number;
+  outputTruncated: boolean;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+export type SandboxDiffResult = {
   sandboxId: string;
   diff: string;
   generatedAt: string;

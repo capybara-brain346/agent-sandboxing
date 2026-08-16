@@ -57,9 +57,6 @@ export type CreateTaskResponse = {
   status: TaskStatus;
   eventsUrl: string;
 };
-/** @deprecated Use CreateTaskResponse. */
-export type TaskCreateResponse = CreateTaskResponse;
-
 export type TaskFailure = {
   code: string;
   message: string;
@@ -160,7 +157,7 @@ export const publicTaskEventSchema = z
   .object({
     id: z.string(),
     streamId: z.string(),
-    taskId: z.string().nullable(),
+    taskId: z.string(),
     sandboxId: z.string().nullable(),
     commandId: z.string().nullable(),
     sequence: z.number().int().nonnegative(),
