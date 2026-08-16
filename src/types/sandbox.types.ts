@@ -1,27 +1,7 @@
-import type { SandboxEventActor } from "@prisma/client";
 import { z } from "zod";
 
-export const EVENT_TYPES = [
-  "sandbox_created",
-  "sandbox_provisioning_started",
-  "fixture_repo_copy_started",
-  "fixture_repo_copied",
-  "sandbox_ready",
-  "sandbox_failed",
-  "sandbox_stopping",
-  "sandbox_stopped",
-  "command_started",
-  "command_output",
-  "command_completed",
-  "command_failed",
-  "command_timed_out",
-  "command_cancelled",
-  "git_diff_requested",
-  "git_diff_completed",
-  "cleanup_started",
-  "cleanup_completed",
-] as const;
-export type EventType = (typeof EVENT_TYPES)[number];
+export { EVENT_TYPES } from "./event.types";
+export type { EventType } from "./event.types";
 
 export type SandboxStatus =
   | "creating"
@@ -38,25 +18,10 @@ export type CommandStatus =
   | "timed_out"
   | "cancelled";
 
-export type PublicEvent = {
-  id: string;
-  sandboxId: string;
-  commandId: string | null;
-  sequence: number;
-  type: EventType;
-  actor: SandboxEventActor;
-  correlationId: string | null;
-  payload: Record<string, unknown>;
-  createdAt: string;
+export type TaskSandboxInput = {
+  fixtureRepoPath?: string;
+  image?: string;
 };
-
-export const createSandboxSchema = z
-  .object({
-    fixtureRepoPath: z.string().min(1).optional(),
-    image: z.string().min(1).optional(),
-  })
-  .strict();
-export type CreateSandboxRequest = z.infer<typeof createSandboxSchema>;
 
 export const commandRequestSchema = z
   .object({
@@ -68,20 +33,24 @@ export const commandRequestSchema = z
   .strict();
 export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
-export type CreateSandboxResponse = {
-  sandboxId: string;
-  status: string;
-  workspacePath: string;
-  eventsUrl: string;
-};
-
-export type StartCommandResponse = {
+export type CommandStartResult = {
   commandId: string;
-  sandboxId: string;
-  status: string;
+  taskId: string;
+  status: CommandStatus;
 };
 
-export type DiffResponse = {
+export type CommandStatusResult = {
+  commandId: string;
+  taskId: string;
+  status: CommandStatus;
+  exitCode: number | null;
+  outputBytes: number;
+  outputTruncated: boolean;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+export type SandboxDiffResult = {
   sandboxId: string;
   diff: string;
   generatedAt: string;

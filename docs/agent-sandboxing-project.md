@@ -19,13 +19,14 @@ Core loop:
 
 ## Current Focus
 
-Start with the Sandbox Service.
+Start with the task product boundary and its internal Sandbox Service.
 
 Do not start with the full agent loop, memory, frontend polish, or GitHub auth flows. The key primitive is controlled execution: creating an isolated repo workspace, running commands, streaming output, and producing a diff.
 
 ## First Component: Sandbox Service
 
-The Sandbox Service is the untrusted execution plane. The agent/control plane stays outside the sandbox.
+The Sandbox Service is the untrusted execution plane. The agent/control plane
+stays outside the sandbox, and all supported sandboxes are owned by a task.
 
 Responsibilities:
 
@@ -63,69 +64,19 @@ Do not expose raw Docker control to the agent.
 
 ## First API Slice
 
-### `POST /sandboxes`
+Task creation is the only public creation path. The public routes are:
 
-Creates a task sandbox.
+- `POST /tasks`
+- `GET /tasks/:taskId`
+- `GET /tasks/:taskId/events`
+- `GET /tasks/:taskId/result`
+- `DELETE /tasks/:taskId`
 
-Input shape:
-
-```ts
-{
-  taskId: string
-  repoUrl: string
-  githubToken: string
-  baseBranch: string
-  baseCommit: string
-  taskBranch: string
-}
-```
-
-Output shape:
-
-```ts
-{
-  sandboxId: string
-  workspacePath: string
-  status: "ready"
-}
-```
-
-Behavior:
-
-- start container
-- clone repo
-- checkout exact base commit
-- create task branch
-- emit setup events
-
-### `POST /sandboxes/:id/commands`
-
-Runs one command sequentially.
-
-Command execution needs:
-
-- working directory
-- environment
-- timeout
-- stdout/stderr capture
-- exit code
-- ordered event stream
-
-Parallel terminal sessions are excluded from MVP.
-
-### `GET /sandboxes/:id/events`
-
-Streams or returns ordered sandbox events.
-
-SSE is preferred for MVP unless bidirectional realtime control is required.
-
-### `GET /sandboxes/:id/diff`
-
-Returns current `git diff` for the task workspace.
-
-### `DELETE /sandboxes/:id`
-
-Stops/removes container and marks sandbox stopped.
+Task creation atomically creates the task and its linked sandbox, then the
+internal Sandbox Service provisions the container after commit. Sandbox and
+command events are persisted on the task stream. There are intentionally no
+public `/sandboxes/*` routes; future Agent Service tools call the internal
+task-scoped Sandbox Service seam.
 
 ## Minimum Event Types
 
