@@ -76,6 +76,20 @@ For bug fixes, reproduce the failure with a test when practical, verify the
 expected failing reason, implement the fix, and run the regression checks.
 Test observable behavior rather than implementation details.
 
+## Commits
+
+Commit messages must be specific, detailed, and production-level: describe the
+intent, affected behavior or scope, important implementation decisions, and
+verification. Use a precise Conventional Commit subject and a body when the
+change needs context; do not use generic messages such as “update docs” or
+“fix stuff.”
+
+When Codex or Claude contributes to a commit, include the corresponding
+`Co-authored-by` trailer. When both contribute, include both:
+
+- `Co-authored-by: Codex <codex@openai.com>`
+- `Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>`
+
 ## Commands
 
 Run from the repository root:
