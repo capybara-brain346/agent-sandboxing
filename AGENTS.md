@@ -12,6 +12,7 @@ changing a component:
 - Sandbox services/runtime: `docs/modules/sandbox-service/README.md`.
 - Event store/SSE: `docs/modules/event-service/README.md`.
 - Agent runner/tools: `docs/modules/agent-service/README.md`.
+- Frontend dashboard: `docs/modules/frontend/README.md`.
 - Product boundary and broader direction: `docs/agent-sandboxing-project.md`.
 
 Always update the applicable service README in the same change when modifying
@@ -28,6 +29,8 @@ operations, or structure.
 - `prisma/schema.prisma` — database schema; `prisma/migrations/` — migration history.
 - `tests/` — Vitest unit and integration tests.
 - `repo/` — fixture repository copied into sandboxes; not application source.
+- `frontend/` — standalone Vite/React/TypeScript dashboard; own `package.json`
+  and `tsconfig`, separate from the backend build.
 - `docs/` — product direction and module documentation.
 
 ## Sources of truth
@@ -123,8 +126,9 @@ infrastructure commands.
 ## Out of scope
 
 Unless a task explicitly says otherwise, this service does not implement the
-agent loop, GitHub integration, LLM/provider credentials, authentication,
-queues, or a frontend.
+agent loop, GitHub integration, LLM/provider credentials, authentication, or
+queues. The dashboard frontend is a separate app in `frontend/`; see
+`docs/modules/frontend/README.md`.
 
 ## Definition of done
 
