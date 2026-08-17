@@ -31,23 +31,29 @@ const describePayload = (event: PublicTaskEvent): string | null => {
   }
 };
 
-export const EventTimeline = ({ events }: { events: PublicTaskEvent[] }) => (
-  <ol className="event-timeline">
-    {events.map((event) => {
-      const detail = describePayload(event);
-      return (
-        <li
-          key={event.sequence}
-          className={`event event--${event.producerService}`}
-        >
-          <span className="event__sequence">#{event.sequence}</span>
-          <span className="event__type">{event.type}</span>
-          <span className="event__time">
-            {new Date(event.createdAt).toLocaleTimeString()}
-          </span>
-          {detail && <pre className="event__detail">{detail}</pre>}
-        </li>
-      );
-    })}
-  </ol>
-);
+export const EventTimeline = ({ events }: { events: PublicTaskEvent[] }) => {
+  if (events.length === 0) {
+    return <p className="event-timeline--empty">Waiting for activity…</p>;
+  }
+
+  return (
+    <ol className="event-timeline">
+      {events.map((event) => {
+        const detail = describePayload(event);
+        return (
+          <li
+            key={event.sequence}
+            className={`event event--${event.producerService}`}
+          >
+            <span className="event__sequence">#{event.sequence}</span>
+            <span className="event__type">{event.type}</span>
+            <span className="event__time">
+              {new Date(event.createdAt).toLocaleTimeString()}
+            </span>
+            {detail && <pre className="event__detail">{detail}</pre>}
+          </li>
+        );
+      })}
+    </ol>
+  );
+};
