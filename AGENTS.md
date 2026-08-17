@@ -11,6 +11,7 @@ changing a component:
 - Task routes/services: `docs/modules/task-service/README.md`.
 - Sandbox services/runtime: `docs/modules/sandbox-service/README.md`.
 - Event store/SSE: `docs/modules/event-service/README.md`.
+- Agent runner/tools: `docs/modules/agent-service/README.md`.
 - Product boundary and broader direction: `docs/agent-sandboxing-project.md`.
 
 Always update the applicable service README in the same change when modifying

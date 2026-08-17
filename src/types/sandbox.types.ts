@@ -4,19 +4,10 @@ export { EVENT_TYPES } from "./event.types";
 export type { EventType } from "./event.types";
 
 export type SandboxStatus =
-  | "creating"
-  | "ready"
-  | "stopping"
-  | "stopped"
-  | "failed"
-  | "deleted";
+  "creating" | "ready" | "stopping" | "stopped" | "failed" | "deleted";
 
 export type CommandStatus =
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "timed_out"
-  | "cancelled";
+  "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
 
 export type TaskSandboxInput = {
   fixtureRepoPath?: string;
@@ -63,6 +54,20 @@ export type RuntimeResult = {
   timedOut: boolean;
   outputBytes: number;
   outputTruncated: boolean;
+};
+
+export type SimpleExecOptions = {
+  timeoutMs?: number;
+  env?: Record<string, string>;
+  signal?: AbortSignal;
+};
+
+export type SimpleExecResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  truncated: boolean;
 };
 
 export type NormalizedCommandRequest = {

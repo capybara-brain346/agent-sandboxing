@@ -36,7 +36,7 @@ The following rules define the event contract:
 ## Architecture
 
 ```text
-TaskService / SandboxService / CommandExecutionService
+TaskService / SandboxService / CommandExecutionService / AgentRunner
                          |
                          v
               state + EventStore.appendInTransaction
@@ -57,27 +57,29 @@ Reconnect: client cursor -> EventStore replay -> SseHub buffered live events
 ```
 
 `EventStore` has no Express or SSE dependency. Producers receive an
-`EventStore` and a publish callback through their constructors. The production
-`EventStore` and `SseHub` instances are created at module load; tests replace
-them with plain collaborators.
+`EventStore` and a publish callback through their constructors. The
+`ToolEventRelay` used by AgentRunner follows the same standalone append-then-
+publish contract for tool lifecycle events. The production `EventStore` and
+`SseHub` instances are created at module load; tests replace them with plain
+collaborators.
 
 ## Persistence and sequence allocation
 
 The [`Event`](../../../prisma/schema.prisma) model stores:
 
-| Field | Meaning |
-| --- | --- |
-| `id` | Public event identifier with the `evt_` prefix. |
-| `streamId` | Ordered stream identifier; currently the task ID. |
-| `sequence` | Per-stream replay cursor and ordering key. |
-| `type` | One member of `EVENT_TYPES`. |
-| `producerService` | Service that produced the event. |
-| `producerId` | ID of the producing task, sandbox, or command. |
-| `taskId` | Required owning task relation. |
-| `sandboxId`, `commandId` | Optional related resource IDs. |
-| `correlationId` | Optional ID for tracing one operation across events. |
-| `payload` | Event-specific JSON object. |
-| `createdAt` | Database creation timestamp. |
+| Field                    | Meaning                                              |
+| ------------------------ | ---------------------------------------------------- |
+| `id`                     | Public event identifier with the `evt_` prefix.      |
+| `streamId`               | Ordered stream identifier; currently the task ID.    |
+| `sequence`               | Per-stream replay cursor and ordering key.           |
+| `type`                   | One member of `EVENT_TYPES`.                         |
+| `producerService`        | Service that produced the event.                     |
+| `producerId`             | ID of the producing task, sandbox, or command.       |
+| `taskId`                 | Required owning task relation.                       |
+| `sandboxId`, `commandId` | Optional related resource IDs.                       |
+| `correlationId`          | Optional ID for tracing one operation across events. |
+| `payload`                | Event-specific JSON object.                          |
+| `createdAt`              | Database creation timestamp.                         |
 
 `Task.nextEventSequence` owns allocation. Inside the caller's transaction,
 `EventStore`:
@@ -128,6 +130,14 @@ type. Examples include:
   `output_truncated`; and
 - failure events: `code`, `message`, `operation`, and `retryable`.
 
+Agent tool events use the same task-stream envelope. `agent_tool_call` payloads
+contain only `tool_name` and an argument object. `agent_tool_result` payloads
+contain `tool_name`, a UTF-8-safe `result_snippet` capped at 500 characters,
+`truncated`, `exit_code`, and non-negative integer `duration_ms`. The call/result
+correlation belongs in the envelope's `correlationId`; it is not duplicated in
+either payload. These payload schemas are defined in
+[`src/types/agent.types.ts`](../../../src/types/agent.types.ts).
+
 Runtime failures are converted to safe payloads before they cross the service
 boundary. Do not put secrets, command environment values, or raw provider
 errors into an event payload.
@@ -137,14 +147,15 @@ errors into an event payload.
 The [`EVENT_TYPES`](../../../src/types/event.types.ts) constant is the source
 of truth for allowed event names.
 
-| Area | Event types | Producer services |
-| --- | --- | --- |
-| Task lifecycle | `task_created`, `task_provisioning_started`, `task_running`, `task_completed`, `task_failed`, `task_cancelled`, `task_result_ready` | `task` |
-| Sandbox lifecycle | `sandbox_created`, `sandbox_provisioning_started`, `sandbox_ready`, `sandbox_failed`, `sandbox_stopping`, `sandbox_stopped` | `sandbox`, `cleanup` |
-| Fixture setup | `fixture_repo_copy_started`, `fixture_repo_copied` | `sandbox` |
-| Commands | `command_started`, `command_output`, `command_completed`, `command_failed`, `command_timed_out`, `command_cancelled` | `command`, `runtime` |
-| Diff capture | `git_diff_requested`, `git_diff_completed` | `sandbox`, `runtime` |
-| Cleanup extension points | `cleanup_started`, `cleanup_completed` | `cleanup` |
+| Area                     | Event types                                                                                                                         | Producer services    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Task lifecycle           | `task_created`, `task_provisioning_started`, `task_running`, `task_completed`, `task_failed`, `task_cancelled`, `task_result_ready` | `task`               |
+| Sandbox lifecycle        | `sandbox_created`, `sandbox_provisioning_started`, `sandbox_ready`, `sandbox_failed`, `sandbox_stopping`, `sandbox_stopped`         | `sandbox`, `cleanup` |
+| Fixture setup            | `fixture_repo_copy_started`, `fixture_repo_copied`                                                                                  | `sandbox`            |
+| Commands                 | `command_started`, `command_output`, `command_completed`, `command_failed`, `command_timed_out`, `command_cancelled`                | `command`, `runtime` |
+| Diff capture             | `git_diff_requested`, `git_diff_completed`                                                                                          | `sandbox`, `runtime` |
+| Agent tools              | `agent_tool_call`, `agent_tool_result`                                                                                              | `agent`              |
+| Cleanup extension points | `cleanup_started`, `cleanup_completed`                                                                                              | `cleanup`            |
 
 `command_cancelled`, `cleanup_started`, and `cleanup_completed` are currently
 declared event types without an active producer call site. Add a producer
