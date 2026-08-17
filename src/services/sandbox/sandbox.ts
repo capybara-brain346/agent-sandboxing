@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type {
-  Prisma,
-  PrismaClient,
-  SandboxStatus,
-} from "@prisma/client";
+import type { Prisma, PrismaClient, SandboxStatus } from "@prisma/client";
 import type { Config } from "../../config";
 import { loadConfig } from "../../config";
 import { prisma } from "../../db/prisma";
@@ -68,6 +64,11 @@ export type TaskSandboxCreation = {
 export type SandboxProvisionResult =
   | { status: "ready" }
   | { status: "failed"; failure: { code: string; message: string } };
+
+export type AgentToolTarget = {
+  containerName: string;
+  runtime: Pick<SandboxRuntime, "simpleExec">;
+};
 
 export class SandboxService {
   private readonly commands: CommandExecutionService;
@@ -202,6 +203,34 @@ export class SandboxService {
     );
   }
 
+  async getAgentToolTarget(
+    taskId: string,
+    sandboxId: string,
+  ): Promise<AgentToolTarget> {
+    const sandbox = await runQuery(
+      "get_agent_tool_target",
+      { taskId, sandboxId },
+      () =>
+        this.prisma.sandbox.findFirst({
+          where: { id: sandboxId, taskId },
+          select: { containerName: true, status: true },
+        }),
+    );
+    if (!sandbox)
+      throw notFound("sandbox_not_found", "Task sandbox was not found");
+    if (sandbox.status !== "ready")
+      throw new ServiceError(
+        "sandbox_not_ready",
+        "Task sandbox is not ready",
+        409,
+      );
+
+    return {
+      containerName: sandbox.containerName,
+      runtime: { simpleExec: this.runtime.simpleExec.bind(this.runtime) },
+    };
+  }
+
   /** Runs a command for a task-owned sandbox. The sandbox ID is never caller-supplied. */
   async runCommand(
     taskId: string,
@@ -218,8 +247,10 @@ export class SandboxService {
   }
 
   async diff(sandboxId: string): Promise<SandboxDiffResult> {
-    const sandbox = await runQuery("get_task_sandbox_for_diff", { sandboxId }, () =>
-      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
+    const sandbox = await runQuery(
+      "get_task_sandbox_for_diff",
+      { sandboxId },
+      () => this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
     );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
     if (!sandbox.taskId)
@@ -264,8 +295,10 @@ export class SandboxService {
   }
 
   async stop(sandboxId: string): Promise<void> {
-    const sandbox = await runQuery("get_task_sandbox_for_stop", { sandboxId }, () =>
-      this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
+    const sandbox = await runQuery(
+      "get_task_sandbox_for_stop",
+      { sandboxId },
+      () => this.prisma.sandbox.findUnique({ where: { id: sandboxId } }),
     );
     if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
     if (!sandbox.taskId)

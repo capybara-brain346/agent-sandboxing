@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { Config } from "../../../config";
+import type { AgentToolConfig } from "./config";
 import {
   boundUtf8,
   executeChecked,
@@ -16,7 +16,7 @@ import { workspaceRoot } from "../../sandbox/workspace";
 export const createGrepTool = (
   runtime: AgentToolRuntime,
   containerName: string,
-  config: Config,
+  config: AgentToolConfig,
   signal: AbortSignal,
 ) =>
   tool({

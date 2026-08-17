@@ -50,10 +50,12 @@ describe("SandboxService", () => {
   });
 
   it("creates only task-owned sandbox rows in the caller transaction", async () => {
-    const create = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
-      ...data,
-      createdAt: new Date("2026-01-01T00:00:00Z"),
-    }));
+    const create = vi.fn(
+      async ({ data }: { data: Record<string, unknown> }) => ({
+        ...data,
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+      }),
+    );
     const service = new SandboxService(
       {} as PrismaClient,
       {} as EventStore,
@@ -72,6 +74,59 @@ describe("SandboxService", () => {
     expect(create).toHaveBeenCalledWith({
       data: expect.objectContaining({ taskId: "task_1", status: "creating" }),
     });
+  });
+
+  it("requires both task ownership and sandbox readiness for agent tools", async () => {
+    const findFirst = vi.fn(async () => null);
+    const service = new SandboxService(
+      { sandbox: { findFirst } } as unknown as PrismaClient,
+      {} as EventStore,
+      {} as SandboxRuntime,
+      config,
+      vi.fn(),
+    );
+
+    await expect(
+      service.getAgentToolTarget("task_1", "s1"),
+    ).rejects.toMatchObject({ code: "sandbox_not_found" });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: "s1", taskId: "task_1" },
+      select: { containerName: true, status: true },
+    });
+  });
+
+  it("rejects a task-owned agent target until the sandbox is ready", async () => {
+    const findFirst = vi.fn(async () => sandboxRow("creating"));
+    const service = new SandboxService(
+      { sandbox: { findFirst } } as unknown as PrismaClient,
+      {} as EventStore,
+      {} as SandboxRuntime,
+      config,
+      vi.fn(),
+    );
+
+    await expect(
+      service.getAgentToolTarget("task_1", "s1"),
+    ).rejects.toMatchObject({ code: "sandbox_not_ready" });
+  });
+
+  it("returns only the ready container name and simpleExec runtime seam", async () => {
+    const findFirst = vi.fn(async () => sandboxRow("ready"));
+    const simpleExec = vi.fn();
+    const runtime = { simpleExec } as unknown as SandboxRuntime;
+    const service = new SandboxService(
+      { sandbox: { findFirst } } as unknown as PrismaClient,
+      {} as EventStore,
+      runtime,
+      config,
+      vi.fn(),
+    );
+
+    const target = await service.getAgentToolTarget("task_1", "s1");
+
+    expect(target.containerName).toBe("sandbox-s1");
+    expect(target.runtime).toEqual({ simpleExec: expect.any(Function) });
+    expect(Object.keys(target.runtime)).toEqual(["simpleExec"]);
   });
 
   it("publishes provision events as task-stream events", async () => {
@@ -101,7 +156,13 @@ describe("SandboxService", () => {
         }),
       ),
     } as unknown as PrismaClient;
-    const service = new SandboxService(prisma, events, runtime, config, publish);
+    const service = new SandboxService(
+      prisma,
+      events,
+      runtime,
+      config,
+      publish,
+    );
 
     await expect(service.provisionForTask("s1")).resolves.toEqual({
       status: "ready",

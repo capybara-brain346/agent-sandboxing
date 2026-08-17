@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { Config } from "../../../config";
+import type { AgentToolConfig } from "./config";
 import { ServiceError } from "../../../shared/errors";
 import {
   boundUtf8,
@@ -70,7 +70,7 @@ const replacementDiff = (
 export const createEditTool = (
   runtime: AgentToolRuntime,
   containerName: string,
-  config: Config,
+  config: AgentToolConfig,
   signal: AbortSignal,
 ) =>
   tool({

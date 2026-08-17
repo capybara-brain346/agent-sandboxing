@@ -25,8 +25,9 @@ and its linked sandbox in one database transaction, then calls the sandbox
 service in-process after that transaction commits.
 
 The service currently uses a local fixture repository and Docker. GitHub
-integration, authentication, queues, the agent loop, and a second runtime
-provider are out of scope.
+integration, authentication, queues, and a second runtime provider are out of
+scope. The Agent Service owns the control-plane agent loop and uses this
+service only through the narrow task-owned runtime seam.
 
 The public task response does not expose sandbox or container handles. The
 task event envelope currently includes `sandboxId` and `commandId` fields for
@@ -43,6 +44,10 @@ operations are:
 - `provisionForTask(sandboxId)` — validates the task-owned row, creates and
   starts the container, copies the fixture into the workspace, and returns
   `ready` or a structured provisioning failure.
+- `getAgentToolTarget(taskId, sandboxId)` — validates both ownership
+  identifiers and `ready` status, then returns only the container name and a
+  `simpleExec` runtime seam to the Agent Service. It never exposes Docker,
+  Prisma, or unrelated runtime methods.
 - `runCommand(taskId, input)` — delegates to `CommandExecutionService`; only
   the task's ready sandbox can run a command.
 - `getCommand(taskId, commandId)` — returns the persisted command snapshot.
@@ -126,6 +131,10 @@ command API. Captured output is bounded by `COMMAND_OUTPUT_MAX_BYTES`, remains
 valid UTF-8 at the boundary, and reports `truncated` when the combined output
 exceeds the limit.
 
+The sandbox target seam never forwards the OpenRouter API key or any other
+control-plane secret into a container. Agent tool calls receive only the
+task-owned runtime target and the task cancellation signal.
+
 ## Event stream
 
 There is no sandbox-specific event stream. Every event has an owning `taskId`
@@ -138,7 +147,7 @@ that can appear in the stream include:
 - commands: `command_started`, `command_output`, `command_completed`,
   `command_failed`, and `command_timed_out`
 - agent tools: `agent_tool_call` and `agent_tool_result`, appended by the
-  future Agent Service to the same owning task stream
+  Agent Service to the same owning task stream
 - diff capture: `git_diff_requested` and `git_diff_completed`
 
 The durable `EventStore` is canonical. `SseHub` provides live fanout and
@@ -212,6 +221,9 @@ not read `process.env` directly:
 - `AGENT_READ_MAX_BYTES` (default `262144`, minimum `1024`)
 - `AGENT_WRITE_MAX_BYTES` (default `1048576`, minimum `1024`)
 - `AGENT_TOOL_TIMEOUT_MS` (default `30000`, minimum `1000`)
+
+`OPENROUTER_API_KEY` is deliberately not a sandbox-facing setting; the Agent
+Service composition root owns it and never forwards it to tools or containers.
 
 Do not read `process.env` directly from sandbox modules. Add new runtime
 settings to the Zod config schema with an explicit default.

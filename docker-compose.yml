@@ -24,6 +24,9 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent_sandboxing?schema=public
       FIXTURE_REPO_PATH: /workspace/fixture-repo
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      AGENT_MODEL: ${AGENT_MODEL:-openrouter:deepseek/deepseek-v4-flash}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-25}
     ports:
       - "3000:3000"
     depends_on:

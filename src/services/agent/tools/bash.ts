@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { Config } from "../../../config";
+import type { AgentToolConfig } from "./config";
 import {
   boundUtf8,
   executeChecked,
@@ -12,7 +12,7 @@ import { validateBashCommand } from "./bash-policy";
 export const createBashTool = (
   runtime: AgentToolRuntime,
   containerName: string,
-  config: Config,
+  config: AgentToolConfig,
   signal: AbortSignal,
 ) =>
   tool({

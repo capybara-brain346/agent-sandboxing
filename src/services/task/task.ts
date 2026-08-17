@@ -20,6 +20,8 @@ import type {
   TaskStatus,
 } from "../../types/task.types";
 import type { PublicEvent } from "../../types/event.types";
+import { AgentRunner } from "../agent/agent-runner";
+import { resolveAgentModel } from "../agent/model";
 import { PlaceholderTaskRunner, type TaskRunner } from "./task-runner";
 
 type TaskSandboxCollaborator = Pick<
@@ -344,20 +346,24 @@ export class TaskService implements TaskServicePort {
 
   private startCancellation(execution: TaskExecution): Promise<void> {
     if (execution.cancellationPromise === undefined) {
-      const cancellation = this.cancelExecution(execution).catch((error: unknown) => {
-        execution.cancellationPromise = undefined;
-        logger.error("task_cancellation_failed", {
-          taskId: execution.taskId,
-          error: error instanceof Error ? error.message : error,
-        });
-        throw error;
-      });
+      const cancellation = this.cancelExecution(execution).catch(
+        (error: unknown) => {
+          execution.cancellationPromise = undefined;
+          logger.error("task_cancellation_failed", {
+            taskId: execution.taskId,
+            error: error instanceof Error ? error.message : error,
+          });
+          throw error;
+        },
+      );
       execution.cancellationPromise = cancellation;
     }
     return execution.cancellationPromise;
   }
 
-  private async waitForCancellation(execution: TaskExecution): Promise<boolean> {
+  private async waitForCancellation(
+    execution: TaskExecution,
+  ): Promise<boolean> {
     if (!execution.cancellationRequested) return false;
     try {
       await this.startCancellation(execution);
@@ -744,11 +750,25 @@ export class TaskService implements TaskServicePort {
   }
 }
 
+const taskServiceConfig = loadConfig();
+const taskServiceEvents = new EventStore(prisma);
+const publishTaskEvent = (event: PublicEvent): void => sseHub.publish(event);
+const taskServiceRunner: TaskRunner =
+  taskServiceConfig.NODE_ENV === "test"
+    ? new PlaceholderTaskRunner()
+    : new AgentRunner({
+        config: taskServiceConfig,
+        sandbox: sandboxService,
+        events: taskServiceEvents,
+        model: resolveAgentModel(taskServiceConfig),
+        publish: publishTaskEvent,
+      });
+
 export const taskService = new TaskService(
   prisma,
-  new EventStore(prisma),
+  taskServiceEvents,
   sandboxService,
-  loadConfig(),
-  undefined,
-  (event) => sseHub.publish(event),
+  taskServiceConfig,
+  taskServiceRunner,
+  publishTaskEvent,
 );

@@ -23,19 +23,23 @@ call Docker or sandbox routes directly.
 ## Status and scope
 
 The current implementation is the Task Service Atomic MVP. It proves the
-product loop with a placeholder runner:
+product loop with the in-process Agent Service runner:
 
 ```text
-create task -> provision sandbox -> run placeholder -> capture diff -> stop sandbox
+create task -> provision sandbox -> run agent -> capture diff -> stop sandbox
 ```
 
-`PlaceholderTaskRunner` performs no agent or LLM work and returns a null
-summary. The runner is the seam for the future Agent Service.
+`AgentRunner` drives the AI SDK 7 tool loop against the task-owned sandbox and
+returns only a bounded final summary. TaskService remains the authority for
+task lifecycle transitions, diff capture, terminal results, cancellation, and
+cleanup. Agent tool lifecycle events are appended to the same task stream by
+the Agent Service after the sandbox is ready.
 
-This phase does not include GitHub authentication or cloning by URL, an agent
-loop, LLM/provider credentials, users or auth, queues, retries, a frontend, or
-PR creation. `repoRef` currently identifies the local fixture path accepted by
-the sandbox runtime, not a GitHub repository reference.
+This phase does not include GitHub authentication or cloning by URL, users or
+auth, queues, retries, a frontend, or PR creation. `repoRef` currently
+identifies the local fixture path accepted by the sandbox runtime, not a GitHub
+repository reference. OpenRouter credentials are loaded only by the
+control-plane composition root and are never sent to a sandbox.
 
 ## Public HTTP contract
 
@@ -233,7 +237,7 @@ task routes
      v
 TaskService ---- EventStore ---- Postgres
      |
-     +---- TaskRunner (placeholder now, Agent Service later)
+     +---- AgentRunner (TaskRunner)
      |
      +---- SandboxService ---- CommandExecutionService ---- SandboxRuntime ---- Docker
      |
@@ -249,6 +253,12 @@ The production singleton is constructed at module load. Unit tests substitute
 plain object collaborators for Prisma, EventStore, SandboxService, the runner,
 and the event publisher.
 
+The normal run delegates the agent loop to AgentRunner after the task reaches
+`running`. A model/provider failure is converted to a safe `agent_run_failed`
+error and persisted by TaskService as a failed terminal task. Cancellation
+uses the existing task AbortSignal, which propagates to the AI SDK and each
+sandbox tool before TaskService captures the best-effort diff and cleans up.
+
 ## Event taxonomy
 
 Task lifecycle events emitted by the current implementation:
@@ -262,6 +272,10 @@ Task lifecycle events emitted by the current implementation:
 The same stream can contain sandbox, command, and diff events from the internal
 execution plane. See the [Sandbox Service event stream](../sandbox-service/README.md#event-stream)
 for those event types and payload conventions.
+
+Agent tool calls and results use `agent_tool_call` and `agent_tool_result` with
+the AI SDK call ID as their correlation ID. The Event Service documents their
+bounded payloads and append-before-publish ordering.
 
 ## Development and verification
 

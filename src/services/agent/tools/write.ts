@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { Config } from "../../../config";
+import type { AgentToolConfig } from "./config";
 import {
   byteLength,
   ensureInputSize,
@@ -14,7 +14,7 @@ import {
 export const createWriteTool = (
   runtime: AgentToolRuntime,
   containerName: string,
-  config: Config,
+  config: AgentToolConfig,
   signal: AbortSignal,
 ) =>
   tool({

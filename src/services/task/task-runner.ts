@@ -14,9 +14,8 @@ export type TaskRunner = {
 };
 
 /**
- * The phase 6 runner seam. It intentionally performs no agent work; the
- * Agent Service can replace this collaborator without changing task
- * orchestration or result capture.
+ * Legacy no-op seam retained for DB-independent TaskService test doubles.
+ * Production composition injects AgentRunner instead.
  */
 export class PlaceholderTaskRunner implements TaskRunner {
   async run(_context: TaskRunContext): Promise<TaskRunResult> {

@@ -36,7 +36,7 @@ The following rules define the event contract:
 ## Architecture
 
 ```text
-TaskService / SandboxService / CommandExecutionService
+TaskService / SandboxService / CommandExecutionService / AgentRunner
                          |
                          v
               state + EventStore.appendInTransaction
@@ -57,9 +57,11 @@ Reconnect: client cursor -> EventStore replay -> SseHub buffered live events
 ```
 
 `EventStore` has no Express or SSE dependency. Producers receive an
-`EventStore` and a publish callback through their constructors. The production
-`EventStore` and `SseHub` instances are created at module load; tests replace
-them with plain collaborators.
+`EventStore` and a publish callback through their constructors. The
+`ToolEventRelay` used by AgentRunner follows the same standalone append-then-
+publish contract for tool lifecycle events. The production `EventStore` and
+`SseHub` instances are created at module load; tests replace them with plain
+collaborators.
 
 ## Persistence and sequence allocation
 

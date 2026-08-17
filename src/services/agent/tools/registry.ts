@@ -1,4 +1,4 @@
-import type { Config } from "../../../config";
+import type { AgentToolConfig } from "./config";
 import type { AgentToolRuntime } from "./helpers";
 import { createBashTool } from "./bash";
 import { createEditTool } from "./edit";
@@ -11,7 +11,7 @@ import { createWriteTool } from "./write";
 export const createToolRegistry = (
   runtime: AgentToolRuntime,
   containerName: string,
-  config: Config,
+  config: AgentToolConfig,
   signal: AbortSignal,
 ) => ({
   read: createReadTool(runtime, containerName, config, signal),

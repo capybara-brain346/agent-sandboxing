@@ -1,9 +1,26 @@
-# Agent Service — Slice 2 Tool Boundary
+# Agent Service — Agent Runner, Event Relay, and Live Acceptance
 
-The Agent Service owns the future control-plane agent loop. This slice defines
-only its internal sandbox-proxied tool boundary; it does not run a model, append
-events, call the persisted command API, or expose an HTTP route. Slice 3 will
-add the runner and event relay.
+The Agent Service owns the control-plane agent loop. It runs inside the task
+process, uses the AI SDK 7 `generateText` loop with the configured OpenRouter
+model, proxies seven tools through the task-owned sandbox runtime, and relays
+tool lifecycle events to the shared task event stream. It does not expose an
+HTTP route or call the persisted command API.
+
+TaskService remains responsible for task lifecycle transitions, terminal
+results, cancellation, diff capture, and cleanup. AgentRunner returns a final
+summary or throws; it does not mutate task state.
+
+## Composition and model configuration
+
+`AGENT_MODEL` must use the `openrouter:<model-id>` format. The composition root
+resolves it with `createOpenRouter({ apiKey: config.OPENROUTER_API_KEY })` and
+injects the resulting AI SDK `LanguageModel` into `AgentRunner`. Development
+and production configuration requires `OPENROUTER_API_KEY`; test-mode
+configuration intentionally permits a missing key so unit tests can inject a
+fake model or runner.
+
+The key remains in the control plane. It is not included in sandbox
+environment variables, tool inputs, events, provider error messages, or logs.
 
 ## Runtime boundary
 
@@ -18,6 +35,42 @@ The tools execute in `/workspace/repo` through `SandboxRuntime.simpleExec`.
 They do not access Prisma, `SandboxService`, Docker, the event store, or
 `process.env` directly. Every runtime call receives the task signal and either
 `AGENT_TOOL_TIMEOUT_MS` or `AGENT_BASH_TIMEOUT_MS`.
+
+Before creating the registry, AgentRunner asks
+`SandboxService.getAgentToolTarget(taskId, sandboxId)` for the task-owned,
+`ready` sandbox. That internal seam queries both identifiers and returns only
+the container name and `simpleExec`; no Prisma or Docker details enter the
+Agent Service.
+
+## AgentRunner and cancellation
+
+AgentRunner checks the task signal before target lookup and before the model
+call. It calls `generateText` with one user message containing the task
+instructions, the system prompt, all seven tools, the same `abortSignal`, and
+`stopWhen: isStepCount(config.AGENT_MAX_STEPS)`. Tool executions are serialized
+per task because the AI SDK may request multiple tools concurrently while the
+tools share one workspace. The final text is trimmed and returned as the
+nullable task summary.
+
+An `AbortError` is re-thrown so TaskService's existing cancellation path owns
+the terminal `cancelled` state. Other provider/model failures become the safe
+`agent_run_failed` service error and are persisted by TaskService as a failed
+task.
+
+## Tool event relay
+
+`ToolEventRelay` handles AI SDK `onToolExecutionStart` and
+`onToolExecutionEnd` callbacks. It appends `agent_tool_call` before tool
+execution and `agent_tool_result` after it through `EventStore.append`, then
+publishes the returned event. Each event includes the task and sandbox IDs,
+`producerService: "agent"`, `producerId: taskId`, and the SDK `callId` as its
+`correlationId`.
+
+Call payloads use `tool_name` and `args`. Result payloads use
+`tool_name`, a UTF-8-safe `result_snippet` bounded to 500 bytes,
+`truncated`, `exit_code`, and non-negative integer `duration_ms`. Tool errors
+use a safe generic result snippet and a null exit code; raw runtime/provider
+errors are never persisted.
 
 ## Tool contracts
 
@@ -74,3 +127,47 @@ The public runtime configuration contract is defined only in
 
 The tools are intentionally DB-independent and Docker-independent in tests;
 tests mock only the `simpleExec` seam.
+
+## Live acceptance (Slice 4)
+
+Live coverage extends the existing task-service harness; no second acceptance
+script is required. From the repository root, run:
+
+```bash
+NODE_ENV=development BASE_URL=http://localhost:3000 \
+  scripts/acceptance/task-service-atomic-mvp.sh
+```
+
+The command requires a non-test API running against the repository workspace,
+Postgres with the committed Prisma migrations applied, a reachable Docker
+daemon, a clean host fixture repository, and `curl`, `git`, `jq`, `timeout`,
+`npx`, and `docker` on the host.
+The API process must have `OPENROUTER_API_KEY` configured and a valid
+`AGENT_MODEL`; the key is required by the harness but is never printed.
+
+The harness also accepts these environment variables:
+
+- `BASE_URL` (default `http://localhost:3000`)
+- `NODE_ENV` (must be `development` or `production`, not `test`)
+- `OPENROUTER_API_KEY` (required; used by the API, never logged by the harness)
+- `DATABASE_URL` (used by `npx prisma migrate status`)
+- `REPO_REF` (default `./repo`) and `FIXTURE_REPO_PATH` (default `./repo`)
+- `POLL_SECONDS` (default 180) and `SSE_TIMEOUT_SECONDS` (default 5)
+
+The scenarios are:
+
+1. A read-only agent reads exactly `/workspace/repo/hello.txt`, returns a
+   non-null summary, and produces an empty diff.
+2. An editing agent appends the exact acceptance line to `hello.txt`; the
+   result is completed and its diff contains that line.
+3. Full event replay, `after=2`, and `Last-Event-ID: 2` resume checks verify
+   strict ordering and include the agent events.
+4. Cancellation and missing-fixture provisioning failure remain covered.
+
+For each live agent task, assertions validate the durable event envelope,
+task/sandbox ownership, matching tool-call correlation IDs and ordering,
+bounded result snippets, exit codes, truncation flags, durations, sanitized
+provider output, diff lifecycle events, and sandbox cleanup. They deliberately
+do not compare exact model prose. Agent edits happen only in copied sandbox
+workspaces; the host fixture is checked for changes and restored after the
+provisioning-failure scenario on every exit path.

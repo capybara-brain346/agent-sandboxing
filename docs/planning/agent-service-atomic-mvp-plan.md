@@ -2,11 +2,11 @@
 > Status: Valid / active planning document
 > Valid for: Agent Service Atomic MVP only
 > Invalid when: agent-service implementation is completed and the project moves to agent
->   memory, multi-agent coordination, or external tool providers; or this plan is
->   superseded by a newer planning document
+> memory, multi-agent coordination, or external tool providers; or this plan is
+> superseded by a newer planning document
 > Scope reminder: in-process TaskRunner replacement using the Vercel AI SDK (`ai`
->   package) for the agent loop; 7 custom tools proxied through Docker exec;
->   no PI SDK, no memory, no multi-agent, no GitHub PR creation, no frontend
+> package) for the agent loop; 7 custom tools proxied through Docker exec;
+> no PI SDK, no memory, no multi-agent, no GitHub PR creation, no frontend
 
 # Agent Service Atomic MVP Implementation Plan
 
@@ -21,7 +21,7 @@ The Agent Service proves that the platform can:
 
 - drive a Vercel AI SDK `generateText` agent loop from inside a `TaskRunner`
 - define 7 sandbox-proxied tools (read, write, edit, bash, grep, find, ls) that
-  operate inside the Docker container through `SandboxRuntime.exec`
+  operate inside the Docker container through `SandboxRuntime.simpleExec`
 - allowlist bash commands to prevent the agent from running tests (MVP constraint)
 - relay tool calls and tool results as task-scoped events through the existing
   EventStore + SseHub
@@ -48,7 +48,7 @@ This phase includes only:
 - `"agent"` added to `EventProducerService`
 - model selection from `config.ts` (`AGENT_MODEL`)
 - `generateText` from Vercel AI SDK as the agent loop engine
-- `maxSteps` for loop depth (default 25)
+- `stopWhen: isStepCount(...)` for loop depth (default 25; AI SDK 7 API)
 - AbortSignal plumbing through the AI SDK for cancellation
 - DB-independent Vitest unit tests for the runner and each tool
 - update to the curl-based acceptance harness to verify the agent runs
@@ -75,22 +75,35 @@ Do not implement or design as active MVP work:
 
 ### Task Runner Replacement
 
-`PlaceholderTaskRunner` is replaced at the TaskService constructor call site
-in `server.ts` or `task.ts`'s singleton construction:
+`PlaceholderTaskRunner` is replaced at the production `TaskService` singleton
+construction in `src/services/task/task.ts`:
 
 ```typescript
-// Before
-this.runner = new PlaceholderTaskRunner();
+const runner = new AgentRunner({
+  config,
+  sandbox: sandboxService,
+  events,
+  model: resolveAgentModel(config),
+  publish,
+});
 
-// After
-import { AgentRunner } from "../agent/agent-runner";
-this.runner = new AgentRunner(config, sandboxService, events, publish);
+const taskService = new TaskService(
+  prisma,
+  events,
+  sandboxService,
+  config,
+  runner,
+  publish,
+);
 ```
 
 The `TaskRunner` interface itself (`TaskRunContext`, `TaskRunResult`) does not
-change. The existing event appending in TaskService (`emitEvent`) remains the
-caller; AgentRunner feeds its tool events back via a callback so TaskService
-owns the append.
+change. AgentRunner is an event producer: it receives `EventStore` and the
+post-commit `publish` callback, appends each agent event through
+`EventStore.append`, and publishes only after the append resolves. This keeps
+agent event persistence inside the service boundary without adding a second
+TaskService runner API. TaskService remains responsible for task lifecycle
+events and terminal status/result persistence.
 
 ## 2. Architecture Diagram
 
@@ -102,19 +115,20 @@ TaskService
     |
     +-- AgentRunner (replaces PlaceholderTaskRunner)
     |       |
-    |       +-- Vercel AI SDK generateText ({ model, tools, maxSteps })
+    |       +-- Vercel AI SDK generateText ({ model, tools, stopWhen })
     |       |       |
-    |       |       +-- tool("read")   -> sandboxRuntime.exec("cat <path>")
-    |       |       +-- tool("write")  -> sandboxRuntime.exec("cat > <path>")
-    |       |       +-- tool("edit")   -> sandboxRuntime.exec(edit pipeline)
-    |       |       +-- tool("bash")   -> sandboxRuntime.exec(command)   [allowlisted]
-    |       |       +-- tool("grep")   -> sandboxRuntime.exec("grep -n <pattern>")
-    |       |       +-- tool("find")   -> sandboxRuntime.exec("find <path> <test>")
-    |       |       +-- tool("ls")     -> sandboxRuntime.exec("ls -la <path>")
+    |       |       +-- tool("read")   -> sandboxRuntime.simpleExec("cat <path>")
+    |       |       +-- tool("write")  -> sandboxRuntime.simpleExec("cat > <path>")
+    |       |       +-- tool("edit")   -> sandboxRuntime.simpleExec(edit pipeline)
+    |       |       +-- tool("bash")   -> sandboxRuntime.simpleExec(command) [allowlisted]
+    |       |       +-- tool("grep")   -> sandboxRuntime.simpleExec("grep -n <pattern>")
+    |       |       +-- tool("find")   -> sandboxRuntime.simpleExec("find <path> <test>")
+    |       |       +-- tool("ls")     -> sandboxRuntime.simpleExec("ls -la <path>")
     |       |
     |       +-- ToolEventRelay
     |               captures tool calls + results
-    |               calls publish callback with agent_tool_call / agent_tool_result
+    |               EventStore.append -> publish callback with
+    |               agent_tool_call / agent_tool_result
     |
     +-- SandboxRuntime (existing)
             adds simpleExec() method for one-shot command capture
@@ -136,17 +150,41 @@ Responsibilities:
 - create the system prompt for the coding agent (role + available tools +
   workspace at `/workspace/repo`)
 - build the tool registry of 7 sandbox-proxied tools
-- call `generateText({ model, tools, systemPrompt, maxSteps })`
+- resolve the task-owned sandbox target through a narrow Sandbox Service seam
+- call AI SDK 7 `generateText({ model, system, messages, tools, stopWhen })`
 - wrap `generateText` with AbortSignal (the same signal from TaskRunContext)
-- on completion: extract summary from the final assistant message
-- relay tool call + result events via a publish callback
-- handle errors as task failures, cancellation as exit
+- on completion: return `result.text.trim()` as the nullable summary
+- relay tool call + result events through the injected EventStore and publish
+  callback
+- rethrow cancellation and convert provider failures to a safe `ServiceError`
+  so TaskService owns the terminal task transition
 
-Constraints:
+Constructor seam:
 
-- never import `SandboxRuntime` or `SandboxService` directly — accept them
-  as constructor-injected collaborators (same pattern as TaskService)
-- the publish callback signature matches `(event: PublicEvent) => void` —
+- `config: Config`
+- `sandbox: { getAgentToolTarget(taskId: string, sandboxId: string): Promise<{
+containerName: string; runtime: Pick<SandboxRuntime, "simpleExec">;
+}> }`
+- `events: EventStore`
+- `model: LanguageModel` (or an injected `resolveAgentModel` factory in tests)
+- `publish: (event: PublicEvent) => void`
+
+`getAgentToolTarget` is the only new Sandbox Service seam required by this
+slice. It must query by both `taskId` and `sandboxId`, require `status ===
+"ready"`, and return the existing runtime plus container name. This keeps
+Prisma, container metadata, and Docker access inside Sandbox Service; it does
+not introduce a second runtime interface.
+
+Model resolution is a composition-root concern. `AGENT_MODEL` is configuration
+input, not the value passed directly as `generateText.model` because AI SDK 7
+expects a `LanguageModel`. Add a small resolver/factory for the selected
+provider adapter, inject the resulting model into AgentRunner, and keep API
+keys out of the sandbox and out of tool code. The resolver must preserve the
+current configured model contract or make any required provider/model format
+change explicit in `src/config.ts` and `.env.example`.
+
+The runner must not import Express types, Prisma, or the persisted command API.
+It may depend on the structural `simpleExec` seam used by the existing tools.
 
 ### Tool implementations
 
@@ -161,7 +199,7 @@ import type { SandboxRuntime } from "../../sandbox/runtime";
 export const readTool = (runtime: SandboxRuntime, containerName: string) =>
   tool({
     description: "Read the contents of a file at the given path.",
-    parameters: z.object({
+    inputSchema: z.object({
       path: z.string().describe("Absolute path inside /workspace/repo"),
     }),
     execute: async ({ path }) => {
@@ -236,31 +274,47 @@ Responsibilities:
 
 - capture each tool call (name, arguments, timestamp) and result (output,
   truncated flag, exit code, duration) during the agent loop
-- call the publish callback to append `agent_tool_call` and `agent_tool_result`
-  events to the task event stream through TaskService
-- include a `correlationId` linking the call to its result
+- append `agent_tool_call` and `agent_tool_result` through the injected
+  `EventStore`, then invoke `publish` only after each append resolves
+- use the AI SDK callback `callId` as the envelope `correlationId` for both
+  events
+- keep event writes ordered: the call event is durable before tool execution,
+  and the result event is durable before the next model step
+- sanitize tool errors and bound serialized results before they cross the
+  event boundary
+
+Use AI SDK 7's `onToolExecutionStart` and `onToolExecutionEnd` callbacks rather
+than wrapping every tool's `execute` function. The start callback receives the
+validated `toolCall.input`; the end callback receives either a tool result or a
+tool error plus `toolExecutionMs`. A successful result may expose an
+`exitCode`, `truncated`, or output field; missing values map to `null`/`false`.
+Tool errors use `exit_code: null` and a generic safe `result_snippet`; never
+serialize raw provider errors, environment values, or secrets.
 
 Shape:
 
 ```typescript
 type ToolCallEventPayload = {
-  toolName: string;
+  tool_name: string;
   args: Record<string, unknown>;
 };
 
 type ToolResultEventPayload = {
-  toolName: string;
-  resultSnippet: string;     // first 500 chars of output
+  tool_name: string;
+  result_snippet: string;     // first 500 chars of output
   truncated: boolean;
-  exitCode: number | null;
-  durationMs: number;
+  exit_code: number | null;
+  duration_ms: number;
 };
 
 // Full PublicEvent envelope
 {
   type: "agent_tool_call",
   producerService: "agent",
-  payload: { toolName: "read", args: { path: "/workspace/repo/src/index.ts" } }
+  taskId: "task_<id>",
+  sandboxId: "sbox_<id>",
+  correlationId: "call_<id>",
+  payload: { tool_name: "read", args: { path: "/workspace/repo/src/index.ts" } }
 }
 ```
 
@@ -276,7 +330,11 @@ async simpleExec(
   containerName: string,
   command: string,
   cwd: string,
-  options?: { timeoutMs?: number; env?: Record<string, string> },
+  options?: {
+    timeoutMs?: number;
+    env?: Record<string, string>;
+    signal?: AbortSignal;
+  },
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean; truncated: boolean }>
 ```
 
@@ -292,14 +350,61 @@ execution. The check operates on the first word of the command:
 
 ```typescript
 const ALLOWED_COMMANDS = new Set([
-  "cd", "ls", "cat", "head", "tail", "wc", "echo", "printf",
-  "grep", "find", "sort", "uniq", "cut", "tr", "sed", "awk",
-  "git", "node", "npm", "npx", "cp", "mv", "rm", "mkdir",
-  "touch", "chmod", "chown", "tee", "diff", "cmp",
-  "file", "stat", "du", "df", "env", "pwd", "which", "type",
-  "sh", "bash", "true", "false", "exit", "sleep", "time",
-  "date", "dirname", "basename", "realpath", "readlink",
-  "xargs", "tar", "gzip", "gunzip", "unzip",
+  "cd",
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "echo",
+  "printf",
+  "grep",
+  "find",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+  "sed",
+  "awk",
+  "git",
+  "node",
+  "npm",
+  "npx",
+  "cp",
+  "mv",
+  "rm",
+  "mkdir",
+  "touch",
+  "chmod",
+  "chown",
+  "tee",
+  "diff",
+  "cmp",
+  "file",
+  "stat",
+  "du",
+  "df",
+  "env",
+  "pwd",
+  "which",
+  "type",
+  "sh",
+  "bash",
+  "true",
+  "false",
+  "exit",
+  "sleep",
+  "time",
+  "date",
+  "dirname",
+  "basename",
+  "realpath",
+  "readlink",
+  "xargs",
+  "tar",
+  "gzip",
+  "gunzip",
+  "unzip",
 ]);
 ```
 
@@ -317,15 +422,15 @@ The first non-flag word that's an external command is what gets checked.
 
 ### Tool Response Size Limits
 
-| Tool     | Max Response | Truncation Behaviour           |
-|----------|-------------|-------------------------------|
-| read     | 256 KB      | Truncate at byte boundary, set truncated=true |
-| write    | 1 KB        | Return "N bytes written"       |
-| edit     | 1 KB        | Return summary of changes      |
-| bash     | 50 KB       | Truncate last N bytes, set truncated=true |
-| grep     | 50 KB       | Truncate last N matches        |
-| find     | 50 KB       | Truncate last N paths          |
-| ls       | 50 KB       | Truncate last N entries        |
+| Tool  | Max Response | Truncation Behaviour                          |
+| ----- | ------------ | --------------------------------------------- |
+| read  | 256 KB       | Truncate at byte boundary, set truncated=true |
+| write | 1 KB         | Return "N bytes written"                      |
+| edit  | 1 KB         | Return summary of changes                     |
+| bash  | 50 KB        | Truncate last N bytes, set truncated=true     |
+| grep  | 50 KB        | Truncate last N matches                       |
+| find  | 50 KB        | Truncate last N paths                         |
+| ls    | 50 KB        | Truncate last N entries                       |
 
 ### Path Validation
 
@@ -368,9 +473,9 @@ AGENT_TOOL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30_000),
 ### Task result summary
 
 The `TaskRunResult.summary` field is populated from the agent's final message.
-In MVP the summary is the last assistant text block (before the final tool calls).
-If the agent has no text output (completed entirely through tools), the summary
-is the exit reason string.
+In MVP this is `generateText`'s final `text`, trimmed. If the agent completes
+entirely through tools, the summary is `null`; TaskService remains the owner of
+the terminal `exitReason` and does not infer it from agent text.
 
 ## 6. Agent Loop Flow
 
@@ -382,28 +487,32 @@ AgentRunner.run(context)
     |
     +-- Prepare system prompt (role + tool descriptions + workspace path)
     |
-    +-- Create AI SDK tools with runtime bound to context.sandboxId
+    +-- Resolve { containerName, runtime } for context.taskId + context.sandboxId
+    |
+    +-- Create AI SDK tools with runtime and container bound to this run
     |
     +-- Call generateText({
-    |       model: config.AGENT_MODEL,
+    |       model: resolvedLanguageModel,
     |       system: systemPrompt,
     |       messages: [{ role: "user", content: context.instructions }],
     |       tools: toolRegistry,
-    |       maxSteps: config.AGENT_MAX_STEPS,
+    |       stopWhen: isStepCount(config.AGENT_MAX_STEPS),
     |       abortSignal: context.signal,
+    |       onToolExecutionStart: relay.onStart,
+    |       onToolExecutionEnd: relay.onEnd,
     |   })
     |       |
     |       +-- Step 1: LLM calls tool X with args
     |       |       |
-    |       |       +-- emitEvent("agent_tool_call", { toolName, args })
+    |       |       +-- append + publish agent_tool_call(callId, input)
     |       |       +-- sandboxRuntime.simpleExec(container, ...)
-    |       |       +-- emitEvent("agent_tool_result", { toolName, result, ... })
+    |       |       +-- append + publish agent_tool_result(callId, output)
     |       |       +-- result returned to AI SDK → appended to messages
     |       |
     |       +-- Step 2: LLM calls tool Y with args
     |       |       (repeat pattern)
     |       |
-    |       +-- Step N: LLM produces text → loop ends (maxSteps or toolChoice stop)
+    |       +-- Step N: LLM produces text → loop ends (stopWhen or normal stop)
     |
     +-- Extract summary from final response text
     |
@@ -420,8 +529,9 @@ to `generateText`. When TaskService cancels a task:
 3. AI SDK's `generateText` receives the abort
 4. In-progress tool execution is interrupted
 5. `generateText` throws an `AbortError`
-6. AgentRunner catches it and returns a cancellation exit
-7. TaskService sees the hangup and proceeds with cleanup
+6. AgentRunner rethrows the `AbortError`
+7. TaskService's existing cancellation path captures best-effort diff,
+   persists `cancelled` + `task_result_ready`, and cleans up the sandbox
 
 No separate kill path is needed in AgentRunner — cancellation flows through
 the AbortSignal chain from TaskService → TaskRunContext → generateText →
@@ -433,20 +543,26 @@ tool execution.
 
 If a tool call fails (Docker exec fails, command not found, file not found,
 timeout):
-- emit `agent_tool_result` with the error information in the payload
-- the tool returns the error string to the LLM
+
+- append `agent_tool_result` with a safe generic error snippet, `exit_code: null`,
+  and the measured duration
+- the AI SDK supplies the tool error to the model
 - the LLM decides how to handle it (retry, alternative approach, report failure)
-- if the LLM retries excessively, `maxSteps` limits the total loop depth
-- after `maxSteps`, the agent loop terminates with whatever partial work was
+- if the LLM retries excessively, `stopWhen: isStepCount(...)` limits the total
+  loop depth
+- after the configured step count, the agent loop terminates with whatever partial work was
   done
 
 ### Agent loop failure (LLM API error)
 
 If the Vercel AI SDK itself throws (network error, auth failure, rate limit):
-- catch the error in AgentRunner
-- emit a `task_failed` event (relayed through TaskService's existing path)
-- return `{ summary: null }` with exit reason
-- TaskService marks the task as `failed` with the error code
+
+- catch only to classify/log safely, then throw `ServiceError("agent_run_failed",
+"Agent run failed", 502)` without the provider message
+- TaskService's existing `runTask` catch persists `task_failed` and
+  `task_result_ready` with `exit_reason: "failed"`
+- do not return `{ summary: null }` for provider failure because TaskService
+  would otherwise treat the run as successfully completed
 
 ### Timeout
 
@@ -456,19 +572,21 @@ cover it. Task cancellation propagates as described in §6.
 ### Abort during tool execution
 
 When the signal fires mid-tool-execution:
+
 - `sandboxRuntime.simpleExec` must check `signal.aborted` before starting
   the exec, and not start if already aborted
-- If the exec is in-flight, killing the child process on abort is handled
-  naturally by `generateText`'s abort signal propagating through the tool
-  execution (the AI SDK calls `signal.throwIfAborted()` at the start of
-  each tool call, and the wrapper checks before dispatching)
+- `simpleExec` receives the same signal and kills the in-flight Docker child,
+  then rejects with `AbortError`
+- AgentRunner must not convert that error into a tool failure or provider
+  failure; it rethrows so TaskService can complete cancellation
 
 ## 8. File Layout
 
 ```text
 src/services/agent/
     agent-runner.ts         AgentRunner class (implements TaskRunner)
-    tool-event-relay.ts     ToolEventRelay helper (or inline in runner)
+    tool-event-relay.ts     AI SDK callback -> EventStore event relay
+    model.ts                AGENT_MODEL -> injected LanguageModel resolver
 
 src/services/agent/tools/
     registry.ts             buildToolRegistry() — returns record of AI SDK tools
@@ -481,7 +599,8 @@ src/services/agent/tools/
     ls.ts                   ls tool
 
 src/services/sandbox/
-    runtime.ts              + simpleExec() method
+    runtime.ts              simpleExec() seam already provided by Slice 1
+    sandbox.ts              + task-owned getAgentToolTarget() seam
 
 src/types/
     agent.types.ts          AgentEventPayload types (tool call/result payloads)
@@ -491,8 +610,10 @@ src/config.ts               + AGENT_MODEL, AGENT_MAX_STEPS, tool timeouts/limits
 
 tests/
     agent-runner.test.ts    unit tests for AgentRunner
+    agent-tool-relay.test.ts event relay payload/order/sanitization tests
     agent-tools.test.ts     unit tests for each tool (mock runtime)
     agent-events.test.ts    event type + schema tests
+    sandbox-service.test.ts task ownership/readiness tests for agent target
 ```
 
 ## 9. Tests
@@ -501,22 +622,40 @@ tests/
 
 File: `tests/agent-runner.test.ts`
 
-- AgentRunner constructs with config + mock runtime + mock publish
-- AgentRunner.run() calls generateText with correct model/system/messages
-- AgentRunner.run() returns summary from final text
-- AgentRunner.run() aborts cleanly when signal fires before LLM call
-- AgentRunner.run() aborts cleanly when signal fires during tool execution
-- AgentRunner.run() handles generateText API error → returns null summary
-- AgentRunner.run() respects maxSteps
+- AgentRunner constructs with config + model + task-owned sandbox target +
+  mock EventStore/publish collaborators
+- `run()` resolves the target using both task and sandbox IDs, builds exactly
+  the seven-tool registry, and calls `generateText` with `system`, `messages`,
+  `tools`, `abortSignal`, and `stopWhen: isStepCount(maxSteps)`
+- `run()` returns the trimmed final text, or `null` when no final text exists
+- an already-aborted signal does not resolve a sandbox target or call the model
+- an in-flight abort propagates as `AbortError` and does not become a completed
+  task result
+- a provider/model error becomes the safe `agent_run_failed` ServiceError
+- a model response that performs tool steps is allowed to continue until the
+  configured stop condition
+
+File: `tests/agent-tool-relay.test.ts`
+
+- start appends a task-scoped `agent_tool_call` with `tool_name`, validated
+  arguments, and the SDK `callId` as `correlationId`
+- end appends a matching `agent_tool_result` after execution with bounded,
+  UTF-8-safe output, duration, truncation, and exit code
+- tool errors produce safe snippets and never expose the original error
+- `publish` runs only after the corresponding `EventStore.append` resolves
+- an append failure is surfaced to the runner rather than silently losing an
+  event
 
 File: `tests/agent-tools.test.ts`
 
 For each tool:
+
 - calls sandboxRuntime.simpleExec with correct arguments
 - returns expected shape
 - rejects paths outside /workspace/repo
 
 Bash tool specifically:
+
 - allows known commands
 - blocks `npm test`, `npx jest`, `npx vitest`, etc.
 - blocks unknown commands
@@ -531,6 +670,7 @@ File: `tests/agent-events.test.ts`
 
 The existing curl harness (`scripts/acceptance/task-service-atomic-mvp.sh`)
 is extended to:
+
 - create a task with instructions like "read the README and list the files"
 - poll the task until completed
 - verify agent_tool_call and agent_tool_result events appear in the stream
@@ -538,7 +678,9 @@ is extended to:
 
 ## 10. Acceptance Harness
 
-Extended curl scripts in `scripts/acceptance/agent-service-mvp.sh`:
+The existing task-service harness in
+`scripts/acceptance/task-service-atomic-mvp.sh` is extended with live agent
+coverage:
 
 ```bash
 # 1. Create a task that exercises the agent
@@ -584,25 +726,111 @@ curl -s -X POST "$BASE/tasks" \
 
 ### Slice 3 — AgentRunner (verifiable)
 
-- Create `agent-runner.ts` implementing `TaskRunner`
-- Create `tool-event-relay.ts`
-- Wire into TaskService (replace PlaceholderTaskRunner at call site)
-- Verification: unit tests pass, `npm run typecheck` passes
+Goal: replace the placeholder runner in the in-process task lifecycle while
+keeping TaskService's `TaskRunner` contract and terminal-state ownership
+unchanged.
 
-### Slice 4 — Acceptance harness (verifiable)
+#### 3.1 Resolve the model and task-owned execution target
+
+- Add `resolveAgentModel` (or an equivalent injected factory) that turns the
+  configured `AGENT_MODEL` into an AI SDK 7 `LanguageModel`; do not pass the
+  raw config string to `generateText` and do not read provider credentials from
+  tool or sandbox modules.
+- Add `SandboxService.getAgentToolTarget(taskId, sandboxId)` as the narrow
+  internal seam for the existing `SandboxRuntime` and persisted container
+  name. Query both IDs, require a ready sandbox, and return only the target
+  needed by the tool registry.
+- Add focused sandbox-service tests for cross-task lookup, non-ready sandboxes,
+  and the ready target. Do not expose this seam as an HTTP route.
+
+#### 3.2 Implement the runner against the AI SDK 7 contract
+
+- Create `src/services/agent/agent-runner.ts` implementing `TaskRunner`.
+- Inject `Config`, the task-owned target provider, `EventStore`, a resolved
+  `LanguageModel`, and `publish`; keep the runner DB-independent except for
+  the EventStore collaborator.
+- Check `context.signal` before resolving the target or calling the model.
+- Build the existing seven-tool registry with the target runtime, container
+  name, config, and task signal.
+- Call `generateText` with the system prompt, one user message containing
+  `context.instructions`, the registry, `abortSignal: context.signal`, and
+  `stopWhen: isStepCount(config.AGENT_MAX_STEPS)`.
+- Return `{ summary: result.text.trim() || null }` on a normal model finish.
+- Re-throw `AbortError`; convert non-abort provider/model failures into a safe
+  `ServiceError("agent_run_failed", ...)` so TaskService persists `failed`
+  rather than treating the run as completed.
+
+#### 3.3 Relay tool lifecycle events
+
+- Create `src/services/agent/tool-event-relay.ts` with AI SDK 7
+  `onToolExecutionStart`/`onToolExecutionEnd` handlers.
+- Append `agent_tool_call` before execution and `agent_tool_result` after
+  execution through `EventStore.append`, always setting `taskId`, `sandboxId`,
+  `producerService: "agent"`, `producerId: taskId`, and the SDK `callId` as
+  `correlationId`.
+- Convert `toolCall.input` to the existing snake_case payload schema, bound
+  serialized result output to 500 UTF-8-safe characters, and replace tool
+  errors with a stable safe snippet. Preserve `exit_code: null` for errors and
+  use `toolExecutionMs` for `duration_ms`.
+- Call `publish` only after each append resolves. If persistence fails, surface
+  the failure to AgentRunner; never silently continue with an incomplete
+  durable event stream.
+
+#### 3.4 Wire the production runner without changing TaskService orchestration
+
+- Construct the resolved model, AgentRunner, and TaskService together in the
+  existing `src/services/task/task.ts` singleton composition path.
+- Pass AgentRunner as the existing `TaskService` runner collaborator; do not
+  add a coordinator, a second task state machine, or agent-specific task
+  result fields.
+- Leave TaskService responsible for `task_running`, diff capture, terminal
+  task/result events, cancellation, and sandbox cleanup. AgentRunner only
+  returns a summary or throws.
+- Update `docs/modules/agent-service/README.md` from the Slice 2 boundary to
+  document the runner, event relay, model resolver, cancellation behavior,
+  and the new Sandbox Service seam. Update any affected task/sandbox/event
+  service README contracts in the same implementation change.
+
+#### 3.5 Verification and handoff
+
+- Add DB-independent tests for runner options, model injection, summary
+  extraction, step limit, target lookup, provider failure, and cancellation.
+- Add relay tests for payload shape, correlation, UTF-8 bounds, safe errors,
+  append-before-publish ordering, and append failure propagation.
+- Run the narrow checks first:
+
+  `npm test -- tests/agent-runner.test.ts tests/agent-tool-relay.test.ts tests/agent-events.test.ts tests/sandbox-service.test.ts`
+
+  `npm run typecheck`
+
+  `npm run lint`
+
+- Keep real provider calls, Docker execution, and curl lifecycle verification
+  for Slice 4. Slice 3 is complete only when the production composition path
+  typechecks with the actual AI SDK 7 types and the existing full unit suite
+  remains green.
+
+### Slice 4 — Live acceptance harness (verifiable)
 
 - Extend existing curl acceptance script with agent-specific tests
 - Run full task lifecycle: create → provision → agent run → diff → cleanup
 - Verify agent events appear in task event stream
-- Verification: `scripts/acceptance/agent-service-mvp.sh` passes with
-  real Docker + Postgres
+- Verification:
+
+  ```bash
+  NODE_ENV=development BASE_URL=http://localhost:3000 \
+    scripts/acceptance/task-service-atomic-mvp.sh
+  ```
+
+  The harness passes with a non-test API, real OpenRouter access, Docker, and
+  Postgres.
 
 ## 12. Risks
 
-| Risk | Impact | Mitigation |
-|------|--------|-----------|
-| Vercel AI SDK `generateText` with `abortSignal` doesn't abort in-flight tool exec | Cancelled task leaves a zombie docker exec | Test cancellation path in slice 3. If AI SDK doesn't propagate, add explicit signal check before each tool dispatch. |
-| 7 custom tools with Docker exec latency | Slow agent loop, especially read/edit on large files | Each exec is ~100ms overhead. Acceptable for MVP. If too slow, mount workspace volume for read/write paths. |
-| Bash allowlist is too restrictive | Agent can't install deps or run build scripts | `npm install` with restrictions, `npm run build` allowed. Review after first real use case. |
-| LLM calls non-existent file paths | Agent wastes steps on errors | Write a good system prompt that explains the workspace structure. The error feedback from tools is self-correcting. |
-| `@ai-sdk/openai` adapter compatibility with OpenRouter | Streaming/tool calling may have provider-specific quirks | Test with OpenRouter's `/v1/chat/completions` early in slice 3. AI SDK is provider-agnostic; if OpenRouter compatibility is an issue, raw `fetch()` fallback. |
+| Risk                                                                  | Impact                                                                         | Mitigation                                                                                                                                                                        |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI SDK cancellation does not stop an in-flight tool exec              | Cancelled task leaves a zombie docker exec                                     | Pass the same signal into `simpleExec`, test abort during a tool call in Slice 3, and require runtime child-process termination rather than relying only on model cancellation.   |
+| 7 custom tools with Docker exec latency                               | Slow agent loop, especially read/edit on large files                           | Each exec is ~100ms overhead. Acceptable for MVP. If too slow, mount workspace volume for read/write paths.                                                                       |
+| Bash allowlist is too restrictive                                     | Agent can't install deps or run build scripts                                  | `npm install` with restrictions, `npm run build` allowed. Review after first real use case.                                                                                       |
+| LLM calls non-existent file paths                                     | Agent wastes steps on errors                                                   | Write a good system prompt that explains the workspace structure. The error feedback from tools is self-correcting.                                                               |
+| Configured model string cannot be used as an AI SDK 7 `LanguageModel` | Runner fails before the first model call or uses an undocumented provider path | Keep model construction in an injected resolver, test it independently, make the provider/model format explicit in config, and avoid a raw `fetch()` fallback inside AgentRunner. |
