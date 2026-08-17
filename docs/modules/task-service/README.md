@@ -287,9 +287,29 @@ npm run lint
 npm test
 ```
 
-For a local smoke test, start Postgres and the app, initialize `repo/` as a
-Git fixture, then use the create/status/events/result flow above. The
-acceptance harness is [`scripts/acceptance/task-service-atomic-mvp.sh`](../../../scripts/acceptance/task-service-atomic-mvp.sh).
+For a local smoke test, start Postgres, Docker, and the app, initialize `repo/`
+as a Git fixture, then run the curl flow:
+
+```bash
+BASE_URL=http://localhost:3000 \
+  REPO_REF=/workspace/fixture-repo \
+  scripts/acceptance/task-service-curl.sh
+```
+
+The smoke script checks health, task creation, status polling, the replayable
+SSE stream, the terminal result, and the expected rejection of cancellation
+after completion. It uses the provider configuration already loaded by the
+API and does not read `.env` or require the provider key in the caller's
+shell. Set `REPO_REF`, `INSTRUCTIONS`, `POLL_SECONDS`, or
+`SSE_TIMEOUT_SECONDS` to override its defaults.
+
+Use `REPO_REF=./repo` when the API runs directly from the repository root;
+Compose uses `/workspace/fixture-repo` because that is the path mounted into
+the app container.
+
+The exhaustive live acceptance harness, including edit, cancellation, failure,
+cleanup, and SSE cursor scenarios, is
+[`scripts/acceptance/task-service-atomic-mvp.sh`](../../../scripts/acceptance/task-service-atomic-mvp.sh).
 
 When changing task or sandbox persistence, update the Prisma schema through a
 new migration. Do not hand-edit existing migration files.
