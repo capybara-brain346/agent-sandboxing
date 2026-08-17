@@ -10,6 +10,29 @@ TaskService remains responsible for task lifecycle transitions, terminal
 results, cancellation, diff capture, and cleanup. AgentRunner returns a final
 summary or throws; it does not mutate task state.
 
+## Read first
+
+- [`docs/agent-sandboxing-project.md`](../../agent-sandboxing-project.md) — product direction and control-plane/execution-plane boundary
+- [`Task Service`](../task-service/README.md) — task lifecycle and runner seam
+- [`Sandbox Service`](../sandbox-service/README.md) — task-owned runtime target and execution boundary
+- [`Event Service`](../event-service/README.md) — durable event and SSE contract
+- [`docs/planning/agent-service-atomic-mvp-plan.md`](../../planning/agent-service-atomic-mvp-plan.md) — MVP decisions and non-goals
+
+## Implementation map
+
+- [`AgentRunner`](../../../src/services/agent/agent-runner.ts) — model loop, tool registry, cancellation, and summary extraction
+- [`ToolEventRelay`](../../../src/services/agent/tool-event-relay.ts) — durable tool-call/result events and safe payloads
+- [`model.ts`](../../../src/services/agent/model.ts) — OpenRouter model resolution
+- [`tools/`](../../../src/services/agent/tools/) — sandbox-proxied tool implementations and bash policy
+- [`tests/agent-runner.test.ts`](../../../tests/agent-runner.test.ts) — runner behavior and cancellation
+- [`tests/agent-tool-relay.test.ts`](../../../tests/agent-tool-relay.test.ts) — event ordering and payload bounds
+- [`tests/agent-tools.test.ts`](../../../tests/agent-tools.test.ts) — tool validation and runtime behavior
+
+The production composition path selects `AgentRunner` outside test mode; test
+mode retains the placeholder runner so the DB-independent suite can run
+without provider credentials. The runner is an in-process collaborator of
+TaskService, not a separate HTTP service.
+
 ## Composition and model configuration
 
 `AGENT_MODEL` must use the `openrouter:<model-id>` format. The composition root
