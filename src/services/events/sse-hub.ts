@@ -9,7 +9,6 @@ export type SseClient = {
   closed: boolean;
 };
 
-/** In-memory live fanout for task streams. Persisted Event rows are canonical. */
 export class SseHub {
   private readonly clients = new Map<string, Set<SseClient>>();
 

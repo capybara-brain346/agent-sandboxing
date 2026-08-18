@@ -79,6 +79,7 @@ describe("TaskService result capture", () => {
       } as unknown as PrismaClient,
       {} as EventStore,
       {} as SandboxService,
+      new PlaceholderTaskRunner(),
       vi.fn(),
     );
 
@@ -103,7 +104,9 @@ describe("TaskService result capture", () => {
     const sandboxId = "sbox_1";
     const tx = {
       task: {
-        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        create: vi.fn(
+          async ({ data }: { data: Record<string, unknown> }) => data,
+        ),
         update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
           if (
             data.status === "provisioning" ||
@@ -113,24 +116,28 @@ describe("TaskService result capture", () => {
             status = data.status;
           return data;
         }),
-        updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-          if (
-            data.status === "provisioning" ||
-            data.status === "running" ||
-            data.status === "completed"
-          )
-            status = data.status;
-          return { count: 1 };
-        }),
+        updateMany: vi.fn(
+          async ({ data }: { data: Record<string, unknown> }) => {
+            if (
+              data.status === "provisioning" ||
+              data.status === "running" ||
+              data.status === "completed"
+            )
+              status = data.status;
+            return { count: 1 };
+          },
+        ),
         findUnique: vi.fn(async () => ({ status })),
       },
     };
     const prisma = {
-      $transaction: vi.fn(async (callback: (transaction: unknown) => unknown) => {
-        const result = await callback(tx);
-        committed = true;
-        return result;
-      }),
+      $transaction: vi.fn(
+        async (callback: (transaction: unknown) => unknown) => {
+          const result = await callback(tx);
+          committed = true;
+          return result;
+        },
+      ),
     } as unknown as PrismaClient;
     const sandbox = {
       createForTaskInTransaction: vi.fn(async () => ({
@@ -187,12 +194,16 @@ describe("TaskService result capture", () => {
     );
 
     await service.create(input);
-    await vi.waitFor(() => expect(sandbox.stop).toHaveBeenCalledWith(sandboxId));
+    await vi.waitFor(() =>
+      expect(sandbox.stop).toHaveBeenCalledWith(sandboxId),
+    );
 
     expect(status).toBe("completed");
     expect(sandbox.diff).toHaveBeenCalledWith(sandboxId);
     expect(runner.run).toHaveBeenCalledTimes(1);
-    expect(events.appendInTransaction.mock.calls.map((call) => call[1].type)).toEqual([
+    expect(
+      events.appendInTransaction.mock.calls.map((call) => call[1].type),
+    ).toEqual([
       "task_created",
       "sandbox_created",
       "task_provisioning_started",

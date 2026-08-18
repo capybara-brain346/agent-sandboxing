@@ -9,7 +9,6 @@ import type {
 } from "../../types/event.types";
 
 export type AppendEventInput = {
-  /** The task stream is the only supported event stream. */
   taskId: string;
   streamId?: string;
   type: EventType;
@@ -80,13 +79,8 @@ export class EventStore {
   constructor(private readonly prisma: PrismaClient) {}
 
   async append(input: AppendEventInput): Promise<PublicEvent> {
-    return runQuery(
-      "append_event",
-      { taskId: input.taskId },
-      () =>
-        this.prisma.$transaction((tx) =>
-          this.appendInTransaction(tx, input),
-        ),
+    return runQuery("append_event", { taskId: input.taskId }, () =>
+      this.prisma.$transaction((tx) => this.appendInTransaction(tx, input)),
     );
   }
 
@@ -113,14 +107,11 @@ export class EventStore {
   }
 
   async listTaskEvents(taskId: string, after: number): Promise<PublicEvent[]> {
-    const events = await runQuery(
-      "list_task_events",
-      { taskId, after },
-      () =>
-        this.prisma.event.findMany({
-          where: { streamId: taskId, sequence: { gt: after } },
-          orderBy: { sequence: "asc" },
-        }),
+    const events = await runQuery("list_task_events", { taskId, after }, () =>
+      this.prisma.event.findMany({
+        where: { streamId: taskId, sequence: { gt: after } },
+        orderBy: { sequence: "asc" },
+      }),
     );
     return events.map(toPublic);
   }

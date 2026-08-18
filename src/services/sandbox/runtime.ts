@@ -294,8 +294,6 @@ export class SandboxRuntime {
         "-p",
         "/workspace/repo",
       ]);
-      // Copy the contents, including dotfiles, so the fixture's git metadata is
-      // available at the workspace root rather than only its tracked files.
       await execFile(["cp", `${root}/.`, `${containerId}:/workspace/repo/`], {
         timeoutMs: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
       });

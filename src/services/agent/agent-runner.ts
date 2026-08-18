@@ -66,10 +66,6 @@ class SerialExecutor {
   }
 }
 
-/**
- * AI SDK may execute tool calls from one model step concurrently. The tools
- * share one task workspace, so their complete executions must be serialized.
- */
 export const serializeToolRegistry = <TOOLS extends ToolSet>(
   registry: TOOLS,
 ): TOOLS => {

@@ -38,11 +38,6 @@ const invalidPath = (message = "Path must be under /workspace/repo"): never => {
   throw new ServiceError("unsafe_path", message, 422);
 };
 
-/**
- * Validates a container path lexically. The container is the trust boundary;
- * no host filesystem calls are made here and symlink resolution is deliberately
- * left to the sandbox itself.
- */
 export const validateWorkspacePath = (value: string): string => {
   if (typeof value !== "string" || value.length === 0)
     return invalidPath("Path must not be empty");
@@ -74,7 +69,6 @@ export const validateToolText = (value: string, name: string): string => {
   return value;
 };
 
-/** POSIX shell single-quote escaping. */
 export const shellQuote = (value: string): string =>
   `'${value.replaceAll("'", "'\\''")}'`;
 

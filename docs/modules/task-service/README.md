@@ -249,9 +249,9 @@ owns orchestration and task state. `SandboxService` owns sandbox state and
 execution. `EventStore` owns durable ordered events. `SseHub` owns only live
 connection fanout. Services do not import Express types or shell out to Docker.
 
-The production singleton is constructed at module load. Unit tests substitute
-plain object collaborators for Prisma, EventStore, SandboxService, the runner,
-and the event publisher.
+The production singleton is constructed at module load with an explicit
+`TaskRunner` and event publisher. Unit tests substitute plain object
+collaborators for Prisma, EventStore, SandboxService, and the runner.
 
 The normal run delegates the agent loop to AgentRunner after the task reaches
 `running`. A model/provider failure is converted to a safe `agent_run_failed`

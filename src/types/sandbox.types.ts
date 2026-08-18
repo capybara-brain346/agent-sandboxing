@@ -11,7 +11,7 @@ export type CommandStatus =
 
 export type TaskSandboxInput = {
   fixtureRepoPath?: string;
-  image?: string;
+  image?: string | undefined;
 };
 
 export const commandRequestSchema = z

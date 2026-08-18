@@ -3,14 +3,7 @@ import { ServiceError } from "../shared/errors";
 import { taskService } from "../services/task/task";
 import { sseHub, type SseHub } from "../services/events/sse-hub";
 import { createTaskSchema } from "../types/task.types";
-import {
-  parseSseCursor,
-  startSseKeepalive,
-  writeSseEvent,
-} from "./sse";
-
-const taskIdFrom = (value: string | string[]): string =>
-  Array.isArray(value) ? (value[0] ?? "") : value;
+import { parseSseCursor, startSseKeepalive, writeSseEvent } from "./sse";
 
 export const taskRouter = Router();
 
@@ -35,7 +28,7 @@ taskRouter.post("/tasks", async (request, response, next) => {
 
 taskRouter.get("/tasks/:taskId", async (request, response, next) => {
   try {
-    response.json(await taskService.get(taskIdFrom(request.params.taskId)));
+    response.json(await taskService.get(request.params.taskId));
   } catch (error) {
     next(error);
   }
@@ -53,12 +46,11 @@ taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
   const onClose = (): void => {
     closed = true;
     clearKeepalive();
-    if (client !== undefined)
-      sseHub.unsubscribe(taskIdFrom(request.params.taskId), client);
+    if (client !== undefined) sseHub.unsubscribe(request.params.taskId, client);
   };
 
   try {
-    const taskId = taskIdFrom(request.params.taskId);
+    const taskId = request.params.taskId;
     const queryAfter = request.query.after;
     const rawAfter =
       queryAfter === undefined
@@ -68,15 +60,10 @@ taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
           : "invalid";
     const after = parseSseCursor(rawAfter);
 
-    // Subscribe before reading persisted events. Events committed while the
-    // replay query is in flight are buffered by SseHub and flushed after the
-    // replay, so a reconnect cannot lose a live event in the gap.
     client = sseHub.subscribe(taskId, response, after);
     response.on("close", onClose);
     const events = await taskService.eventsAfter(taskId, after);
 
-    // The task lookup happens inside eventsAfter. Keep headers unsent until
-    // it succeeds so a missing task still receives the normal 404 response.
     if (closed || response.writableEnded || response.destroyed) {
       sseHub.unsubscribe(taskId, client);
       return;
@@ -96,9 +83,7 @@ taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
     if (closed || response.writableEnded || response.destroyed) return;
     keepalive = startSseKeepalive(response);
   } catch (error) {
-    clearKeepalive();
-    if (client !== undefined)
-      sseHub.unsubscribe(taskIdFrom(request.params.taskId), client);
+    onClose();
     if (!response.headersSent) next(error);
     else response.end();
   }
@@ -106,7 +91,7 @@ taskRouter.get("/tasks/:taskId/events", async (request, response, next) => {
 
 taskRouter.get("/tasks/:taskId/result", async (request, response, next) => {
   try {
-    response.json(await taskService.result(taskIdFrom(request.params.taskId)));
+    response.json(await taskService.result(request.params.taskId));
   } catch (error) {
     next(error);
   }
@@ -114,7 +99,7 @@ taskRouter.get("/tasks/:taskId/result", async (request, response, next) => {
 
 taskRouter.delete("/tasks/:taskId", async (request, response, next) => {
   try {
-    const result = await taskService.cancel(taskIdFrom(request.params.taskId));
+    const result = await taskService.cancel(request.params.taskId);
     response.status(result.status === "cancelling" ? 202 : 200).json(result);
   } catch (error) {
     next(error);

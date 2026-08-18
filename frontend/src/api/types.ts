@@ -1,7 +1,3 @@
-// Hand-ported from src/types/task.types.ts and src/types/event.types.ts.
-// Keep field names identical to the backend contract; do not add fields the
-// backend does not send.
-
 export const TASK_STATUSES = [
   "created",
   "provisioning",
@@ -88,8 +84,6 @@ export type PublicTaskEvent = {
   createdAt: string;
 };
 
-// Mirrors EVENT_TYPES in src/types/event.types.ts. SSE frames use `event:
-// <type>` so the client needs each name to attach a listener.
 export const EVENT_TYPES = [
   "task_created",
   "task_provisioning_started",

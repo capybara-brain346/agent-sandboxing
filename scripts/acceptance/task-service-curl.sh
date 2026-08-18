@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Public task API smoke test. The API, Postgres, Docker, and provider
-# configuration must already be running; this script only talks to HTTP.
 BASE_URL="${BASE_URL:-http://localhost:3000}"
 BASE_URL="${BASE_URL%/}"
 REPO_REF="${REPO_REF:-./repo}"

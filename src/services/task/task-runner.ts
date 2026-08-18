@@ -13,10 +13,6 @@ export type TaskRunner = {
   run(context: TaskRunContext): Promise<TaskRunResult>;
 };
 
-/**
- * Legacy no-op seam retained for DB-independent TaskService test doubles.
- * Production composition injects AgentRunner instead.
- */
 export class PlaceholderTaskRunner implements TaskRunner {
   async run(_context: TaskRunContext): Promise<TaskRunResult> {
     return { summary: null };

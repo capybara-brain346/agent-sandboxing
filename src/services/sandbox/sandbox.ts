@@ -89,7 +89,6 @@ export class SandboxService {
     );
   }
 
-  /** Creates the task-owned sandbox row inside the caller's task transaction. */
   async createForTaskInTransaction(
     tx: Prisma.TransactionClient,
     input: TaskSandboxInput,
@@ -121,7 +120,6 @@ export class SandboxService {
     };
   }
 
-  /** Creates and links a sandbox for an already-created task. */
   async createForTask(
     input: TaskSandboxInput,
     options: { taskId: string },
@@ -231,7 +229,6 @@ export class SandboxService {
     };
   }
 
-  /** Runs a command for a task-owned sandbox. The sandbox ID is never caller-supplied. */
   async runCommand(
     taskId: string,
     input: CommandRequest,

@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Live acceptance requires a non-test API, applied Postgres migrations, Docker,
-# and an OpenRouter key. The default fixture is copied into each task sandbox;
-# agent edits must never modify the host fixture.
 BASE_URL="${BASE_URL:-http://localhost:3000}"
 BASE_URL="${BASE_URL%/}"
 POLL_SECONDS="${POLL_SECONDS:-180}"
@@ -22,8 +19,6 @@ FAILURE_REPO_MOVED=false
 cleanup() {
   local exit_code=$?
 
-  # Restore the host fixture even when an assertion, Ctrl-C, or another
-  # interrupted failure-path operation exits the script.
   if [[ "${FAILURE_REPO_MOVED}" == "true" ]]; then
     if [[ -e "${FIXTURE_REPO_PATH}" && -e "${FAILURE_REPO_BACKUP}" ]]; then
       printf '[task-acceptance] ERROR: fixture path reappeared before restore\n' >&2
@@ -58,7 +53,6 @@ dump_file_safely() {
   local file="$1"
   local line
 
-  # Never print the provider credential, including on a failed assertion.
   while IFS= read -r line || [[ -n "${line}" ]]; do
     if [[ -n "${OPENROUTER_API_KEY:-}" &&
       "${line}" == *"${OPENROUTER_API_KEY}"* ]]; then
@@ -396,8 +390,6 @@ assert_fixture_unchanged() {
 
 preflight() {
   local health_file="${TMP_DIR}/preflight-health.json"
-  # /health intentionally does not expose NODE_ENV. Reject explicit test mode
-  # and use the live event assertions below to verify the agent composition.
   [[ "${NODE_ENV:-development}" != "test" ]] ||
     fail "NODE_ENV=test is not supported by the live acceptance harness"
   [[ -n "${OPENROUTER_API_KEY:-}" ]] ||

@@ -1,6 +1,5 @@
 import type { Config } from "../../../config";
 
-/** Only the bounded tool settings are allowed to cross into tool closures. */
 export type AgentToolConfig = Pick<
   Config,
   | "AGENT_BASH_TIMEOUT_MS"

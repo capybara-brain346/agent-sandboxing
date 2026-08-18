@@ -8,6 +8,9 @@ in subdirectories override them.
 Read relevant package/config files and the applicable service guide indexed in
 `docs/README.md` before changing a component:
 
+- Before making changes, always use the project-local Ponytail skill.
+- Code must not contain comments, except required interpreter or compiler
+  directives.
 - Documentation index: `docs/README.md`.
 
 Always update the applicable service README in the same change when modifying

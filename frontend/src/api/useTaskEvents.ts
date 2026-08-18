@@ -2,11 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { API_BASE_URL } from "./client";
 import { EVENT_TYPES, type PublicTaskEvent } from "./types";
 
-// `eventsUrl` comes from the task snapshot/create response, e.g.
-// "/tasks/task_<id>/events". The native EventSource reconnects on drop and
-// sends `Last-Event-ID` automatically, matching the replay-cursor contract
-// documented in docs/modules/event-service/README.md — no manual cursor
-// bookkeeping is needed here.
 export const useTaskEvents = (
   eventsUrl: string | null,
 ): { events: PublicTaskEvent[]; connectionError: boolean } => {
