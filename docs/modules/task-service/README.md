@@ -12,6 +12,12 @@ and is reached through [`src/routes/task.routes.ts`](../../../src/routes/task.ro
 Sandbox execution remains an internal in-process dependency; callers never
 call Docker or sandbox routes directly.
 
+The Phase 1 persistence foundation adds the future `ChatSession`,
+`ChatMessage`, `Artifact`, and session/run event relationships without changing
+the current task routes or runner. The existing Prisma `Task` row is the
+transitional representation of a future `TaskRun`; it must not be treated as
+the session record.
+
 ## Read first
 
 - [`docs/agent-sandboxing-project.md`](../../agent-sandboxing-project.md) — product direction
@@ -40,6 +46,37 @@ auth, queues, retries, a frontend, or PR creation. `repoRef` currently
 identifies the local fixture path accepted by the sandbox runtime, not a GitHub
 repository reference. OpenRouter credentials are loaded only by the
 control-plane composition root and are never sent to a sandbox.
+
+## Phase 1 persistence foundation
+
+The `ChatSession` model owns repo metadata, the bounded durable summary, the
+session event sequence, and the durable active-run lock fields
+(`activeRunId`, `lockedAt`, and `lockVersion`). `ChatMessage` stores only
+user-facing conversation content. `Artifact` stores bounded operational
+content with run/session ownership and truncation/redaction metadata.
+
+The schema also adds nullable `sessionId` links to the transitional `Task` and
+`Sandbox` models. Existing task-created sandboxes continue to use `taskId`;
+the session-owned sandbox path is introduced by the later session/run
+lifecycle phase. The `Task` result shape gains JSON verification metadata for
+future run checks.
+
+The migration is
+[`20260818000000_repo_scoped_chat_session_phase1`](../../../prisma/migrations/20260818000000_repo_scoped_chat_session_phase1/migration.sql).
+No `/chat-sessions` API or session runner behavior is part of this phase.
+
+## Phase 3 session API
+
+The session-first public API is documented in the
+[Chat Session Service guide](../chat-session/README.md). The Phase 3 service
+creates sessions without sandboxes, persists user messages separately from
+operational events, creates a transitional `Task` row as one `TaskRun`, and
+rejects a second active run with `409 session_run_in_progress`.
+
+The first run is not provisioned by the Phase 3 API layer. Session-owned
+sandbox provisioning and worker execution are Phase 4 responsibilities. The
+legacy `/tasks` routes remain a deprecated compatibility surface and now emit
+the `Deprecation` and successor `Link` headers.
 
 ## Public HTTP contract
 

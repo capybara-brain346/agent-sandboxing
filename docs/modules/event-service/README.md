@@ -2,8 +2,9 @@
 
 ## Purpose
 
-The Event Service provides the durable, ordered event log for a task and the
-live Server-Sent Events (SSE) delivery layer. It is implemented as two
+The Event Service provides durable, ordered event logs for chat sessions and
+task runs, plus the live Server-Sent Events (SSE) delivery layer. It is
+implemented as two
 collaborators rather than a standalone HTTP service:
 
 - [`EventStore`](../../../src/services/events/event-store.ts) persists and
@@ -11,19 +12,22 @@ collaborators rather than a standalone HTTP service:
 - [`SseHub`](../../../src/services/events/sse-hub.ts) fans committed events out
   to open SSE responses in the current process.
 
-The public stream is exposed by
-[`GET /tasks/:taskId/events`](../../../src/routes/task.routes.ts). There is no
-separate event router or sandbox event stream. Task, sandbox, command, diff,
-and future service events share the owning task's stream.
+The existing public compatibility stream is exposed by
+[`GET /tasks/:taskId/events`](../../../src/routes/task.routes.ts). New callers
+use [`GET /chat-sessions/:sessionId/events`](../../../src/routes/chat-session.routes.ts)
+for chat milestones and the nested run event route for detailed execution
+telemetry. The task route remains a deprecated compatibility adapter.
 
 ## Design invariants
 
 The following rules define the event contract:
 
-1. Every event belongs to a task. `streamId` is currently always the owning
-   `taskId`; taskless or sandbox-only streams are not supported.
+1. Canonical streams use `streamScope` plus `streamId`: `session` streams are
+   keyed by `ChatSession.id`, and `run` streams are keyed by the transitional
+   `Task.id` used as the TaskRun identifier. Legacy `task` streams remain
+   readable during migration.
 2. Sequences are positive integers, start at `1`, and are strictly increasing
-   within a task stream.
+   within one scoped stream. Session and run streams have independent cursors.
 3. A state mutation and its lifecycle event are committed in the same database
    transaction.
 4. Events are published to `SseHub` only after that transaction commits.
@@ -36,10 +40,11 @@ The following rules define the event contract:
 ## Architecture
 
 ```text
-TaskService / SandboxService / CommandExecutionService / AgentRunner
+Session/Run services / TaskService / SandboxService / CommandExecutionService
+                         / AgentRunner
                          |
                          v
-              state + EventStore.appendInTransaction
+              state + scoped EventStore append in transaction
                          |
                          v
                     Postgres commit
@@ -67,37 +72,50 @@ collaborators.
 
 The [`Event`](../../../prisma/schema.prisma) model stores:
 
-| Field                    | Meaning                                              |
-| ------------------------ | ---------------------------------------------------- |
-| `id`                     | Public event identifier with the `evt_` prefix.      |
-| `streamId`               | Ordered stream identifier; currently the task ID.    |
-| `sequence`               | Per-stream replay cursor and ordering key.           |
-| `type`                   | One member of `EVENT_TYPES`.                         |
-| `producerService`        | Service that produced the event.                     |
-| `producerId`             | ID of the producing task, sandbox, or command.       |
-| `taskId`                 | Required owning task relation.                       |
-| `sandboxId`, `commandId` | Optional related resource IDs.                       |
-| `correlationId`          | Optional ID for tracing one operation across events. |
-| `payload`                | Event-specific JSON object.                          |
-| `createdAt`              | Database creation timestamp.                         |
+| Field                     | Meaning                                                       |
+| ------------------------- | ------------------------------------------------------------- |
+| `id`                      | Public event identifier with the `evt_` prefix.               |
+| `streamId`                | Ordered stream identifier within the stream scope.            |
+| `streamScope`             | `session`, `run`, or legacy `task`.                           |
+| `domain`                  | Event domain such as `session`, `run`, `command`, or `agent`. |
+| `sequence`                | Per-stream replay cursor and ordering key.                    |
+| `type`                    | One member of `EVENT_TYPES`.                                  |
+| `producerService`         | Service that produced the event.                              |
+| `producerId`              | ID of the producing task, sandbox, or command.                |
+| `taskId`                  | Nullable legacy task relation.                                |
+| `sessionId`, `runId`      | Session owner and optional transitional run relationship.     |
+| `messageId`, `artifactId` | Optional conversation and artifact relationships.             |
+| `sandboxId`, `commandId`  | Optional related resource IDs.                                |
+| `correlationId`           | Optional ID for tracing one operation across events.          |
+| `payload`                 | Event-specific JSON object.                                   |
+| `createdAt`               | Database creation timestamp.                                  |
 
-`Task.nextEventSequence` owns allocation. Inside the caller's transaction,
-`EventStore`:
+`ChatSession.nextEventSequence` owns session allocation and
+`Task.nextEventSequence` owns transitional run allocation. Inside the caller's
+transaction, `EventStore`:
 
-1. locks the task row with `SELECT ... FOR UPDATE`;
+1. locks the owning session or run row with `SELECT ... FOR UPDATE`;
 2. reads `next_event_sequence`;
 3. creates the event with that sequence; and
 4. increments `next_event_sequence`.
 
-The database also enforces `@@unique([streamId, sequence])`. Concurrent
-producers therefore serialize on the task row and cannot allocate duplicate
-positions in one stream.
+The database enforces `@@unique([streamScope, streamId, sequence])`.
+Concurrent producers therefore serialize on the stream owner row and cannot
+allocate duplicate positions in one stream.
 
-Use `appendInTransaction` or `appendTaskEventInTransaction` when an event is
-part of another state change. Use `append` or `appendTaskEvent` for a
-standalone event; `append` creates its own transaction. Neither method
-publishes automatically. The producer publishes the returned event only after
-the transaction has resolved successfully.
+Use `appendSessionEventInTransaction` for session milestones and
+`appendRunEventInTransaction` for detailed run events. The legacy
+`appendTaskEventInTransaction` wrapper keeps existing task producers working
+until they migrate.
+
+The Phase 1 event migration also adds indexed message and artifact pointers.
+Large operational output belongs in artifacts and must not be copied into
+session messages or default model context.
+
+Use the corresponding `append*InTransaction` method when an event is part of
+another state change. The standalone `append*` methods create their own
+transaction. No EventStore method publishes automatically; producers publish
+returned events only after the transaction resolves successfully.
 
 ## Public event shape
 
@@ -107,10 +125,16 @@ the transaction has resolved successfully.
 ```json
 {
   "id": "evt_<id>",
-  "streamId": "task_<id>",
+  "streamScope": "run",
+  "streamId": "run_<id>",
+  "domain": "run",
+  "sessionId": "chat_<id>",
+  "runId": "run_<id>",
   "taskId": "task_<id>",
   "sandboxId": "sbox_<id>",
   "commandId": null,
+  "messageId": null,
+  "artifactId": null,
   "sequence": 4,
   "type": "task_running",
   "producerService": "task",
@@ -130,7 +154,7 @@ type. Examples include:
   `output_truncated`; and
 - failure events: `code`, `message`, `operation`, and `retryable`.
 
-Agent tool events use the same task-stream envelope. `agent_tool_call` payloads
+Agent tool events use the run-stream envelope. `agent_tool_call` payloads
 contain only `tool_name` and an argument object. `agent_tool_result` payloads
 contain `tool_name`, a UTF-8-safe `result_snippet` capped at 500 characters,
 `truncated`, `exit_code`, and non-negative integer `duration_ms`. The call/result
@@ -149,6 +173,8 @@ of truth for allowed event names.
 
 | Area                     | Event types                                                                                                                         | Producer services    |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Session and messages     | `session_created`, `message_created`, `run_requested`                                                                               | `task`               |
+| Run lifecycle            | `run_created`, `run_completed`, `run_failed`, `run_cancelled`, `run_result_ready`                                                   | `task`               |
 | Task lifecycle           | `task_created`, `task_provisioning_started`, `task_running`, `task_completed`, `task_failed`, `task_cancelled`, `task_result_ready` | `task`               |
 | Sandbox lifecycle        | `sandbox_created`, `sandbox_provisioning_started`, `sandbox_ready`, `sandbox_failed`, `sandbox_stopping`, `sandbox_stopped`         | `sandbox`, `cleanup` |
 | Fixture setup            | `fixture_repo_copy_started`, `fixture_repo_copied`                                                                                  | `sandbox`            |
@@ -163,7 +189,8 @@ before treating them as emitted behavior.
 
 ## SSE delivery and replay
 
-The task events route accepts a non-negative integer cursor:
+Each single-stream SSE route accepts a non-negative integer cursor. The legacy
+task route is:
 
 ```http
 GET /tasks/task_<id>/events?after=12
@@ -174,19 +201,20 @@ If `after` is omitted, the route uses the `Last-Event-ID` header; an explicit
 the `evt_...` event identifier. Invalid cursors return the normal structured
 `invalid_cursor` error.
 
-Each event is encoded as:
+Session and run streams use the same encoding:
 
 ```text
 id: 13
 event: command_output
-data: {"id":"evt_...","streamId":"task_...", ...}
+data: {"id":"evt_...","streamScope":"run","streamId":"run_...", ...}
 
 ```
 
 The SSE `id` is the numeric sequence, `event` is the event type, and `data` is
 the JSON `PublicEvent`. Keepalive comments are sent every 15 seconds.
 
-The route subscribes to `SseHub` before querying the durable log. While the
+Each subscriber is keyed by `streamScope:streamId`. The route subscribes to
+`SseHub` before querying the durable log. While the
 replay query is running, `SseHub` buffers newly published events. After replay,
 the hub sorts the buffer, drops sequences already covered by the replay, and
 starts live delivery. This subscribe-first ordering closes the race between
@@ -213,15 +241,16 @@ When adding a lifecycle step or producer:
 6. Update the owning module documentation and this taxonomy.
 
 Do not add a second event table, a sandbox-only stream, or a new runtime
-abstraction for a producer. The current task stream and `EventStore` are the
-shared append point.
+abstraction for a producer. Session and run streams share the same EventStore
+and durable Event table. Large operational output belongs in artifacts; event
+payloads should contain bounded previews and artifact identifiers.
 
 ## Verification
 
 Event-specific tests are:
 
 - [`tests/event-store.test.ts`](../../../tests/event-store.test.ts) — sequence
-  allocation, task-stream replay, and rollback behavior;
+  allocation, scoped streams, task-stream replay, and rollback behavior;
 - [`tests/sse-hub.test.ts`](../../../tests/sse-hub.test.ts) — fanout, replay
   buffering, ordering, and duplicate suppression; and
 - [`tests/task-routes.test.ts`](../../../tests/task-routes.test.ts) — HTTP SSE

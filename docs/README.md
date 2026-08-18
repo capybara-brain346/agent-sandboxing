@@ -13,6 +13,8 @@
   command execution, diff capture, and execution-plane behavior.
 - [Event Service](modules/event-service/README.md) — event persistence,
   replay, and Server-Sent Events delivery.
+- [Chat Session Service](modules/chat-session/README.md) — repo-scoped chat,
+  messages, runs, and session/run SSE APIs.
 - [Agent Service](modules/agent-service/README.md) — agent runner, tools, and
   tool-event relay.
 - [Frontend](modules/frontend/README.md) — dashboard architecture and public
@@ -20,6 +22,8 @@
 
 ## Planning
 
+- [Repo-scoped chat session agent harness Phase 0 decisions](planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)
+- [Repo-scoped chat session agent harness plan](planning/repo-scoped-chat-session-agent-harness-plan.md)
 - [Task Service Atomic MVP plan](planning/task-service-atomic-mvp-plan.md)
 - [Sandbox Service Atomic MVP plan](planning/sandbox-service-atomic-mvp-plan.md)
 - [Agent Service Atomic MVP plan](planning/agent-service-atomic-mvp-plan.md)

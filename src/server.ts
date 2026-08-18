@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { logger } from "./logger";
 import { ServiceError } from "./shared/errors";
 import { prisma } from "./db/prisma";
+import { chatSessionRouter } from "./routes/chat-session.routes";
 import { taskRouter } from "./routes/task.routes";
 
 const pkgVersion: string = JSON.parse(
@@ -101,14 +102,15 @@ export const createApp = (): express.Express => {
     const dbStart = process.hrtime.bigint();
     try {
       await prisma.$queryRaw`SELECT 1`;
-      const dbLatencyMs =
-        Number(process.hrtime.bigint() - dbStart) / 1e6;
+      const dbLatencyMs = Number(process.hrtime.bigint() - dbStart) / 1e6;
       response.json({
         status: "ok",
         version: pkgVersion,
         uptimeSeconds: Math.round(process.uptime()),
         timestamp: new Date().toISOString(),
-        checks: { database: { status: "ok", latencyMs: Math.round(dbLatencyMs) } },
+        checks: {
+          database: { status: "ok", latencyMs: Math.round(dbLatencyMs) },
+        },
       });
     } catch (error) {
       logger.error("health_check_failed", { error: describeError(error) });
@@ -122,6 +124,7 @@ export const createApp = (): express.Express => {
     }
   });
 
+  app.use(chatSessionRouter);
   app.use(taskRouter);
 
   app.use(notFoundHandler);

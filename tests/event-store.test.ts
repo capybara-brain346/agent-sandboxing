@@ -24,8 +24,9 @@ describe("EventStore", () => {
     } as unknown as Prisma.TransactionClient;
     const prisma = {
       $transaction: vi.fn(
-        async (callback: (value: Prisma.TransactionClient) => Promise<unknown>) =>
-          callback(tx),
+        async (
+          callback: (value: Prisma.TransactionClient) => Promise<unknown>,
+        ) => callback(tx),
       ),
     } as unknown as PrismaClient;
     const store = new EventStore(prisma);
@@ -101,7 +102,9 @@ describe("EventStore", () => {
         payload: {},
       }),
     ]);
-    const store = new EventStore({ event: { findMany } } as unknown as PrismaClient);
+    const store = new EventStore({
+      event: { findMany },
+    } as unknown as PrismaClient);
 
     await expect(store.listTaskEvents("task_1", 1)).resolves.toMatchObject([
       { id: "evt_2", sequence: 2, streamId: "task_1" },
@@ -114,11 +117,15 @@ describe("EventStore", () => {
 
   it("verifies task existence while replaying an empty stream", async () => {
     const queryRaw = vi.fn(async () => []);
-    const store = new EventStore({ $queryRaw: queryRaw } as unknown as PrismaClient);
+    const store = new EventStore({
+      $queryRaw: queryRaw,
+    } as unknown as PrismaClient);
 
-    await expect(store.listTaskEventsAfter("missing", 0)).rejects.toMatchObject({
-      code: "task_not_found",
-    });
+    await expect(store.listTaskEventsAfter("missing", 0)).rejects.toMatchObject(
+      {
+        code: "task_not_found",
+      },
+    );
   });
 
   it("does not expose an event when the append transaction rolls back", async () => {
@@ -137,8 +144,9 @@ describe("EventStore", () => {
     } as unknown as Prisma.TransactionClient;
     const prisma = {
       $transaction: vi.fn(
-        async (callback: (value: Prisma.TransactionClient) => Promise<unknown>) =>
-          callback(tx),
+        async (
+          callback: (value: Prisma.TransactionClient) => Promise<unknown>,
+        ) => callback(tx),
       ),
     } as unknown as PrismaClient;
     const store = new EventStore(prisma);
@@ -152,5 +160,115 @@ describe("EventStore", () => {
         payload: {},
       }),
     ).rejects.toThrow("rollback");
+  });
+
+  it("allocates independent session and run stream sequences", async () => {
+    const queryRaw = vi
+      .fn()
+      .mockResolvedValueOnce([{ next_event_sequence: 1 }])
+      .mockResolvedValueOnce([{ next_event_sequence: 1 }])
+      .mockResolvedValueOnce([{ next_event_sequence: 2 }]);
+    const tx = {
+      $queryRaw: queryRaw,
+      event: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+          eventRow(data),
+        ),
+      },
+      chatSession: { update: vi.fn(async () => ({})) },
+      task: { update: vi.fn(async () => ({})) },
+    } as unknown as Prisma.TransactionClient;
+    const store = new EventStore({} as PrismaClient);
+
+    const sessionFirst = await store.appendSessionEventInTransaction(tx, {
+      sessionId: "session_1",
+      type: "session_created",
+      producerService: "task",
+      producerId: "session_1",
+      payload: {},
+    });
+    const runFirst = await store.appendRunEventInTransaction(tx, {
+      sessionId: "session_1",
+      runId: "run_1",
+      type: "run_created",
+      producerService: "task",
+      producerId: "run_1",
+      payload: {},
+    });
+    const sessionSecond = await store.appendSessionEventInTransaction(tx, {
+      sessionId: "session_1",
+      runId: "run_1",
+      type: "run_requested",
+      producerService: "task",
+      producerId: "run_1",
+      payload: {},
+    });
+
+    expect(sessionFirst).toMatchObject({
+      streamScope: "session",
+      streamId: "session_1",
+      sessionId: "session_1",
+      sequence: 1,
+    });
+    expect(runFirst).toMatchObject({
+      streamScope: "run",
+      streamId: "run_1",
+      sessionId: "session_1",
+      runId: "run_1",
+      sequence: 1,
+    });
+    expect(sessionSecond).toMatchObject({
+      streamScope: "session",
+      streamId: "session_1",
+      sequence: 2,
+    });
+    expect(tx.chatSession.update).toHaveBeenCalledTimes(2);
+    expect(tx.task.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays only the requested canonical stream", async () => {
+    const findMany = vi.fn(
+      async ({ where }: { where: Record<string, unknown> }) => [
+        eventRow({
+          id: `evt_${where.streamScope}`,
+          streamId: where.streamId,
+          streamScope: where.streamScope,
+          domain: where.streamScope,
+          sequence: 2,
+          type: "run_created",
+          producerService: "task",
+          producerId: "run_1",
+          taskId: null,
+          sessionId: "session_1",
+          runId: "run_1",
+          messageId: null,
+          artifactId: null,
+          sandboxId: null,
+          commandId: null,
+          correlationId: null,
+          payload: {},
+        }),
+      ],
+    );
+    const store = new EventStore({
+      event: { findMany },
+    } as unknown as PrismaClient);
+
+    await expect(
+      store.listSessionEvents("session_1", 1),
+    ).resolves.toMatchObject([
+      { streamScope: "session", streamId: "session_1", sequence: 2 },
+    ]);
+    await expect(store.listRunEvents("run_1", 1)).resolves.toMatchObject([
+      { streamScope: "run", streamId: "run_1", sequence: 2 },
+    ]);
+    expect(findMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        streamScope: "session",
+        streamId: "session_1",
+        sequence: { gt: 1 },
+      },
+      orderBy: { sequence: "asc" },
+    });
   });
 });

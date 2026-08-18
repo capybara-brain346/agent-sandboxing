@@ -92,10 +92,16 @@ export class AgentRunner implements TaskRunner {
 
   async run(context: TaskRunContext): Promise<TaskRunResult> {
     throwIfAborted(context.signal);
-    const target = await this.dependencies.sandbox.getAgentToolTarget(
-      context.taskId,
-      context.sandboxId,
-    );
+    const target = context.sessionId
+      ? await this.dependencies.sandbox.getAgentToolTarget(
+          context.sessionId,
+          context.taskId,
+          context.sandboxId,
+        )
+      : await this.dependencies.sandbox.getAgentToolTarget(
+          context.taskId,
+          context.sandboxId,
+        );
     throwIfAborted(context.signal);
 
     const tools = serializeToolRegistry(
@@ -113,6 +119,7 @@ export class AgentRunner implements TaskRunner {
     const callbacks = relay.callbacks<typeof tools>({
       taskId: context.taskId,
       sandboxId: context.sandboxId,
+      sessionId: context.sessionId,
     });
 
     try {

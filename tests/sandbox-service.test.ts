@@ -224,4 +224,122 @@ describe("SandboxService", () => {
     } satisfies Partial<ServiceError>);
     expect(runtime.diff).not.toHaveBeenCalled();
   });
+
+  it("creates only session-owned sandbox rows in the caller transaction", async () => {
+    const create = vi.fn(
+      async ({ data }: { data: Record<string, unknown> }) => ({
+        ...data,
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+      }),
+    );
+    const service = new SandboxService(
+      {} as PrismaClient,
+      {} as EventStore,
+      {} as SandboxRuntime,
+      config,
+      vi.fn(),
+    );
+
+    const result = await service.createForSessionInTransaction(
+      { sandbox: { create } } as unknown as Prisma.TransactionClient,
+      { fixtureRepoPath: "./repo", image: "node:22" },
+      { sessionId: "chat_1" },
+    );
+
+    expect(result).toEqual({
+      sandboxId: expect.any(String),
+      containerName: expect.stringMatching(/^sandbox-sbox_/),
+      workspacePath: "/workspace/repo",
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sessionId: "chat_1",
+        status: "creating",
+      }),
+    });
+  });
+
+  it("returns ready immediately for an already-provisioned session sandbox", async () => {
+    const findFirst = vi.fn(async () => sandboxRow("ready"));
+    const service = new SandboxService(
+      { sandbox: { findFirst } } as unknown as PrismaClient,
+      {} as EventStore,
+      {} as SandboxRuntime,
+      config,
+      vi.fn(),
+    );
+
+    await expect(
+      service.ensureReadyForSession("chat_1", "run_1", "s1"),
+    ).resolves.toEqual({ status: "ready" });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: "s1", sessionId: "chat_1" },
+    });
+  });
+
+  it("provisions a creating session sandbox and publishes run-scoped events", async () => {
+    const publish = vi.fn();
+    const runtime = {
+      provision: vi.fn(async () => ({ containerId: "container-1" })),
+    } as unknown as SandboxRuntime;
+    const events = {
+      appendRunEvent: vi.fn(async (input: { type: PublicEvent["type"] }) =>
+        event(input.type, 1),
+      ),
+      appendRunEventInTransaction: vi.fn(
+        async (_tx: unknown, input: { type: PublicEvent["type"] }) =>
+          event(input.type, 1),
+      ),
+    } as unknown as EventStore;
+    const prisma = {
+      sandbox: {
+        findFirst: vi.fn(async () => sandboxRow("creating")),
+      },
+      $transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
+        callback({
+          sandbox: {
+            update: vi.fn(async () => sandboxRow("ready")),
+          },
+        }),
+      ),
+    } as unknown as PrismaClient;
+    const service = new SandboxService(
+      prisma,
+      events,
+      runtime,
+      config,
+      publish,
+    );
+
+    await expect(
+      service.ensureReadyForSession("chat_1", "run_1", "s1"),
+    ).resolves.toEqual({ status: "ready" });
+    expect(runtime.provision).toHaveBeenCalledWith(
+      "s1",
+      "sandbox-s1",
+      "node:22",
+      "./repo",
+    );
+    expect(publish).toHaveBeenCalledTimes(4);
+  });
+
+  it("requires session ownership and readiness for a session agent target", async () => {
+    const findFirst = vi.fn(async () => sandboxRow("ready"));
+    const runtime = { simpleExec: vi.fn() } as unknown as SandboxRuntime;
+    const service = new SandboxService(
+      { sandbox: { findFirst } } as unknown as PrismaClient,
+      {} as EventStore,
+      runtime,
+      config,
+      vi.fn(),
+    );
+
+    const target = await service.getAgentToolTarget("chat_1", "run_1", "s1");
+
+    expect(target.containerName).toBe("sandbox-s1");
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: "s1", sessionId: "chat_1" },
+      select: { containerName: true, status: true },
+    });
+  });
 });

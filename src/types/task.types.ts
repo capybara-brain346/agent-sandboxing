@@ -7,13 +7,17 @@ import {
 
 export {
   EVENT_PRODUCER_SERVICES,
+  EVENT_STREAM_SCOPES,
   EVENT_TYPES,
+  LEGACY_EVENT_STREAM_SCOPE,
   eventProducerServiceSchema,
 } from "./event.types";
 export type {
   EventProducerService,
+  EventStreamScope,
   EventType,
   PublicEvent,
+  PublicEventV2,
 } from "./event.types";
 
 export const TASK_STATUSES = [

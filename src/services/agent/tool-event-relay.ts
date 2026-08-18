@@ -16,6 +16,7 @@ type PublishEvent = (event: PublicEvent) => void;
 export type ToolEventContext = {
   taskId: string;
   sandboxId: string;
+  sessionId?: string | undefined;
 };
 
 export type ToolEventRelayDependencies = {
@@ -72,18 +73,12 @@ export class ToolEventRelay {
     event: ToolExecutionStartEvent,
   ): Promise<void> {
     const correlationId = this.startCorrelation(event.callId);
-    await this.appendAndPublish({
-      taskId: context.taskId,
-      sandboxId: context.sandboxId,
-      type: "agent_tool_call",
-      producerService: "agent",
-      producerId: context.taskId,
-      correlationId,
-      payload: {
+    await this.appendAndPublish(
+      this.eventInput(context, correlationId, "agent_tool_call", {
         tool_name: event.toolCall.toolName,
         args: safeArgs(event.toolCall.input),
-      },
-    });
+      }),
+    );
   }
 
   async onToolExecutionEnd(
@@ -101,14 +96,8 @@ export class ToolEventRelay {
     const bounded = boundUtf8(serialized, RESULT_SNIPPET_MAX_BYTES);
     const outputRecord = isRecord(output) ? output : {};
 
-    await this.appendAndPublish({
-      taskId: context.taskId,
-      sandboxId: context.sandboxId,
-      type: "agent_tool_result",
-      producerService: "agent",
-      producerId: context.taskId,
-      correlationId,
-      payload: {
+    await this.appendAndPublish(
+      this.eventInput(context, correlationId, "agent_tool_result", {
         tool_name: event.toolCall.toolName,
         result_snippet: bounded.value,
         truncated:
@@ -119,8 +108,39 @@ export class ToolEventRelay {
             ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)
             : null,
         duration_ms: duration(event.toolExecutionMs),
-      },
-    });
+      }),
+    );
+  }
+
+  private eventInput(
+    context: ToolEventContext,
+    correlationId: string,
+    type: "agent_tool_call" | "agent_tool_result",
+    payload: Record<string, unknown>,
+  ): Parameters<EventStore["append"]>[0] {
+    if (context.sessionId)
+      return {
+        streamScope: "run",
+        streamId: context.taskId,
+        sessionId: context.sessionId,
+        runId: context.taskId,
+        sandboxId: context.sandboxId,
+        domain: "agent",
+        type,
+        producerService: "agent",
+        producerId: context.taskId,
+        correlationId,
+        payload,
+      };
+    return {
+      taskId: context.taskId,
+      sandboxId: context.sandboxId,
+      type,
+      producerService: "agent",
+      producerId: context.taskId,
+      correlationId,
+      payload,
+    };
   }
 
   private appendAndPublish(

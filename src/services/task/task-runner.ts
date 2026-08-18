@@ -3,6 +3,8 @@ export type TaskRunContext = {
   sandboxId: string;
   instructions: string;
   signal: AbortSignal;
+  sessionId?: string;
+  messageId?: string;
 };
 
 export type TaskRunResult = {

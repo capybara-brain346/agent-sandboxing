@@ -29,6 +29,11 @@ integration, authentication, queues, and a second runtime provider are out of
 scope. The Agent Service owns the control-plane agent loop and uses this
 service only through the narrow task-owned runtime seam.
 
+Phase 1 adds a nullable `Sandbox.sessionId` relationship and a unique session
+ownership index to the persistence model. The running implementation remains
+task-owned for compatibility; session provisioning and workspace reuse belong
+to the later session/run lifecycle phase.
+
 The public task response does not expose sandbox or container handles. The
 task event envelope currently includes `sandboxId` and `commandId` fields for
 MVP observability; callers should consume these as event metadata rather than

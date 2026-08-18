@@ -674,7 +674,7 @@ export class TaskService implements TaskServicePort {
 const taskServiceConfig = loadConfig();
 const taskServiceEvents = new EventStore(prisma);
 const publishTaskEvent = (event: PublicEvent): void => sseHub.publish(event);
-const taskServiceRunner: TaskRunner =
+export const taskServiceRunner: TaskRunner =
   taskServiceConfig.NODE_ENV === "test"
     ? new PlaceholderTaskRunner()
     : new AgentRunner({

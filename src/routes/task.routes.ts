@@ -7,6 +7,14 @@ import { parseSseCursor, startSseKeepalive, writeSseEvent } from "./sse";
 
 export const taskRouter = Router();
 
+taskRouter.use((_request, response, next) => {
+  response.set({
+    Deprecation: "true",
+    Link: '</chat-sessions>; rel="successor-version"',
+  });
+  next();
+});
+
 taskRouter.post("/tasks", async (request, response, next) => {
   try {
     const parsed = createTaskSchema.safeParse(request.body ?? {});
