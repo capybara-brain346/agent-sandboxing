@@ -3,6 +3,7 @@ import { ServiceError } from "../../../shared/errors";
 import type { SimpleExecResult } from "../../../types/sandbox.types";
 import type { SandboxRuntime } from "../../sandbox/runtime";
 import { workspaceRoot } from "../../sandbox/workspace";
+export { boundUtf8 } from "../../../shared/utf8";
 
 export type AgentToolRuntime = Pick<SandboxRuntime, "simpleExec">;
 
@@ -38,11 +39,6 @@ const invalidPath = (message = "Path must be under /workspace/repo"): never => {
   throw new ServiceError("unsafe_path", message, 422);
 };
 
-/**
- * Validates a container path lexically. The container is the trust boundary;
- * no host filesystem calls are made here and symlink resolution is deliberately
- * left to the sandbox itself.
- */
 export const validateWorkspacePath = (value: string): string => {
   if (typeof value !== "string" || value.length === 0)
     return invalidPath("Path must not be empty");
@@ -74,29 +70,8 @@ export const validateToolText = (value: string, name: string): string => {
   return value;
 };
 
-/** POSIX shell single-quote escaping. */
 export const shellQuote = (value: string): string =>
   `'${value.replaceAll("'", "'\\''")}'`;
-
-export type Utf8Bounded = { value: string; truncated: boolean };
-
-export const takeUtf8Prefix = (value: string, maxBytes: number): string => {
-  if (maxBytes <= 0) return "";
-  let bytesUsed = 0;
-  let result = "";
-  for (const character of value) {
-    const characterBytes = Buffer.byteLength(character, "utf8");
-    if (bytesUsed + characterBytes > maxBytes) break;
-    result += character;
-    bytesUsed += characterBytes;
-  }
-  return result;
-};
-
-export const boundUtf8 = (value: string, maxBytes: number): Utf8Bounded => {
-  const bounded = takeUtf8Prefix(value, maxBytes);
-  return { value: bounded, truncated: bounded.length < value.length };
-};
 
 export const byteLength = (value: string): number =>
   Buffer.byteLength(value, "utf8");

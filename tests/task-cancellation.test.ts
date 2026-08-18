@@ -4,11 +4,12 @@ import { TaskService } from "../src/services/task/task";
 import type { EventStore } from "../src/services/events/event-store";
 import type { SandboxService } from "../src/services/sandbox/sandbox";
 import type { PublicEvent } from "../src/types/event.types";
-import type {
-  CreateTaskRequest,
-  TaskStatus,
-} from "../src/types/task.types";
-import type { TaskRunContext, TaskRunner } from "../src/services/task/task-runner";
+import type { CreateTaskRequest, TaskStatus } from "../src/types/task.types";
+import {
+  PlaceholderTaskRunner,
+  type TaskRunContext,
+  type TaskRunner,
+} from "../src/services/task/task-runner";
 
 const input: CreateTaskRequest = {
   repoRef: "./repo",
@@ -65,11 +66,15 @@ const makeHarness = (
         return data;
       }),
       update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-        if (typeof data.status === "string") status.value = data.status as TaskStatus;
+        if (typeof data.status === "string")
+          status.value = data.status as TaskStatus;
         return data;
       }),
       updateMany: vi.fn(
-        async ({ where, data }: {
+        async ({
+          where,
+          data,
+        }: {
           where: { status?: TaskStatus | { in: TaskStatus[] } };
           data: Record<string, unknown>;
         }) => {
@@ -113,11 +118,8 @@ const makeHarness = (
   const sandbox = {
     createForTaskInTransaction: vi.fn(async () => ({
       sandboxId: "sbox_1",
-      status: "creating" as const,
       containerName: "sandbox-sbox_1",
-      image: "node:22",
       workspacePath: "/workspace/repo",
-      fixtureRepoPath: "./repo",
     })),
     provisionForTask: vi.fn(async () => ({ status: "ready" as const })),
     diff: vi.fn(async () => ({
@@ -193,9 +195,11 @@ describe("TaskService cancellation", () => {
     const harness = makeHarness(runner);
     const created = await harness.service.create(input);
 
-    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject({
-      status: "cancelling",
-    });
+    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject(
+      {
+        status: "cancelling",
+      },
+    );
     await vi.waitFor(() => expect(harness.status.value).toBe("cancelled"));
 
     expect(runner.run).not.toHaveBeenCalled();
@@ -208,17 +212,19 @@ describe("TaskService cancellation", () => {
     const harness = makeHarness(runner, { failCancellationOnce: true });
     const created = await harness.service.create(input);
 
-    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject({
-      status: "cancelling",
-    });
-    await vi.waitFor(() =>
-      expect(harness.cancellationAttempts.value).toBe(1),
+    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject(
+      {
+        status: "cancelling",
+      },
     );
+    await vi.waitFor(() => expect(harness.cancellationAttempts.value).toBe(1));
     expect(harness.status.value).not.toBe("cancelled");
 
-    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject({
-      status: "cancelling",
-    });
+    await expect(harness.service.cancel(created.taskId)).resolves.toMatchObject(
+      {
+        status: "cancelling",
+      },
+    );
     await vi.waitFor(() => expect(harness.status.value).toBe("cancelled"));
   });
 
@@ -237,13 +243,17 @@ describe("TaskService cancellation", () => {
   it("rejects cancellation after a task reaches an unchangeable terminal state", async () => {
     const prisma = {
       task: {
-        findUnique: vi.fn(async () => ({ status: "completed", sandboxId: "sbox_1" })),
+        findUnique: vi.fn(async () => ({
+          status: "completed",
+          sandboxId: "sbox_1",
+        })),
       },
     } as unknown as PrismaClient;
     const service = new TaskService(
       prisma,
       {} as EventStore,
       {} as SandboxService,
+      new PlaceholderTaskRunner(),
       vi.fn(),
     );
 

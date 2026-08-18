@@ -101,6 +101,36 @@ describe("ToolEventRelay", () => {
     });
   });
 
+  it("disambiguates repeated SDK call IDs", async () => {
+    const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      makeEvent(input),
+    );
+    const relay = new ToolEventRelay({
+      events: { append } as unknown as Pick<EventStore, "append">,
+      publish: vi.fn(),
+    });
+    const callbacks = relay.callbacks({
+      taskId: "task_1",
+      sandboxId: "sbox_1",
+    });
+
+    await callbacks.onToolExecutionStart(startEvent({ command: "pwd" }));
+    await callbacks.onToolExecutionEnd(
+      endEvent({ type: "tool-result", output: { exitCode: 0 } }),
+    );
+    await callbacks.onToolExecutionStart(startEvent({ command: "pwd" }));
+    await callbacks.onToolExecutionEnd(
+      endEvent({ type: "tool-result", output: { exitCode: 0 } }),
+    );
+
+    expect(append.mock.calls.map(([input]) => input.correlationId)).toEqual([
+      "call_42",
+      "call_42",
+      "call_42:2",
+      "call_42:2",
+    ]);
+  });
+
   it("bounds results on UTF-8 boundaries and sanitizes tool errors", async () => {
     const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
       makeEvent(input),

@@ -55,8 +55,6 @@ h3 {
   margin: 0;
 }
 
-/* App shell */
-
 .topbar {
   display: flex;
   align-items: center;
@@ -86,8 +84,6 @@ h3 {
   color: var(--color-fg-muted);
 }
 
-/* Page layout */
-
 .page {
   max-width: 640px;
   margin: 0 auto;
@@ -116,8 +112,6 @@ section + section {
   margin-top: 24px;
 }
 
-/* Panels */
-
 .panel {
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -143,8 +137,6 @@ section + section {
 .panel__body {
   padding: 16px;
 }
-
-/* Forms */
 
 .form {
   display: flex;
@@ -193,8 +185,6 @@ section + section {
   font-size: 13px;
 }
 
-/* Buttons */
-
 .button {
   font: inherit;
   font-weight: 500;
@@ -230,8 +220,6 @@ section + section {
   border-color: var(--color-error-border);
 }
 
-/* Alerts / banners */
-
 .alert {
   display: flex;
   align-items: flex-start;
@@ -253,8 +241,6 @@ section + section {
   background: var(--color-warning-bg);
   border-color: var(--color-warning-border);
 }
-
-/* Status badge */
 
 .badge {
   display: inline-flex;
@@ -300,8 +286,6 @@ section + section {
   border-color: var(--color-error-border);
 }
 
-/* Run header */
-
 .run-header {
   display: flex;
   align-items: center;
@@ -320,8 +304,6 @@ section + section {
 .run-header__actions {
   margin-left: auto;
 }
-
-/* Overview grid (metadata) */
 
 .overview {
   display: grid;
@@ -359,8 +341,6 @@ section + section {
 .overview__value--mono {
   font-family: var(--font-mono);
 }
-
-/* Event timeline */
 
 .event-timeline {
   list-style: none;
@@ -418,8 +398,6 @@ section + section {
   font-size: 13px;
 }
 
-/* Result */
-
 .result-summary {
   display: flex;
   flex-direction: column;
@@ -434,8 +412,6 @@ section + section {
 .result-summary__row strong {
   font-weight: 600;
 }
-
-/* Diff */
 
 .diff {
   font-family: var(--font-mono);
@@ -477,8 +453,6 @@ section + section {
   color: var(--color-fg-subtle);
   font-size: 13px;
 }
-
-/* Responsive */
 
 @media (max-width: 560px) {
   .page {

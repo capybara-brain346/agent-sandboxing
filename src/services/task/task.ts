@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { loadConfig, type Config } from "../../config";
+import { loadConfig } from "../../config";
 import { prisma } from "../../db/prisma";
 import { EventStore } from "../events/event-store";
 import { sseHub } from "../events/sse-hub";
-import { SandboxService, sandboxService } from "../sandbox/sandbox";
+import { sandboxService, type SandboxService } from "../sandbox/sandbox";
 import { ServiceError, notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
 import { logger } from "../../logger";
@@ -18,6 +18,7 @@ import type {
   TaskSnapshot,
   PublicTaskEvent,
   TaskStatus,
+  TaskFailure,
 } from "../../types/task.types";
 import type { PublicEvent } from "../../types/event.types";
 import { AgentRunner } from "../agent/agent-runner";
@@ -26,16 +27,9 @@ import { PlaceholderTaskRunner, type TaskRunner } from "./task-runner";
 
 type TaskSandboxCollaborator = Pick<
   SandboxService,
-  "createForTaskInTransaction"
-> &
-  Partial<Pick<SandboxService, "provisionForTask" | "diff" | "stop">>;
+  "createForTaskInTransaction" | "provisionForTask" | "diff" | "stop"
+>;
 type PublishEvent = (event: PublicEvent) => void;
-type TaskServiceConfigOrRunnerOrPublisher = Config | TaskRunner | PublishEvent;
-
-type TaskFailure = {
-  code: string;
-  message: string;
-};
 
 type TaskExecution = {
   taskId: string;
@@ -69,12 +63,6 @@ const taskFailure = (error: unknown, fallback: TaskFailure): TaskFailure => ({
   message: error instanceof ServiceError ? error.message : fallback.message,
 });
 
-const isTaskRunner = (value: unknown): value is TaskRunner =>
-  typeof value === "object" &&
-  value !== null &&
-  "run" in value &&
-  typeof value.run === "function";
-
 export class TaskService implements TaskServicePort {
   private readonly publish: PublishEvent;
   private readonly runner: TaskRunner;
@@ -84,21 +72,11 @@ export class TaskService implements TaskServicePort {
     private readonly prisma: PrismaClient,
     private readonly events: EventStore,
     private readonly sandbox: TaskSandboxCollaborator,
-    configOrRunnerOrPublisher: TaskServiceConfigOrRunnerOrPublisher,
-    runnerOrPublisher?: TaskRunner | PublishEvent,
+    runner: TaskRunner,
     publish?: PublishEvent,
   ) {
-    this.runner =
-      (isTaskRunner(runnerOrPublisher) && runnerOrPublisher) ||
-      (isTaskRunner(configOrRunnerOrPublisher) && configOrRunnerOrPublisher) ||
-      new PlaceholderTaskRunner();
-    this.publish =
-      publish ??
-      (typeof runnerOrPublisher === "function"
-        ? runnerOrPublisher
-        : typeof configOrRunnerOrPublisher === "function"
-          ? configOrRunnerOrPublisher
-          : () => undefined);
+    this.runner = runner;
+    this.publish = publish ?? (() => undefined);
   }
 
   async create(input: CreateTaskRequest): Promise<CreateTaskResponse> {
@@ -121,7 +99,7 @@ export class TaskService implements TaskServicePort {
 
           const sandboxInput = {
             fixtureRepoPath: input.repoRef,
-            ...(input.image === undefined ? {} : { image: input.image }),
+            image: input.image,
           };
           const sandbox = await this.sandbox.createForTaskInTransaction(
             tx,
@@ -172,32 +150,25 @@ export class TaskService implements TaskServicePort {
       );
     }
 
-    // Publishing is intentionally outside the transaction. Subscribers can
-    // only observe events after the database has committed both rows.
     for (const event of result.events) this.publish(event);
 
-    // A task-owned sandbox is never provisioned through an HTTP request. The
-    // run starts only after the create transaction has committed and initial
-    // events have been published.
-    if (this.sandbox.provisionForTask) {
-      const execution: TaskExecution = {
-        taskId: newTaskId,
-        sandboxId: result.sandboxId,
-        instructions: input.instructions,
-        controller: new AbortController(),
-        cancellationRequested: false,
-        runPromise: undefined,
-        runFinished: false,
-        cancellationPromise: undefined,
-        cancellationCompleted: false,
-      };
-      this.executions.set(newTaskId, execution);
-      setImmediate(() => {
-        const runPromise = this.runTask(execution);
-        execution.runPromise = runPromise;
-        void runPromise;
-      });
-    }
+    const execution: TaskExecution = {
+      taskId: newTaskId,
+      sandboxId: result.sandboxId,
+      instructions: input.instructions,
+      controller: new AbortController(),
+      cancellationRequested: false,
+      runPromise: undefined,
+      runFinished: false,
+      cancellationPromise: undefined,
+      cancellationCompleted: false,
+    };
+    this.executions.set(newTaskId, execution);
+    setImmediate(() => {
+      const runPromise = this.runTask(execution);
+      execution.runPromise = runPromise;
+      void runPromise;
+    });
 
     return {
       taskId: newTaskId,
@@ -317,10 +288,6 @@ export class TaskService implements TaskServicePort {
       execution.controller.abort();
       void this.waitForCancellation(execution);
     } else {
-      // This covers an active task loaded after an in-process execution was
-      // lost (for example, a test double or a process hand-off). Cancellation
-      // remains best effort in this phase, but the task still gets a terminal
-      // result instead of dangling in an active state.
       const recovered: TaskExecution = {
         taskId,
         sandboxId: task.sandboxId ?? "",
@@ -368,8 +335,7 @@ export class TaskService implements TaskServicePort {
     try {
       await this.startCancellation(execution);
     } catch {
-      // The failure is logged by startCancellation. Keep the execution entry so
-      // a later cancel request can retry the persistence step.
+      return true;
     }
     return true;
   }
@@ -379,15 +345,20 @@ export class TaskService implements TaskServicePort {
     try {
       if (await this.waitForCancellation(execution)) return;
 
-      if (!(await this.startProvisioning(taskId))) {
+      if (
+        !(await this.startTask(
+          taskId,
+          "provisioning",
+          "provisioningAt",
+          "task_provisioning_started",
+        ))
+      ) {
         await this.stopSandbox(sandboxId);
         return;
       }
       if (await this.waitForCancellation(execution)) return;
 
-      const provision = this.sandbox.provisionForTask;
-      if (!provision) return;
-      const outcome = await provision.call(this.sandbox, sandboxId);
+      const outcome = await this.sandbox.provisionForTask(sandboxId);
       if (await this.waitForCancellation(execution)) return;
       if (outcome?.status === "failed") {
         await this.failTask(taskId, outcome.failure, "provision_task");
@@ -395,11 +366,9 @@ export class TaskService implements TaskServicePort {
         return;
       }
 
-      // Keep the phase 5 provisioning seam usable with deliberately narrow
-      // test doubles. The production SandboxService supplies both methods.
-      if (!this.sandbox.diff) return;
-
-      if (!(await this.startRunning(taskId))) {
+      if (
+        !(await this.startTask(taskId, "running", "runningAt", "task_running"))
+      ) {
         await this.stopSandbox(sandboxId);
         return;
       }
@@ -413,25 +382,19 @@ export class TaskService implements TaskServicePort {
       });
       if (await this.waitForCancellation(execution)) return;
 
-      const diffResult = await this.sandbox.diff.call(this.sandbox, sandboxId);
+      const diffResult = await this.sandbox.diff(sandboxId);
       if (await this.waitForCancellation(execution)) return;
-      const summary = runResult.summary ?? null;
+      const summary = runResult.summary;
 
       if (!(await this.completeTask(taskId, diffResult.diff, summary))) {
         await this.stopSandbox(sandboxId);
         return;
       }
 
-      // The task result is durable before cleanup starts. A cleanup failure
-      // must not turn an already completed task back into a failed one.
       await this.stopSandbox(sandboxId);
     } catch (error) {
       if (await this.waitForCancellation(execution)) return;
 
-      // The asynchronous run must not become an unhandled rejection. Any
-      // known or unexpected runner/result error is represented as a terminal
-      // task failure, and failure persistence is best effort if the database
-      // itself is unavailable.
       await this.failTask(
         taskId,
         taskFailure(error, {
@@ -456,17 +419,11 @@ export class TaskService implements TaskServicePort {
     try {
       let diff = "";
 
-      // Capture before stopping: SandboxService.diff can still read a ready or
-      // stopping workspace, while cleanup may remove the container entirely.
-      if (execution.sandboxId && this.sandbox.diff) {
+      if (execution.sandboxId) {
         try {
-          diff = (
-            await this.sandbox.diff.call(this.sandbox, execution.sandboxId)
-          ).diff;
+          diff = (await this.sandbox.diff(execution.sandboxId)).diff;
         } catch {
-          // A sandbox that is still being provisioned or has already died has
-          // no readable workspace. The cancellation result remains authoritative
-          // with an empty diff in that case.
+          diff = "";
         }
       }
 
@@ -475,8 +432,6 @@ export class TaskService implements TaskServicePort {
       execution.cancellationCompleted = true;
       completed = true;
     } finally {
-      // A recovered cancellation has no runTask finally block to remove its
-      // registry entry. Normal executions remove themselves from runTask.
       if (
         completed &&
         (execution.runPromise === undefined || execution.runFinished) &&
@@ -536,27 +491,31 @@ export class TaskService implements TaskServicePort {
   }
 
   private async stopSandbox(sandboxId: string): Promise<void> {
-    if (!sandboxId || !this.sandbox.stop) return;
+    if (!sandboxId) return;
     try {
-      await this.sandbox.stop.call(this.sandbox, sandboxId);
+      await this.sandbox.stop(sandboxId);
     } catch {
-      // Cleanup is best effort; task cancellation/result persistence is
-      // authoritative even when the container is already gone.
+      return;
     }
   }
 
-  private async startProvisioning(taskId: string): Promise<boolean> {
-    const event = await runQuery("start_task_provisioning", { taskId }, () =>
+  private async startTask(
+    taskId: string,
+    status: "provisioning" | "running",
+    timestamp: "provisioningAt" | "runningAt",
+    type: "task_provisioning_started" | "task_running",
+  ): Promise<boolean> {
+    const event = await runQuery(`start_task_${status}`, { taskId }, () =>
       this.prisma.$transaction(async (tx) => {
         const task = await tx.task.findUnique({
           where: { id: taskId },
           select: { status: true },
         });
         if (!task) throw notFound("task_not_found", "Task was not found");
-        if (!canTransition(task.status, "provisioning")) {
+        if (!canTransition(task.status, status)) {
           throw new ServiceError(
             "invalid_task_transition",
-            `Cannot transition task from ${task.status} to provisioning`,
+            `Cannot transition task from ${task.status} to ${status}`,
             409,
           );
         }
@@ -564,50 +523,12 @@ export class TaskService implements TaskServicePort {
         const now = new Date();
         const claimed = await tx.task.updateMany({
           where: { id: taskId, status: task.status },
-          data: { status: "provisioning", provisioningAt: now },
+          data: { status, [timestamp]: now },
         });
         if (claimed.count === 0) return null;
         return this.events.appendInTransaction(tx, {
           streamId: taskId,
-          type: "task_provisioning_started",
-          producerService: "task",
-          producerId: taskId,
-          taskId,
-          correlationId: randomUUID(),
-          payload: {},
-        });
-      }),
-    );
-    if (!event) return false;
-    this.publish(event);
-    return true;
-  }
-
-  private async startRunning(taskId: string): Promise<boolean> {
-    const event = await runQuery("start_task_running", { taskId }, () =>
-      this.prisma.$transaction(async (tx) => {
-        const task = await tx.task.findUnique({
-          where: { id: taskId },
-          select: { status: true },
-        });
-        if (!task) throw notFound("task_not_found", "Task was not found");
-        if (!canTransition(task.status, "running")) {
-          throw new ServiceError(
-            "invalid_task_transition",
-            `Cannot transition task from ${task.status} to running`,
-            409,
-          );
-        }
-
-        const now = new Date();
-        const claimed = await tx.task.updateMany({
-          where: { id: taskId, status: task.status },
-          data: { status: "running", runningAt: now },
-        });
-        if (claimed.count === 0) return null;
-        return this.events.appendInTransaction(tx, {
-          streamId: taskId,
-          type: "task_running",
+          type,
           producerService: "task",
           producerId: taskId,
           taskId,
@@ -768,7 +689,6 @@ export const taskService = new TaskService(
   prisma,
   taskServiceEvents,
   sandboxService,
-  taskServiceConfig,
   taskServiceRunner,
   publishTaskEvent,
 );

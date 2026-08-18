@@ -4,10 +4,10 @@ import {
   CommandOutputLimiter,
   normalizeCommandRequest,
   splitOutput,
-  takeUtf8Prefix,
   CommandExecutionService,
 } from "../src/services/sandbox/command-execution";
 import { ServiceError } from "../src/shared/errors";
+import { takeUtf8Prefix } from "../src/shared/utf8";
 import type { Config } from "../src/config";
 import type { EventStore } from "../src/services/events/event-store";
 import type { SandboxRuntime } from "../src/services/sandbox/runtime";
@@ -127,7 +127,10 @@ describe("command execution rules", () => {
           _cwd: string,
           _env: Record<string, string>,
           _timeout: number,
-          onOutput: (output: { stream: "stdout"; chunk: string }) => Promise<void>,
+          onOutput: (output: {
+            stream: "stdout";
+            chunk: string;
+          }) => Promise<void>,
         ) => {
           await onOutput({ stream: "stdout", chunk: "hello\n" });
           return {
@@ -140,10 +143,13 @@ describe("command execution rules", () => {
       ),
     } as unknown as SandboxRuntime;
     const events = {
-      appendInTransaction: vi.fn(async (_tx: unknown, input: { type: PublicEvent["type"] }) =>
+      appendInTransaction: vi.fn(
+        async (_tx: unknown, input: { type: PublicEvent["type"] }) =>
+          event(input.type),
+      ),
+      append: vi.fn(async (input: { type: PublicEvent["type"] }) =>
         event(input.type),
       ),
-      append: vi.fn(async (input: { type: PublicEvent["type"] }) => event(input.type)),
     } as unknown as EventStore;
     const publish = vi.fn();
     const config = {
@@ -178,10 +184,9 @@ describe("command execution rules", () => {
       1000,
       expect.any(Function),
     );
-    expect(events.appendInTransaction.mock.calls.map(([, input]) => input.type)).toEqual([
-      "command_started",
-      "command_completed",
-    ]);
+    expect(
+      events.appendInTransaction.mock.calls.map(([, input]) => input.type),
+    ).toEqual(["command_started", "command_completed"]);
     expect(events.append.mock.calls.map(([input]) => input.type)).toEqual([
       "command_output",
     ]);

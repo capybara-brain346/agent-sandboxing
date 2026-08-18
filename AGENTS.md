@@ -5,15 +5,13 @@
 These instructions apply to the repository. More specific `AGENTS.md` files
 in subdirectories override them.
 
-Read relevant package/config files and the applicable service guide before
-changing a component:
+Read relevant package/config files and the applicable service guide indexed in
+`docs/README.md` before changing a component:
 
-- Task routes/services: `docs/modules/task-service/README.md`.
-- Sandbox services/runtime: `docs/modules/sandbox-service/README.md`.
-- Event store/SSE: `docs/modules/event-service/README.md`.
-- Agent runner/tools: `docs/modules/agent-service/README.md`.
-- Frontend dashboard: `docs/modules/frontend/README.md`.
-- Product boundary and broader direction: `docs/agent-sandboxing-project.md`.
+- Before making changes, always use the project-local Ponytail skill.
+- Code must not contain comments, except required interpreter or compiler
+  directives.
+- Documentation index: `docs/README.md`.
 
 Always update the applicable service README in the same change when modifying
 that service, including changes to behavior, APIs, lifecycle, configuration,
@@ -127,8 +125,8 @@ infrastructure commands.
 
 Unless a task explicitly says otherwise, this service does not implement the
 agent loop, GitHub integration, LLM/provider credentials, authentication, or
-queues. The dashboard frontend is a separate app in `frontend/`; see
-`docs/modules/frontend/README.md`.
+queues. The dashboard frontend is a separate app in `frontend/`; see the
+Frontend guide indexed in `docs/README.md`.
 
 ## Definition of done
 

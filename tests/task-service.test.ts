@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { TaskService } from "../src/services/task/task";
+import { PlaceholderTaskRunner } from "../src/services/task/task-runner";
 import type { EventStore } from "../src/services/events/event-store";
 import type { SandboxService } from "../src/services/sandbox/sandbox";
 import type { CreateTaskRequest } from "../src/types/task.types";
@@ -38,43 +39,57 @@ describe("TaskService provisioning", () => {
     let committed = false;
     const tx = {
       task: {
-        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        create: vi.fn(
+          async ({ data }: { data: Record<string, unknown> }) => data,
+        ),
         update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
           if (typeof data.status === "string") status = data.status;
           return data;
         }),
-        updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-          if (typeof data.status === "string") status = data.status;
-          return { count: 1 };
-        }),
+        updateMany: vi.fn(
+          async ({ data }: { data: Record<string, unknown> }) => {
+            if (typeof data.status === "string") status = data.status;
+            return { count: 1 };
+          },
+        ),
         findUnique: vi.fn(async () => ({ status })),
       },
     };
     const prisma = {
-      $transaction: vi.fn(async (callback: (transaction: unknown) => unknown) => {
-        const result = await callback(tx);
-        committed = true;
-        return result;
-      }),
+      $transaction: vi.fn(
+        async (callback: (transaction: unknown) => unknown) => {
+          const result = await callback(tx);
+          committed = true;
+          return result;
+        },
+      ),
     } as unknown as PrismaClient;
+    let releaseProvisioning!: () => void;
     const sandbox = {
       createForTaskInTransaction: vi.fn(async () => ({
         sandboxId: "sbox_1",
-        status: "creating" as const,
         containerName: "sandbox-sbox_1",
-        image: "node:22",
         workspacePath: "/workspace/repo",
-        fixtureRepoPath: "./repo",
       })),
       provisionForTask: vi.fn(async () => {
         expect(committed).toBe(true);
         expect(status).toBe("provisioning");
+        await new Promise<void>((resolve) => {
+          releaseProvisioning = resolve;
+        });
         return { status: "ready" as const };
       }),
+      diff: vi.fn(async () => ({
+        sandboxId: "sbox_1",
+        diff: "",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      })),
+      stop: vi.fn(async () => undefined),
     };
     const events = {
-      appendInTransaction: vi.fn(async (_transaction: unknown, input: { type: PublicEvent["type"] }) =>
-        makeEvent(input.type, 1, "task_1", null),
+      appendInTransaction: vi.fn(
+        async (_transaction: unknown, input: { type: PublicEvent["type"] }) =>
+          makeEvent(input.type, 1, "task_1", null),
       ),
     };
     const publish = vi.fn();
@@ -82,55 +97,73 @@ describe("TaskService provisioning", () => {
       prisma,
       events as unknown as EventStore,
       sandbox as unknown as SandboxService,
+      new PlaceholderTaskRunner(),
       publish,
     );
 
     const response = await service.create(input);
-    await vi.waitFor(() => expect(sandbox.provisionForTask).toHaveBeenCalledWith("sbox_1"));
+    await vi.waitFor(() =>
+      expect(sandbox.provisionForTask).toHaveBeenCalledWith("sbox_1"),
+    );
 
     expect(response.status).toBe("created");
     expect(status).toBe("provisioning");
     expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({ type: "task_provisioning_started" }),
     );
+    releaseProvisioning();
+    await vi.waitFor(() => expect(status).toBe("completed"));
   });
 
   it("fails the task when in-process sandbox provisioning fails", async () => {
     let status = "created";
     const tx = {
       task: {
-        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        create: vi.fn(
+          async ({ data }: { data: Record<string, unknown> }) => data,
+        ),
         update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
           if (typeof data.status === "string") status = data.status;
           return data;
         }),
-        updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-          if (typeof data.status === "string") status = data.status;
-          return { count: 1 };
-        }),
+        updateMany: vi.fn(
+          async ({ data }: { data: Record<string, unknown> }) => {
+            if (typeof data.status === "string") status = data.status;
+            return { count: 1 };
+          },
+        ),
         findUnique: vi.fn(async () => ({ status })),
       },
     };
     const prisma = {
-      $transaction: vi.fn(async (callback: (transaction: unknown) => unknown) => callback(tx)),
+      $transaction: vi.fn(async (callback: (transaction: unknown) => unknown) =>
+        callback(tx),
+      ),
     } as unknown as PrismaClient;
     const sandbox = {
       createForTaskInTransaction: vi.fn(async () => ({
         sandboxId: "sbox_1",
-        status: "creating" as const,
         containerName: "sandbox-sbox_1",
-        image: "node:22",
         workspacePath: "/workspace/repo",
-        fixtureRepoPath: "./repo",
       })),
       provisionForTask: vi.fn(async () => ({
         status: "failed" as const,
-        failure: { code: "fixture_missing", message: "Local fixture repo was not found" },
+        failure: {
+          code: "fixture_missing",
+          message: "Local fixture repo was not found",
+        },
       })),
+      diff: vi.fn(async () => ({
+        sandboxId: "sbox_1",
+        diff: "",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      })),
+      stop: vi.fn(async () => undefined),
     };
     const events = {
-      appendInTransaction: vi.fn(async (_transaction: unknown, input: { type: PublicEvent["type"] }) =>
-        makeEvent(input.type, 1, "task_1", null),
+      appendInTransaction: vi.fn(
+        async (_transaction: unknown, input: { type: PublicEvent["type"] }) =>
+          makeEvent(input.type, 1, "task_1", null),
       ),
     };
     const publish = vi.fn();
@@ -138,6 +171,7 @@ describe("TaskService provisioning", () => {
       prisma,
       events as unknown as EventStore,
       sandbox as unknown as SandboxService,
+      new PlaceholderTaskRunner(),
       publish,
     );
 
@@ -173,6 +207,8 @@ describe("TaskService create", () => {
           calls.push("task.update");
           return {};
         }),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findUnique: vi.fn(async () => ({ status: "created" as const })),
       },
     };
     const sandbox = {
@@ -180,7 +216,7 @@ describe("TaskService create", () => {
         async (
           _transaction: unknown,
           sandboxInput: { fixtureRepoPath?: string; image?: string },
-          options: { taskId: string },
+          _options: { taskId: string },
         ) => {
           calls.push("sandbox.create");
           expect(sandboxInput).toEqual({
@@ -189,15 +225,18 @@ describe("TaskService create", () => {
           });
           return {
             sandboxId: "sbox_1",
-            status: "creating" as const,
             containerName: "sandbox-sbox_1",
-            image: "node:22",
             workspacePath: "/workspace/repo",
-            fixtureRepoPath: "./repo",
-            taskId: options.taskId,
           };
         },
       ),
+      provisionForTask: vi.fn(async () => ({ status: "ready" as const })),
+      diff: vi.fn(async () => ({
+        sandboxId: "sbox_1",
+        diff: "",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      })),
+      stop: vi.fn(async () => undefined),
     };
     const events = {
       appendInTransaction: vi.fn(
@@ -220,11 +259,13 @@ describe("TaskService create", () => {
       ),
     };
     const prisma = {
-      $transaction: vi.fn(async (callback: (transaction: unknown) => unknown) => {
-        const result = await callback(tx);
-        committed = true;
-        return result;
-      }),
+      $transaction: vi.fn(
+        async (callback: (transaction: unknown) => unknown) => {
+          const result = await callback(tx);
+          committed = true;
+          return result;
+        },
+      ),
     } as unknown as PrismaClient;
     const publish = vi.fn((event: PublicEvent) => {
       expect(committed).toBe(true);
@@ -234,6 +275,7 @@ describe("TaskService create", () => {
       prisma,
       events as unknown as EventStore,
       sandbox as unknown as SandboxService,
+      new PlaceholderTaskRunner(),
       publish,
     );
 
@@ -287,6 +329,7 @@ describe("TaskService create", () => {
       prisma,
       {} as EventStore,
       {} as SandboxService,
+      new PlaceholderTaskRunner(),
       publish,
     );
 

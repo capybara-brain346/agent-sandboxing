@@ -16,8 +16,9 @@ import type {
   CommandStartResult,
 } from "../../types/sandbox.types";
 import type { PublicEvent } from "../../types/event.types";
-import { ServiceError, notFound } from "../../shared/errors";
+import { safeError, ServiceError, notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
+import { takeUtf8Prefix } from "../../shared/utf8";
 import { isWorkspacePath, workspaceRoot } from "./workspace";
 import type { EventStore } from "../events/event-store";
 import type { SandboxRuntime } from "./runtime";
@@ -42,20 +43,6 @@ export function splitOutput(text: string, maxBytes = 16_384): string[] {
 
   if (current) out.push(current);
   return out;
-}
-
-export function takeUtf8Prefix(text: string, maxBytes: number): string {
-  let result = "";
-  let bytesUsed = 0;
-
-  for (const char of text) {
-    const bytes = Buffer.byteLength(char);
-    if (bytesUsed + bytes > maxBytes) break;
-    result += char;
-    bytesUsed += bytes;
-  }
-
-  return result;
 }
 
 const isUniqueConstraintError = (error: unknown, name: string): boolean => {
@@ -267,13 +254,10 @@ export class CommandExecutionService {
     taskId: string,
     commandId: string,
   ): Promise<CommandStatusResult> {
-    const command = await runQuery(
-      "get_command",
-      { taskId, commandId },
-      () =>
-        this.prisma.command.findFirst({
-          where: { id: commandId, sandbox: { taskId } },
-        }),
+    const command = await runQuery("get_command", { taskId, commandId }, () =>
+      this.prisma.command.findFirst({
+        where: { id: commandId, sandbox: { taskId } },
+      }),
     );
     if (!command) throw notFound("command_not_found", "Command was not found");
     return {
@@ -362,7 +346,7 @@ export class CommandExecutionService {
       );
       this.publish(event);
     } catch (error) {
-      const safe = this.safeError(error, "command");
+      const safe = safeError(error, "command");
       await runQuery("mark_command_failed", { taskId, commandId }, () =>
         this.prisma.$transaction(async (tx) => {
           await tx.command.update({
@@ -405,17 +389,5 @@ export class CommandExecutionService {
       correlationId: randomUUID(),
     });
     this.publish(event);
-  }
-
-  private safeError(
-    error: unknown,
-    operation: string,
-  ): { code: string; message: string; operation: string; retryable: boolean } {
-    const message =
-      error instanceof ServiceError
-        ? error.message
-        : "Sandbox runtime operation failed";
-    const code = error instanceof ServiceError ? error.code : "unknown";
-    return { code, message, operation, retryable: false };
   }
 }

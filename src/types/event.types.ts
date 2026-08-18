@@ -44,7 +44,6 @@ export const EVENT_PRODUCER_SERVICES = [
 export const eventProducerServiceSchema = z.enum(EVENT_PRODUCER_SERVICES);
 export type EventProducerService = (typeof EVENT_PRODUCER_SERVICES)[number];
 
-/** The durable, product-facing representation of an event. */
 export type PublicEvent = {
   id: string;
   streamId: string;

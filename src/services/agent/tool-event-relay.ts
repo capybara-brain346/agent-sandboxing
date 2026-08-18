@@ -52,6 +52,8 @@ const duration = (value: number): number =>
 
 export class ToolEventRelay {
   private appendQueue: Promise<void> = Promise.resolve();
+  private readonly callCounts = new Map<string, number>();
+  private readonly pendingCorrelations = new Map<string, string[]>();
 
   constructor(private readonly dependencies: ToolEventRelayDependencies) {}
 
@@ -69,13 +71,14 @@ export class ToolEventRelay {
     context: ToolEventContext,
     event: ToolExecutionStartEvent,
   ): Promise<void> {
+    const correlationId = this.startCorrelation(event.callId);
     await this.appendAndPublish({
       taskId: context.taskId,
       sandboxId: context.sandboxId,
       type: "agent_tool_call",
       producerService: "agent",
       producerId: context.taskId,
-      correlationId: event.callId,
+      correlationId,
       payload: {
         tool_name: event.toolCall.toolName,
         args: safeArgs(event.toolCall.input),
@@ -87,6 +90,7 @@ export class ToolEventRelay {
     context: ToolEventContext,
     event: ToolExecutionEndEvent,
   ): Promise<void> {
+    const correlationId = this.endCorrelation(event.callId);
     const output =
       event.toolOutput.type === "tool-result"
         ? event.toolOutput.output
@@ -103,7 +107,7 @@ export class ToolEventRelay {
       type: "agent_tool_result",
       producerService: "agent",
       producerId: context.taskId,
-      correlationId: event.callId,
+      correlationId,
       payload: {
         tool_name: event.toolCall.toolName,
         result_snippet: bounded.value,
@@ -128,5 +132,22 @@ export class ToolEventRelay {
     });
     this.appendQueue = next.catch(() => undefined);
     return next;
+  }
+
+  private startCorrelation(callId: string): string {
+    const count = (this.callCounts.get(callId) ?? 0) + 1;
+    this.callCounts.set(callId, count);
+    const correlationId = count === 1 ? callId : `${callId}:${count}`;
+    const pending = this.pendingCorrelations.get(callId) ?? [];
+    pending.push(correlationId);
+    this.pendingCorrelations.set(callId, pending);
+    return correlationId;
+  }
+
+  private endCorrelation(callId: string): string {
+    const pending = this.pendingCorrelations.get(callId);
+    const correlationId = pending?.shift() ?? callId;
+    if (pending?.length === 0) this.pendingCorrelations.delete(callId);
+    return correlationId;
   }
 }

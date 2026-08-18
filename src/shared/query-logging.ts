@@ -17,8 +17,6 @@ export const logQueryFailure = (
     error: describeQueryError(error),
   });
 
-// ServiceErrors are expected/already-classified (not found, conflict, etc.) and
-// are skipped here, mirroring the top-level error handler's own logging skip.
 export const runQuery = async <T>(
   operation: string,
   context: Record<string, unknown>,
