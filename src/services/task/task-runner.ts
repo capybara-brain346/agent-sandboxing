@@ -9,6 +9,8 @@ export type TaskRunContext = {
 
 export type TaskRunResult = {
   summary: string | null;
+  /** Raw, unparsed worker report (e.g. the CodeWorker's structured JSON result) for artifact storage. */
+  workerReport?: string | null;
 };
 
 export type TaskRunner = {

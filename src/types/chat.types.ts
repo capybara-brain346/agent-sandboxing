@@ -10,6 +10,9 @@ import {
   type TaskFailure,
   type TaskStatus,
 } from "./task.types";
+import type { ArtifactPointer } from "./artifact.types";
+
+export type { ArtifactPointer } from "./artifact.types";
 
 export const CHAT_SESSION_STATUSES = ["active"] as const;
 export type ChatSessionStatus = (typeof CHAT_SESSION_STATUSES)[number];
@@ -121,15 +124,6 @@ export type RunResult = {
   failure: TaskFailure | null;
   createdAt: string;
   completedAt: string;
-};
-
-export type ArtifactPointer = {
-  artifactId: string;
-  kind: string;
-  contentType: string;
-  byteSize: number;
-  truncated: boolean;
-  redacted: boolean;
 };
 
 export type RunCancellationResponse =

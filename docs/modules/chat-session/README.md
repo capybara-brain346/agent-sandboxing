@@ -62,6 +62,7 @@ GET    /chat-sessions/:sessionId/runs/:runId/result
 DELETE /chat-sessions/:sessionId/runs/:runId
 GET    /chat-sessions/:sessionId/events
 GET    /chat-sessions/:sessionId/runs/:runId/events
+GET    /chat-sessions/:sessionId/artifacts/:artifactId
 ```
 
 Session creation accepts a strict `repo` object with a `fixture` or `github`
@@ -99,6 +100,76 @@ delivery contract.
 Lifecycle state changes and their events are persisted in one transaction. The
 `SseHub` receives events only after commit.
 
+## Phase 5: orchestrator-worker harness
+
+`RunService` no longer hands the raw user message straight to the agent tool
+loop. It hands the `RunOrchestrator`
+([`src/services/chat/run-orchestrator.ts`](../../../src/services/chat/run-orchestrator.ts)),
+which implements the same `TaskRunner` interface so it drops into `RunService`
+unchanged:
+
+- `SessionContextBuilder` loads a bounded, explicitly-selected context: repo
+  identity, the durable session summary, the last `RECENT_MESSAGE_LIMIT` chat
+  messages, and a compact workspace snapshot (last run status + changed-file
+  hints parsed from its diff). It never reads raw event/command history.
+- `classifyMessage` is a small heuristic that reads a message as a
+  `clarification` only when it is a plain question with no action verb;
+  everything else defaults to `code`.
+- On a clarification turn, the orchestrator answers directly
+  (`OrchestratorResponder`: `ModelResponder` in production, `StaticResponder`
+  in tests) and never invokes the worker — the orchestrator never edits code.
+- On a code turn, `buildWorkerBrief` composes a focused brief (session
+  summary + workspace hint + the instruction, not the chat transcript) and
+  hands it to `CodeWorkerRunner`, which wraps the existing agent tool loop
+  (`taskServiceRunner`) and parses its free text into a schema-validated
+  `WorkerResult` (`status`, `summary`, `changedFiles`, `testsRun`, `blockers`,
+  `suggestedNextStep`). A worker that skips the JSON fence still produces a
+  usable `completed` result from its free text; only an explicit
+  `blocked`/`failed` status changes the run outcome.
+- If the worker reports `blocked`, the orchestrator retries once with a
+  narrow correction brief built from the worker's blockers/suggested next
+  step (`DEFAULT_MAX_WORKER_ATTEMPTS`, currently 2). If it still isn't
+  `completed` after the attempt budget, `blocked` becomes an actionable
+  assistant message and `failed` becomes a thrown `ServiceError` so
+  `RunService` marks the run failed instead of silently completing it.
+- After every turn the orchestrator rewrites (not appends to) the session's
+  bounded `ChatSession.summary` via `SessionSummaryService`: `Objective` is
+  set once and carried forward, `State`/`LastResult`/`Blockers` reflect only
+  the current turn, and `Files` is a capped union across turns. The rewrite
+  is trimmed under a 4 KB budget by dropping the oldest files first.
+
+## Phase 6: artifact handling
+
+Operational output is stored outside the chat/prompt path in `Artifact` rows
+via `ArtifactStore`
+([`src/services/artifacts/artifact-store.ts`](../../../src/services/artifacts/artifact-store.ts)).
+`ArtifactStore.create` caps content at `ARTIFACT_MAX_BYTES` (64 KB), scrubs
+common secret shapes (API keys, bearer tokens, AWS access keys, PEM private
+keys) before writing, and returns a bounded pointer + preview
+(`ARTIFACT_PREVIEW_MAX_BYTES`, 500 bytes) — never the full body. Full content
+is only readable through `ArtifactStore.get`/`GET
+/chat-sessions/:sessionId/artifacts/:artifactId`, scoped to the owning
+session.
+
+Callers:
+
+- `RunService.completeRun`/`failRun` record a `diff` artifact (when the diff
+  is non-empty) and a `worker_report` artifact (the orchestrator's raw,
+  unparsed `WorkerResult` JSON, carried through `TaskRunResult.workerReport`
+  — including on a `worker_failed` `ServiceError`, via `error.details`) and
+  emit an `artifact_created` event on both the run and session streams for
+  each one.
+- `ToolEventRelay` stores the full tool result as a `tool_output` artifact
+  only when the session-scoped 500-byte event snippet would otherwise
+  truncate it, and attaches the artifact id/byte size to the
+  `agent_tool_result` event payload.
+- `ChatSessionService.result()` already includes `Task.artifacts` pointers
+  regardless of event wiring, so a `worker_report` artifact is visible on the
+  run result even when the run ends in `worker_failed`.
+
+`SessionContextBuilder` never reads the `Artifact` table, so artifacts cannot
+enter the orchestrator's prompt context by default.
+
 ## Compatibility
 
 The old `/tasks` routes remain as a temporary compatibility surface. They emit
@@ -111,6 +182,8 @@ Run the focused API tests and repository checks from the project root:
 
 ```bash
 npm test -- tests/chat-routes.test.ts tests/chat-session-service.test.ts tests/run-service.test.ts tests/sandbox-service.test.ts
+npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/code-worker-runner.test.ts tests/message-classifier.test.ts tests/harness-integration.test.ts
+npm test -- tests/artifact-store.test.ts tests/agent-tool-relay.test.ts
 npm run typecheck
 npm run lint
 npm test

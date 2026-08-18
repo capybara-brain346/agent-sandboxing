@@ -25,6 +25,7 @@ import {
   ToolEventRelay,
   type ToolEventRelayDependencies,
 } from "./tool-event-relay";
+import type { ArtifactRecorder } from "../artifacts/artifact-store";
 
 export const AGENT_SYSTEM_PROMPT = [
   "You are a careful coding agent working on a task-owned repository.",
@@ -51,6 +52,7 @@ export type AgentRunnerDependencies = {
   events: Pick<EventStore, "append">;
   model: LanguageModel;
   publish: PublishEvent;
+  artifacts?: ArtifactRecorder;
 };
 
 class SerialExecutor {
@@ -115,6 +117,9 @@ export class AgentRunner implements TaskRunner {
     const relay = new ToolEventRelay({
       events: this.dependencies.events,
       publish: this.dependencies.publish,
+      ...(this.dependencies.artifacts
+        ? { artifacts: this.dependencies.artifacts }
+        : {}),
     } satisfies ToolEventRelayDependencies);
     const callbacks = relay.callbacks<typeof tools>({
       taskId: context.taskId,

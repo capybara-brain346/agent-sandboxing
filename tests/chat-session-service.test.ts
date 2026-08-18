@@ -209,4 +209,31 @@ describe("ChatSessionService", () => {
       details: { taskRunId: "run_existing" },
     });
   });
+
+  it("delegates artifact fetches to the injected artifact store", async () => {
+    const prisma = {} as unknown as PrismaClient;
+    const get = vi.fn(async (sessionId: string, artifactId: string) => ({
+      artifactId,
+      sessionId,
+      runId: "run_1",
+      kind: "diff",
+      contentType: "text/x-diff",
+      content: "diff --git a/x b/x",
+      byteSize: 19,
+      truncated: false,
+      redacted: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }));
+    const service = new ChatSessionService(
+      prisma,
+      {} as EventStore,
+      undefined,
+      undefined,
+      { get },
+    );
+
+    const artifact = await service.getArtifact("chat_1", "art_1");
+    expect(get).toHaveBeenCalledWith("chat_1", "art_1");
+    expect(artifact.content).toBe("diff --git a/x b/x");
+  });
 });

@@ -256,6 +256,22 @@ chatSessionRouter.get(
 );
 
 chatSessionRouter.get(
+  "/chat-sessions/:sessionId/artifacts/:artifactId",
+  async (request, response, next) => {
+    try {
+      response.json(
+        await chatSessionService.getArtifact(
+          request.params.sessionId,
+          request.params.artifactId,
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+chatSessionRouter.get(
   "/chat-sessions/:sessionId/runs/:runId/events",
   async (request, response, next) => {
     try {

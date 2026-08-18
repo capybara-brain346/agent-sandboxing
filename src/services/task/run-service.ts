@@ -1,14 +1,19 @@
 import { randomUUID } from "node:crypto";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { ServiceError, notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
 import { logger } from "../../logger";
 import { EventStore } from "../events/event-store";
+import {
+  noopArtifactRecorder,
+  type ArtifactRecorder,
+} from "../artifacts/artifact-store";
 import type { SessionSandboxCollaborator } from "../sandbox/sandbox";
 import type { PublicEvent } from "../../types/event.types";
 import type { TaskFailure } from "../../types/task.types";
+import type { ArtifactPreview } from "../../types/artifact.types";
 import { canTransition } from "./task";
-import type { TaskRunner } from "./task-runner";
+import type { TaskRunner, TaskRunResult } from "./task-runner";
 
 type PublishEvent = (event: PublicEvent) => void;
 
@@ -34,6 +39,12 @@ const runFailure = (error: unknown, fallback: TaskFailure): TaskFailure => ({
   message: error instanceof ServiceError ? error.message : fallback.message,
 });
 
+const workerReportFrom = (error: unknown): string | null => {
+  if (!(error instanceof ServiceError)) return null;
+  const report = error.details.workerReport;
+  return typeof report === "string" ? report : null;
+};
+
 /**
  * Owns run-owned execution against a session-owned sandbox: sandbox
  * provisioning, worker invocation, diff/result capture, assistant message
@@ -49,6 +60,7 @@ export class RunService {
     private readonly sandbox: SessionSandboxCollaborator,
     private readonly runner: TaskRunner,
     private readonly publish: PublishEvent = () => undefined,
+    private readonly artifacts: ArtifactRecorder = noopArtifactRecorder,
   ) {}
 
   createRunForMessage(
@@ -112,7 +124,13 @@ export class RunService {
       );
       if (await this.waitForCancellation(execution)) return;
       if (outcome.status === "failed") {
-        await this.failRun(sessionId, runId, outcome.failure, "provision_run");
+        await this.failRun(
+          sessionId,
+          runId,
+          outcome.failure,
+          "provision_run",
+          null,
+        );
         return;
       }
 
@@ -136,12 +154,7 @@ export class RunService {
       );
       if (await this.waitForCancellation(execution)) return;
 
-      await this.completeRun(
-        sessionId,
-        runId,
-        diffResult.diff,
-        runResult.summary,
-      );
+      await this.completeRun(sessionId, runId, diffResult.diff, runResult);
     } catch (error) {
       if (await this.waitForCancellation(execution)) return;
       await this.failRun(
@@ -149,6 +162,7 @@ export class RunService {
         runId,
         runFailure(error, { code: "run_failed", message: "Run failed" }),
         "run_run",
+        workerReportFrom(error),
       ).catch(() => undefined);
     } finally {
       execution.runFinished = true;
@@ -298,13 +312,102 @@ export class RunService {
     return updated.count > 0;
   }
 
+  private async recordArtifacts(
+    sessionId: string,
+    runId: string,
+    diff: string,
+    workerReport: string | null | undefined,
+  ): Promise<ArtifactPreview[]> {
+    const jobs: Array<Promise<ArtifactPreview>> = [];
+    if (diff.trim())
+      jobs.push(
+        this.artifacts.create({
+          sessionId,
+          runId,
+          kind: "diff",
+          contentType: "text/x-diff",
+          content: diff,
+        }),
+      );
+    if (workerReport)
+      jobs.push(
+        this.artifacts.create({
+          sessionId,
+          runId,
+          kind: "worker_report",
+          contentType: "application/json",
+          content: workerReport,
+        }),
+      );
+    if (jobs.length === 0) return [];
+    try {
+      return await Promise.all(jobs);
+    } catch (error) {
+      logger.error("run_artifact_capture_failed", {
+        runId,
+        error: error instanceof Error ? error.message : error,
+      });
+      return [];
+    }
+  }
+
+  private artifactCreatedEvents(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    runId: string,
+    artifacts: ArtifactPreview[],
+  ): Array<Promise<PublicEvent>> {
+    return artifacts.flatMap((artifact) => {
+      const payload = {
+        artifact_id: artifact.artifactId,
+        kind: artifact.kind,
+        content_type: artifact.contentType,
+        byte_size: artifact.byteSize,
+        truncated: artifact.truncated,
+        redacted: artifact.redacted,
+        preview: artifact.preview,
+      };
+      return [
+        this.events.appendRunEventInTransaction(tx, {
+          sessionId,
+          runId,
+          artifactId: artifact.artifactId,
+          type: "artifact_created",
+          producerService: "task",
+          producerId: artifact.artifactId,
+          correlationId: randomUUID(),
+          domain: "artifact",
+          payload,
+        }),
+        this.events.appendSessionEventInTransaction(tx, {
+          sessionId,
+          runId,
+          artifactId: artifact.artifactId,
+          type: "artifact_created",
+          producerService: "task",
+          producerId: artifact.artifactId,
+          correlationId: randomUUID(),
+          domain: "artifact",
+          payload,
+        }),
+      ];
+    });
+  }
+
   private async completeRun(
     sessionId: string,
     runId: string,
     diff: string,
-    summary: string | null,
+    runResult: TaskRunResult,
   ): Promise<boolean> {
+    const { summary } = runResult;
     const messageId = msgId();
+    const artifacts = await this.recordArtifacts(
+      sessionId,
+      runId,
+      diff,
+      runResult.workerReport,
+    );
     const events = await runQuery(
       "complete_chat_run",
       { sessionId, runId },
@@ -416,6 +519,9 @@ export class RunService {
             runResultReady,
             sessionCompleted,
             sessionResultReady,
+            ...(await Promise.all(
+              this.artifactCreatedEvents(tx, sessionId, runId, artifacts),
+            )),
           ];
         }),
     );
@@ -428,7 +534,11 @@ export class RunService {
     runId: string,
     failure: TaskFailure,
     operation: string,
+    workerReport: string | null,
   ): Promise<boolean> {
+    const artifacts = workerReport
+      ? await this.recordArtifacts(sessionId, runId, "", workerReport)
+      : [];
     const events = await runQuery(
       "fail_chat_run",
       { sessionId, runId, code: failure.code, operation },
@@ -515,7 +625,15 @@ export class RunService {
                 agent_summary_present: false,
               },
             });
-          return [runFailed, runResultReady, sessionFailed, sessionResultReady];
+          return [
+            runFailed,
+            runResultReady,
+            sessionFailed,
+            sessionResultReady,
+            ...(await Promise.all(
+              this.artifactCreatedEvents(tx, sessionId, runId, artifacts),
+            )),
+          ];
         }),
     );
     for (const event of events) this.publish(event);

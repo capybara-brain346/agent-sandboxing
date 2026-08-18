@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { RunService } from "../src/services/task/run-service";
+import { ServiceError } from "../src/shared/errors";
 import type { EventStore } from "../src/services/events/event-store";
 import type { SessionSandboxCollaborator } from "../src/services/sandbox/sandbox";
+import type { ArtifactRecorder } from "../src/services/artifacts/artifact-store";
 import type { PublicEvent } from "../src/types/event.types";
 import type { TaskStatus } from "../src/types/task.types";
 import type {
@@ -23,9 +25,16 @@ type Harness = {
     ensureReadyForSession: ReturnType<typeof vi.fn>;
     diffForSession: ReturnType<typeof vi.fn>;
   };
-  events: { type: PublicEvent["type"]; scope: "session" | "run" }[];
+  events: {
+    type: PublicEvent["type"];
+    scope: "session" | "run";
+    artifactId?: string | null;
+  }[];
   chatMessages: Array<{ id: string; role: string; content: string }>;
   publish: ReturnType<typeof vi.fn>;
+  artifacts: ArtifactRecorder & {
+    create: ReturnType<typeof vi.fn>;
+  };
 };
 
 const makeHarness = (
@@ -105,9 +114,13 @@ const makeHarness = (
     (scope: "session" | "run") =>
     async (
       _tx: unknown,
-      input: { type: PublicEvent["type"] },
+      input: { type: PublicEvent["type"]; artifactId?: string | null },
     ): Promise<PublicEvent> => {
-      events.push({ type: input.type, scope });
+      events.push({
+        type: input.type,
+        scope,
+        artifactId: input.artifactId ?? null,
+      });
       return {
         id: `evt_${sequence++}`,
         streamId: scope === "session" ? sessionId : runId,
@@ -117,7 +130,7 @@ const makeHarness = (
         runId,
         taskId: null,
         messageId: null,
-        artifactId: null,
+        artifactId: input.artifactId ?? null,
         sandboxId: null,
         commandId: null,
         sequence,
@@ -153,15 +166,37 @@ const makeHarness = (
   };
 
   const publish = vi.fn();
+  let artifactSequence = 0;
+  const artifacts = {
+    create: vi.fn(async (input: { kind: string }) => ({
+      artifactId: `art_${artifactSequence++}`,
+      kind: input.kind,
+      contentType: "text/plain",
+      byteSize: 10,
+      truncated: false,
+      redacted: false,
+      preview: "preview",
+    })),
+  };
   const service = new RunService(
     prisma,
     eventStore,
     sandbox as unknown as SessionSandboxCollaborator,
     runner,
     publish,
+    artifacts,
   );
 
-  return { service, status, session, sandbox, events, chatMessages, publish };
+  return {
+    service,
+    status,
+    session,
+    sandbox,
+    events,
+    chatMessages,
+    publish,
+    artifacts,
+  };
 };
 
 describe("RunService", () => {
@@ -265,5 +300,65 @@ describe("RunService", () => {
 
     expect(harness.status.value).toBe("cancelled");
     expect(harness.session.activeRunId).toBeNull();
+  });
+
+  it("stores a diff artifact and emits artifact_created on both streams", async () => {
+    const runner: TaskRunner = {
+      run: vi.fn(async () => ({ summary: "Fixed it" })),
+    };
+    const harness = makeHarness(runner);
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
+    await vi.waitFor(() => expect(harness.status.value).toBe("completed"));
+
+    expect(harness.artifacts.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId,
+        runId,
+        kind: "diff",
+        content: "diff --git a b",
+      }),
+    );
+    const artifactEvents = harness.events.filter(
+      (event) => event.type === "artifact_created",
+    );
+    expect(artifactEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "run",
+          artifactId: expect.any(String),
+        }),
+        expect.objectContaining({
+          scope: "session",
+          artifactId: expect.any(String),
+        }),
+      ]),
+    );
+  });
+
+  it("stores a worker_report artifact when a run fails with a raw report attached", async () => {
+    const runner: TaskRunner = {
+      run: vi.fn(async () => {
+        throw new ServiceError("worker_failed", "CodeWorker failed", 502, {
+          workerReport: '{"status":"failed"}',
+        });
+      }),
+    };
+    const harness = makeHarness(runner);
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
+    await vi.waitFor(() => expect(harness.status.value).toBe("failed"));
+
+    expect(harness.artifacts.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId,
+        runId,
+        kind: "worker_report",
+        content: '{"status":"failed"}',
+      }),
+    );
+    expect(
+      harness.events.some((event) => event.type === "artifact_created"),
+    ).toBe(true);
   });
 });

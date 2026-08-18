@@ -25,6 +25,7 @@ export const EVENT_TYPES = [
   "command_cancelled",
   "agent_tool_call",
   "agent_tool_result",
+  "artifact_created",
   "git_diff_requested",
   "git_diff_completed",
   "cleanup_started",

@@ -1,13 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
+import { loadConfig } from "../../config";
 import { ServiceError, notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
 import { EventStore } from "../events/event-store";
 import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
-import { taskServiceRunner } from "../task/task";
+import { taskServiceArtifacts, taskServiceRunner } from "../task/task";
+import { resolveAgentModel } from "../agent/model";
+import { CodeWorkerRunner } from "../agent/code-worker-runner";
 import { RunService } from "../task/run-service";
+import { ArtifactStore } from "../artifacts/artifact-store";
+import type { ArtifactContent } from "../../types/artifact.types";
+import {
+  RunOrchestrator,
+  StaticResponder,
+  ModelResponder,
+} from "./run-orchestrator";
+import { SessionContextBuilder } from "./session-context-builder";
+import { SessionSummaryService } from "./session-summary";
 import type { PublicEvent } from "../../types/event.types";
 import type {
   ChatMessage,
@@ -227,6 +239,9 @@ export class ChatSessionService {
     private readonly events: EventStore,
     private readonly publish: PublishedEvent = (event) => sseHub.publish(event),
     private readonly runService: RunTrigger = noopRunService,
+    private readonly artifacts: Pick<ArtifactStore, "get"> = new ArtifactStore(
+      prisma,
+    ),
   ) {}
 
   async createSession(input: CreateChatSessionRequest): Promise<ChatSession> {
@@ -659,6 +674,13 @@ export class ChatSessionService {
     return this.events.listRunEvents(runId, after);
   }
 
+  async getArtifact(
+    sessionId: string,
+    artifactId: string,
+  ): Promise<ArtifactContent> {
+    return this.artifacts.get(sessionId, artifactId);
+  }
+
   private async requireSession(sessionId: string): Promise<void> {
     const session = await this.prisma.chatSession.findUnique({
       where: { id: sessionId },
@@ -702,16 +724,30 @@ export class ChatSessionService {
 
 const chatSessionEvents = new EventStore(prisma);
 const publishChatEvent = (event: PublicEvent): void => sseHub.publish(event);
+const chatHarnessConfig = loadConfig();
+const orchestratorResponder =
+  chatHarnessConfig.NODE_ENV === "test"
+    ? new StaticResponder()
+    : new ModelResponder(resolveAgentModel(chatHarnessConfig));
+const runOrchestrator = new RunOrchestrator(
+  prisma,
+  new SessionContextBuilder(prisma),
+  new SessionSummaryService(),
+  new CodeWorkerRunner(taskServiceRunner),
+  orchestratorResponder,
+);
 const chatRunService = new RunService(
   prisma,
   chatSessionEvents,
   sandboxService,
-  taskServiceRunner,
+  runOrchestrator,
   publishChatEvent,
+  taskServiceArtifacts,
 );
 export const chatSessionService = new ChatSessionService(
   prisma,
   chatSessionEvents,
   publishChatEvent,
   chatRunService,
+  taskServiceArtifacts,
 );

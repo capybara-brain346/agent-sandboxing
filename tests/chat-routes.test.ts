@@ -297,4 +297,45 @@ describe("chat session routes", () => {
     });
     expect(cancel).toHaveBeenCalledWith("chat_1", "run_1");
   });
+
+  it("fetches full artifact content on demand, scoped to the session", async () => {
+    const getArtifact = vi
+      .spyOn(chatSessionService, "getArtifact")
+      .mockResolvedValue({
+        artifactId: "art_1",
+        sessionId: "chat_1",
+        runId: "run_1",
+        kind: "diff",
+        contentType: "text/x-diff",
+        content: "diff --git a/x b/x",
+        byteSize: 19,
+        truncated: false,
+        redacted: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+
+    const response = await request(makeApp()).get(
+      "/chat-sessions/chat_1/artifacts/art_1",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      artifactId: "art_1",
+      content: "diff --git a/x b/x",
+    });
+    expect(getArtifact).toHaveBeenCalledWith("chat_1", "art_1");
+  });
+
+  it("returns not_found when the artifact does not belong to the session", async () => {
+    vi.spyOn(chatSessionService, "getArtifact").mockRejectedValue(
+      new ServiceError("artifact_not_found", "Artifact was not found", 404),
+    );
+
+    const response = await request(makeApp()).get(
+      "/chat-sessions/chat_2/artifacts/art_1",
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("artifact_not_found");
+  });
 });

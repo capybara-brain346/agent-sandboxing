@@ -23,6 +23,7 @@ import type {
 import type { PublicEvent } from "../../types/event.types";
 import { AgentRunner } from "../agent/agent-runner";
 import { resolveAgentModel } from "../agent/model";
+import { ArtifactStore } from "../artifacts/artifact-store";
 import { PlaceholderTaskRunner, type TaskRunner } from "./task-runner";
 
 type TaskSandboxCollaborator = Pick<
@@ -674,6 +675,7 @@ export class TaskService implements TaskServicePort {
 const taskServiceConfig = loadConfig();
 const taskServiceEvents = new EventStore(prisma);
 const publishTaskEvent = (event: PublicEvent): void => sseHub.publish(event);
+export const taskServiceArtifacts = new ArtifactStore(prisma);
 export const taskServiceRunner: TaskRunner =
   taskServiceConfig.NODE_ENV === "test"
     ? new PlaceholderTaskRunner()
@@ -683,6 +685,7 @@ export const taskServiceRunner: TaskRunner =
         events: taskServiceEvents,
         model: resolveAgentModel(taskServiceConfig),
         publish: publishTaskEvent,
+        artifacts: taskServiceArtifacts,
       });
 
 export const taskService = new TaskService(
