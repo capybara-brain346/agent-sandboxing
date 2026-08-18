@@ -26,6 +26,7 @@
     "ai": "^7.0.66",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "yaml": "^2.9.0",
     "zod": "^4.0.17"
   },
   "devDependencies": {

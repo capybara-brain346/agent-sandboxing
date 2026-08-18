@@ -118,6 +118,11 @@ unchanged:
 - On a clarification turn, the orchestrator answers directly
   (`OrchestratorResponder`: `ModelResponder` in production, `StaticResponder`
   in tests) and never invokes the worker — the orchestrator never edits code.
+  `ModelResponder`'s system prompt is loaded from
+  [`prompts/orchestrator.yaml`](../../../prompts/orchestrator.yaml) via
+  [`getPromptText`](../../../src/prompts/load-prompt.ts), the same versioned
+  YAML loading path used for the CodeWorker's system prompt — see
+  [Agent Service](../agent-service/README.md#system-prompt-loading).
 - On a code turn, `buildWorkerBrief` composes a focused brief (session
   summary + workspace hint + the instruction, not the chat transcript) and
   hands it to `CodeWorkerRunner`, which wraps the existing agent tool loop

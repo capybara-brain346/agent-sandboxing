@@ -26,13 +26,9 @@ import {
   type ToolEventRelayDependencies,
 } from "./tool-event-relay";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
+import { getPromptText } from "../../prompts/load-prompt";
 
-export const AGENT_SYSTEM_PROMPT = [
-  "You are a careful coding agent working on a session-owned repository.",
-  "Use the available tools to inspect and modify files under /workspace/repo.",
-  "Work only within that workspace, follow the user's instructions, and keep changes focused.",
-  "When the work is complete, respond with a concise summary of what you changed.",
-].join(" ");
+export const AGENT_SYSTEM_PROMPT = getPromptText("code-worker");
 
 const toolConfig = (config: Config): AgentToolConfig => ({
   AGENT_BASH_TIMEOUT_MS: config.AGENT_BASH_TIMEOUT_MS,

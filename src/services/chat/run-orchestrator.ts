@@ -16,6 +16,7 @@ import { classifyMessage } from "./message-classifier";
 import { buildWorkerBrief, type WorkerCorrection } from "./worker-brief";
 import type { SessionContextBuilder } from "./session-context-builder";
 import type { SessionSummaryService } from "./session-summary";
+import { getPromptText } from "../../prompts/load-prompt";
 
 export const DEFAULT_MAX_WORKER_ATTEMPTS = 2;
 
@@ -41,13 +42,7 @@ export class StaticResponder implements OrchestratorResponder {
   }
 }
 
-const ORCHESTRATOR_SYSTEM_PROMPT = [
-  "You are the orchestrator for a repo-scoped coding session.",
-  "You never edit code yourself. The user has asked a clarifying question or made a",
-  "non-actionable remark. Respond conversationally and briefly, using only the",
-  "session summary and recent messages provided. Ask a focused follow-up question",
-  "if you need more detail before code work can start.",
-].join(" ");
+const ORCHESTRATOR_SYSTEM_PROMPT = getPromptText("orchestrator");
 
 export class ModelResponder implements OrchestratorResponder {
   constructor(private readonly model: LanguageModel) {}

@@ -26,6 +26,8 @@ text into the harness's schema-validated `WorkerResult` — see the
 - [`AgentRunner`](../../../src/services/agent/agent-runner.ts) — model loop, tool registry, cancellation, and summary extraction
 - [`ToolEventRelay`](../../../src/services/agent/tool-event-relay.ts) — durable tool-call/result events and safe payloads
 - [`model.ts`](../../../src/services/agent/model.ts) — OpenRouter model resolution
+- [`load-prompt.ts`](../../../src/prompts/load-prompt.ts) — loads and validates the versioned system prompt YAML files
+- [`prompts/code-worker.yaml`](../../../prompts/code-worker.yaml) — CodeWorker's `generateText` system prompt
 - [`tools/`](../../../src/services/agent/tools/) — sandbox-proxied tool implementations and bash policy
 - [`tests/agent-runner.test.ts`](../../../tests/agent-runner.test.ts) — runner behavior and cancellation
 - [`tests/agent-tool-relay.test.ts`](../../../tests/agent-tool-relay.test.ts) — event ordering and payload bounds
@@ -83,6 +85,18 @@ An `AbortError` is re-thrown so `RunService`'s existing cancellation path owns
 the terminal `cancelled` state. Other provider/model failures become the safe
 `agent_run_failed` service error and are persisted by `RunService` as a failed
 run.
+
+## System prompt loading
+
+`AGENT_SYSTEM_PROMPT` is loaded at module load via
+`getPromptText("code-worker")`, which reads and validates
+[`prompts/code-worker.yaml`](../../../prompts/code-worker.yaml) (versioned,
+with `id`, `version`, `updated_at`, `description`, and `prompt` fields) and
+caches the parsed result. Prompt YAML files live at the repo root, not under
+`src/`, so the same `process.cwd()`-relative path resolves identically in dev
+(`tsx`) and in the esbuild-bundled production build; the runtime Docker stage
+copies `prompts/` alongside `dist/` for this reason. A malformed or missing
+prompt file fails fast at process startup rather than at request time.
 
 ## Tool event relay
 
