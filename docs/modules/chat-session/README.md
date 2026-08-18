@@ -22,8 +22,9 @@ and the session-scoped additions to
 `ChatSessionService.appendMessage` starts `RunService.createRunForMessage`
 once the message/run/lock transaction commits. `RunService` then:
 
-- provisions the session's sandbox on the first run (`SandboxService.createForSessionInTransaction`
-  - `ensureReadyForSession`) and reuses it unchanged on later runs;
+- provisions the session's sandbox on the first run
+  (`SandboxService.createForSessionInTransaction` + `ensureReadyForSession`)
+  and reuses it unchanged on later runs;
 - runs the worker (`AgentRunner`/`TaskRunner`) against that sandbox with
   `sessionId`, `runId`, and `messageId` in its context, so agent tool events
   land on the run's event stream instead of the legacy task stream;
