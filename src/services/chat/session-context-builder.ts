@@ -1,14 +1,19 @@
 import type { PrismaClient } from "@prisma/client";
 import { notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
+import { boundUtf8 } from "../../shared/utf8";
+import type { EventStore } from "../events/event-store";
 import type {
   OrchestratorChatMessage,
   OrchestratorContext,
   WorkspaceSnapshot,
 } from "../../types/harness.types";
 
-const RECENT_MESSAGE_LIMIT = 8;
+export const RECENT_MESSAGE_LIMIT = 10;
+export const COMPACTION_INTERVAL = RECENT_MESSAGE_LIMIT;
 const MAX_CHANGED_FILES_HINT = 20;
+const RECENT_TOOL_ACTIVITY_LIMIT = 5;
+const TOOL_ACTIVITY_SNIPPET_MAX_BYTES = 200;
 
 const CHANGED_FILE_LINE = /^diff --git a\/(.+?) b\/(.+)$/;
 
@@ -22,9 +27,14 @@ const extractChangedFiles = (diff: string): string[] => {
   return [...files].slice(0, MAX_CHANGED_FILES_HINT);
 };
 
-type SessionSummaryRow = { repoRef: string; summary: string | null } | null;
+type SessionSummaryRow = {
+  repoRef: string;
+  summary: string | null;
+  summaryCompactedThroughMessageCount: number;
+} | null;
 type MessageRow = { role: "user" | "assistant" | "system"; content: string };
 type LastRunRow = {
+  id: string;
   status: string;
   diff: string | null;
   agentSummary: string | null;
@@ -35,14 +45,37 @@ export type SessionContextPrismaCollaborator = Pick<
   "chatSession" | "chatMessage" | "task"
 >;
 
+export type SessionContextEventStore = Pick<EventStore, "listRunEvents">;
+
+const toolActivityLine = (event: {
+  type: string;
+  payload: Record<string, unknown>;
+}): string => {
+  const toolName =
+    typeof event.payload.tool_name === "string"
+      ? event.payload.tool_name
+      : "unknown_tool";
+  const detail =
+    event.type === "agent_tool_result"
+      ? typeof event.payload.result_snippet === "string"
+        ? event.payload.result_snippet
+        : ""
+      : JSON.stringify(event.payload.args ?? {});
+  return `${toolName}: ${boundUtf8(detail, TOOL_ACTIVITY_SNIPPET_MAX_BYTES).value}`;
+};
+
 /**
  * Builds the bounded, explicitly-selected context the orchestrator reads:
- * session identity, durable summary, recent chat messages only, and a
- * compact workspace snapshot derived from the last terminal run. Never
- * replays raw event/command history.
+ * session identity, durable summary, recent chat messages, recent tool
+ * activity from the last run, and a compact workspace snapshot derived from
+ * the last terminal run. Never replays raw event/command history beyond that
+ * bounded window, and never reads the artifact table.
  */
 export class SessionContextBuilder {
-  constructor(private readonly prisma: SessionContextPrismaCollaborator) {}
+  constructor(
+    private readonly prisma: SessionContextPrismaCollaborator,
+    private readonly events: SessionContextEventStore,
+  ) {}
 
   async build(sessionId: string): Promise<OrchestratorContext> {
     const session: SessionSummaryRow = await runQuery(
@@ -51,7 +84,11 @@ export class SessionContextBuilder {
       () =>
         this.prisma.chatSession.findUnique({
           where: { id: sessionId },
-          select: { repoRef: true, summary: true },
+          select: {
+            repoRef: true,
+            summary: true,
+            summaryCompactedThroughMessageCount: true,
+          },
         }),
     );
     if (!session)
@@ -69,6 +106,12 @@ export class SessionContextBuilder {
         }),
     );
 
+    const messageCount = await runQuery(
+      "build_orchestrator_context_message_count",
+      { sessionId },
+      () => this.prisma.chatMessage.count({ where: { sessionId } }),
+    );
+
     const lastRun: LastRunRow = await runQuery(
       "build_orchestrator_context_last_run",
       { sessionId },
@@ -79,7 +122,7 @@ export class SessionContextBuilder {
             status: { in: ["completed", "failed", "cancelled"] },
           },
           orderBy: { createdAt: "desc" },
-          select: { status: true, diff: true, agentSummary: true },
+          select: { id: true, status: true, diff: true, agentSummary: true },
         }),
     );
 
@@ -97,6 +140,17 @@ export class SessionContextBuilder {
           changedFilesHint: [],
         };
 
+    const recentToolActivity = lastRun
+      ? (await this.events.listRunEvents(lastRun.id, 0))
+          .filter(
+            (event) =>
+              event.type === "agent_tool_call" ||
+              event.type === "agent_tool_result",
+          )
+          .slice(-RECENT_TOOL_ACTIVITY_LIMIT)
+          .map(toolActivityLine)
+      : [];
+
     const recentMessages: OrchestratorChatMessage[] = messageRows
       .slice()
       .reverse()
@@ -107,6 +161,11 @@ export class SessionContextBuilder {
       repoRef: session.repoRef,
       summary: session.summary ?? "",
       recentMessages,
+      recentToolActivity,
+      messageCount,
+      shouldCompact:
+        messageCount - session.summaryCompactedThroughMessageCount >=
+        COMPACTION_INTERVAL,
       workspace,
     };
   }

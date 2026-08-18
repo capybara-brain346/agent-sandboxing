@@ -13,13 +13,16 @@ import { CodeWorkerRunner } from "../agent/code-worker-runner";
 import { RunService } from "../task/run-service";
 import { ArtifactStore } from "../artifacts/artifact-store";
 import type { ArtifactContent } from "../../types/artifact.types";
+import { RunOrchestrator } from "./run-orchestrator";
 import {
-  RunOrchestrator,
-  StaticResponder,
-  ModelResponder,
-} from "./run-orchestrator";
+  ModelOrchestratorAgent,
+  StaticOrchestratorAgent,
+} from "./orchestrator-agent";
 import { SessionContextBuilder } from "./session-context-builder";
-import { SessionSummaryService } from "./session-summary";
+import {
+  ModelSessionSummaryCompactor,
+  StaticSessionSummaryCompactor,
+} from "./session-summary-compactor";
 import type { PublicEvent } from "../../types/event.types";
 import type {
   ChatMessage,
@@ -735,16 +738,20 @@ export class ChatSessionService {
 const chatSessionEvents = new EventStore(prisma);
 const publishChatEvent = (event: PublicEvent): void => sseHub.publish(event);
 const chatHarnessConfig = loadConfig();
-const orchestratorResponder =
+const orchestratorAgent =
   chatHarnessConfig.NODE_ENV === "test"
-    ? new StaticResponder()
-    : new ModelResponder(resolveAgentModel(chatHarnessConfig));
+    ? new StaticOrchestratorAgent()
+    : new ModelOrchestratorAgent(resolveAgentModel(chatHarnessConfig));
+const summaryCompactor =
+  chatHarnessConfig.NODE_ENV === "test"
+    ? new StaticSessionSummaryCompactor()
+    : new ModelSessionSummaryCompactor(resolveAgentModel(chatHarnessConfig));
 const runOrchestrator = new RunOrchestrator(
   prisma,
-  new SessionContextBuilder(prisma),
-  new SessionSummaryService(),
+  new SessionContextBuilder(prisma, chatSessionEvents),
+  summaryCompactor,
   new CodeWorkerRunner(taskServiceRunner),
-  orchestratorResponder,
+  orchestratorAgent,
 );
 const chatRunService = new RunService(
   prisma,

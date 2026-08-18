@@ -1,6 +1,7 @@
 import {
   generateText,
   isStepCount,
+  Output,
   type LanguageModel,
   type ToolSet,
 } from "ai";
@@ -9,6 +10,7 @@ import { ServiceError } from "../../shared/errors";
 import type { PublicEvent } from "../../types/event.types";
 import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
+import { workerResultSchema } from "../../types/harness.types";
 import type {
   TaskRunContext,
   TaskRunResult,
@@ -129,7 +131,45 @@ export class AgentRunner implements TaskRunner {
         onToolExecutionStart: callbacks.onToolExecutionStart,
         onToolExecutionEnd: callbacks.onToolExecutionEnd,
       });
-      return { summary: result.text.trim() || null };
+
+      // A single generateText call that offers both `tools` and a
+      // structured `output` schema unreliably skips tool-calling for some
+      // models/providers (observed: the model settles for schema-shaped
+      // prose instead of ever calling a tool). Structuring the result is
+      // therefore a second, tools-free call over the completed transcript.
+      const structured = await generateText({
+        model: this.dependencies.model,
+        system: AGENT_SYSTEM_PROMPT,
+        messages: [
+          { role: "user", content: context.instructions },
+          ...result.response.messages,
+          {
+            role: "user",
+            content: "Produce the structured result for this attempt now.",
+          },
+        ],
+        abortSignal: context.signal,
+        output: Output.object({ schema: workerResultSchema }),
+      });
+
+      const changedFiles = [
+        ...new Set(
+          result.toolCalls
+            .filter(
+              (call) => call.toolName === "write" || call.toolName === "edit",
+            )
+            .map((call) => (call.input as { path: string }).path),
+        ),
+      ];
+
+      return {
+        summary: JSON.stringify({
+          ...structured.output,
+          changedFiles: changedFiles.length
+            ? changedFiles
+            : structured.output.changedFiles,
+        }),
+      };
     } catch (error) {
       if (isAbortError(error)) throw error;
       if (context.signal.aborted) throw createAbortError();

@@ -90,12 +90,29 @@ describe("AgentRunner", () => {
     vi.clearAllMocks();
   });
 
-  it("resolves the owned target and calls generateText with the seven tools", async () => {
-    aiMocks.generateText.mockResolvedValueOnce({ text: "  completed work  " });
+  const workerOutput = {
+    status: "completed" as const,
+    summary: "completed work",
+    changedFiles: [],
+    testsRun: [],
+    blockers: [],
+    suggestedNextStep: "",
+  };
+
+  it("resolves the owned target, runs a tools-only loop, then a tools-free structuring call", async () => {
+    aiMocks.generateText
+      .mockResolvedValueOnce({
+        text: "completed work",
+        toolCalls: [],
+        response: {
+          messages: [{ role: "assistant", content: "completed work" }],
+        },
+      })
+      .mockResolvedValueOnce({ output: workerOutput });
     const harness = makeRunner();
 
     await expect(harness.runner.run(makeContext())).resolves.toEqual({
-      summary: "completed work",
+      summary: JSON.stringify(workerOutput),
     });
 
     expect(harness.sandbox.getAgentToolTarget).toHaveBeenCalledWith(
@@ -104,15 +121,18 @@ describe("AgentRunner", () => {
       "sbox_1",
     );
     expect(aiMocks.isStepCount).toHaveBeenCalledWith(4);
-    const options = aiMocks.generateText.mock.calls.at(-1)?.[0];
-    expect(options).toMatchObject({
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+
+    const toolLoopOptions = aiMocks.generateText.mock.calls[0]?.[0];
+    expect(toolLoopOptions).toMatchObject({
       model: expect.anything(),
       system: expect.stringContaining("/workspace/repo"),
       messages: [{ role: "user", content: "Update the greeting" }],
       abortSignal: expect.any(AbortSignal),
       stopWhen: "step-count-4",
     });
-    expect(Object.keys(options.tools)).toEqual([
+    expect(toolLoopOptions.output).toBeUndefined();
+    expect(Object.keys(toolLoopOptions.tools)).toEqual([
       "read",
       "write",
       "edit",
@@ -121,13 +141,32 @@ describe("AgentRunner", () => {
       "find",
       "ls",
     ]);
+
+    const structuringOptions = aiMocks.generateText.mock.calls[1]?.[0];
+    expect(structuringOptions.tools).toBeUndefined();
+    expect(structuringOptions.output).toBeDefined();
   });
 
-  it("returns a null summary when the model has no final text", async () => {
-    aiMocks.generateText.mockResolvedValueOnce({ text: "   " });
+  it("derives changedFiles deterministically from write/edit tool calls, overriding the model's own list", async () => {
+    aiMocks.generateText
+      .mockResolvedValueOnce({
+        text: "done",
+        toolCalls: [
+          { toolName: "read", input: { path: "/workspace/repo/a.txt" } },
+          { toolName: "write", input: { path: "/workspace/repo/b.txt" } },
+          { toolName: "edit", input: { path: "/workspace/repo/c.txt" } },
+          { toolName: "write", input: { path: "/workspace/repo/b.txt" } },
+        ],
+        response: { messages: [] },
+      })
+      .mockResolvedValueOnce({
+        output: { ...workerOutput, changedFiles: ["should be overridden"] },
+      });
+    const harness = makeRunner();
 
-    await expect(makeRunner().runner.run(makeContext())).resolves.toEqual({
-      summary: null,
+    const result = await harness.runner.run(makeContext());
+    expect(JSON.parse(result.summary ?? "{}")).toMatchObject({
+      changedFiles: ["/workspace/repo/b.txt", "/workspace/repo/c.txt"],
     });
   });
 
@@ -183,23 +222,25 @@ describe("AgentRunner", () => {
         truncated: false,
       };
     });
-    aiMocks.generateText.mockImplementationOnce(async (options) => {
-      const tools = options.tools as Record<
-        string,
-        { execute: (...args: never[]) => Promise<unknown> }
-      >;
-      await Promise.all([
-        tools.read.execute(
-          { path: "/workspace/repo/a.txt" } as never,
-          {} as never,
-        ),
-        tools.write.execute(
-          { path: "/workspace/repo/b.txt", content: "b" } as never,
-          {} as never,
-        ),
-      ]);
-      return { text: "" };
-    });
+    aiMocks.generateText
+      .mockImplementationOnce(async (options) => {
+        const tools = options.tools as Record<
+          string,
+          { execute: (...args: never[]) => Promise<unknown> }
+        >;
+        await Promise.all([
+          tools.read.execute(
+            { path: "/workspace/repo/a.txt" } as never,
+            {} as never,
+          ),
+          tools.write.execute(
+            { path: "/workspace/repo/b.txt", content: "b" } as never,
+            {} as never,
+          ),
+        ]);
+        return { text: "", toolCalls: [], response: { messages: [] } };
+      })
+      .mockResolvedValueOnce({ output: workerOutput });
 
     await harness.runner.run(makeContext());
     expect(maximum).toBe(1);

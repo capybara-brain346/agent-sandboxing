@@ -5,19 +5,14 @@ export type WorkerCorrection = {
   suggestedNextStep: string;
 };
 
-const WORKER_RESULT_SHAPE =
-  '{"status":"completed|blocked|failed","summary":"...","changedFiles":["..."],' +
-  '"testsRun":[{"command":"...","status":"passed|failed","outputSummary":"..."}],' +
-  '"blockers":["..."],"suggestedNextStep":"..."}';
-
 /**
  * Builds the focused brief the CodeWorker receives. Deliberately excludes
  * chat history: only the durable session summary and a workspace hint are
- * carried over, plus the current instruction and any narrow correction.
+ * carried over, plus the current delegation brief and any narrow correction.
  */
 export const buildWorkerBrief = (
-  context: OrchestratorContext,
-  userMessage: string,
+  context: Pick<OrchestratorContext, "repoRef" | "summary" | "workspace">,
+  brief: string,
   correction?: WorkerCorrection,
 ): string =>
   [
@@ -32,7 +27,7 @@ export const buildWorkerBrief = (
         }.`
       : null,
     "",
-    `Brief: ${userMessage}`,
+    `Brief: ${brief}`,
     correction
       ? `Correction needed. The previous attempt was blocked by: ${
           correction.blockers.join("; ") || "unspecified issues"
@@ -40,11 +35,6 @@ export const buildWorkerBrief = (
           correction.suggestedNextStep || "re-attempt with a narrower scope"
         }.`
       : null,
-    "",
-    "When finished, end your reply with a fenced json code block matching exactly this shape:",
-    "```json",
-    WORKER_RESULT_SHAPE,
-    "```",
   ]
     .filter((line): line is string => line !== null)
     .join("\n");

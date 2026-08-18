@@ -43,5 +43,8 @@ export type OrchestratorContext = {
   repoRef: string;
   summary: string;
   recentMessages: OrchestratorChatMessage[];
+  recentToolActivity: string[];
+  messageCount: number;
+  shouldCompact: boolean;
   workspace: WorkspaceSnapshot;
 };

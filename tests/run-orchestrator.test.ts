@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import {
-  DEFAULT_MAX_WORKER_ATTEMPTS,
-  RunOrchestrator,
-  type OrchestratorResponder,
-} from "../src/services/chat/run-orchestrator";
+import { RunOrchestrator } from "../src/services/chat/run-orchestrator";
+import type { OrchestratorAgent } from "../src/services/chat/orchestrator-agent";
 import type { SessionContextBuilder } from "../src/services/chat/session-context-builder";
-import type { SessionSummaryService } from "../src/services/chat/session-summary";
+import type { SessionSummaryCompactor } from "../src/services/chat/session-summary-compactor";
 import type { CodeWorkerRunner } from "../src/services/agent/code-worker-runner";
 import type {
   OrchestratorContext,
@@ -15,18 +12,24 @@ import type {
 import type { TaskRunContext } from "../src/services/task/task-runner";
 import { ServiceError } from "../src/shared/errors";
 
-const baseContext: OrchestratorContext = {
+const baseContext = (
+  overrides: Partial<OrchestratorContext> = {},
+): OrchestratorContext => ({
   sessionId: "chat_1",
   repoRef: "./repo",
   summary: "Objective: do X",
   recentMessages: [],
+  recentToolActivity: [],
+  messageCount: 3,
+  shouldCompact: false,
   workspace: {
     hasPriorRun: false,
     lastRunStatus: null,
     lastRunSummary: null,
     changedFilesHint: [],
   },
-};
+  ...overrides,
+});
 
 const runContext = (instructions: string): TaskRunContext => ({
   taskId: "run_1",
@@ -48,38 +51,29 @@ const workerResult = (overrides: Partial<WorkerResult> = {}): WorkerResult => ({
 });
 
 const makeHarness = (options: {
-  workerRuns?: WorkerResult[];
-  responder?: OrchestratorResponder;
+  context?: OrchestratorContext;
+  decision?: { reply: string; delegations: WorkerResult[] };
 }) => {
-  const runs = options.workerRuns ?? [workerResult()];
-  let call = 0;
-  const workerRun = vi.fn(async (context: TaskRunContext) => {
-    const result = runs[Math.min(call, runs.length - 1)];
-    call += 1;
-    return { context, result };
-  });
-  const seenContexts: TaskRunContext[] = [];
-  const worker = {
-    run: vi.fn(async (context: TaskRunContext) => {
-      const { context: seen, result } = await workerRun(context);
-      seenContexts.push(seen);
-      return result;
-    }),
-  } as unknown as CodeWorkerRunner;
+  const context = options.context ?? baseContext();
+  const decision = options.decision ?? { reply: "ok", delegations: [] };
 
   const contextBuilder = {
-    build: vi.fn(async () => baseContext),
+    build: vi.fn(async () => context),
   } as unknown as SessionContextBuilder;
 
-  const persisted: Array<Parameters<SessionSummaryService["rewrite"]>[0]> = [];
-  const summaryService = {
-    rewrite: vi.fn((input: Parameters<SessionSummaryService["rewrite"]>[0]) => {
-      persisted.push(input);
-      return `rewritten:${input.outcome.kind}`;
-    }),
-  } as unknown as SessionSummaryService;
+  const agent = {
+    decide: vi.fn(async () => decision),
+  } as unknown as OrchestratorAgent;
 
-  const updates: Array<{ sessionId: string; summary: string }> = [];
+  const compactor = {
+    compact: vi.fn(async () => "compacted summary"),
+  } as unknown as SessionSummaryCompactor;
+
+  const updates: Array<{
+    sessionId: string;
+    summary: string;
+    summaryCompactedThroughMessageCount: number;
+  }> = [];
   const prisma = {
     chatSession: {
       updateMany: vi.fn(
@@ -88,38 +82,34 @@ const makeHarness = (options: {
           data,
         }: {
           where: { id: string };
-          data: { summary: string };
+          data: {
+            summary: string;
+            summaryCompactedThroughMessageCount: number;
+          };
         }) => {
-          updates.push({ sessionId: where.id, summary: data.summary });
+          updates.push({
+            sessionId: where.id,
+            summary: data.summary,
+            summaryCompactedThroughMessageCount:
+              data.summaryCompactedThroughMessageCount,
+          });
           return { count: 1 };
         },
       ),
     },
   } as unknown as Pick<PrismaClient, "chatSession">;
 
-  const responder =
-    options.responder ??
-    ({
-      respond: vi.fn(async () => "clarifying reply"),
-    } as OrchestratorResponder);
+  const worker = { run: vi.fn() } as unknown as CodeWorkerRunner;
 
   const orchestrator = new RunOrchestrator(
     prisma,
     contextBuilder,
-    summaryService,
+    compactor,
     worker,
-    responder,
+    agent,
   );
 
-  return {
-    orchestrator,
-    worker,
-    contextBuilder,
-    summaryService,
-    updates,
-    responder,
-    seenContexts,
-  };
+  return { orchestrator, contextBuilder, agent, compactor, updates };
 };
 
 describe("RunOrchestrator", () => {
@@ -135,94 +125,69 @@ describe("RunOrchestrator", () => {
     ).rejects.toThrow("RunOrchestrator requires a session-scoped run");
   });
 
-  it("answers a clarification message without invoking the worker", async () => {
-    const { orchestrator, worker, updates } = makeHarness({});
-    const result = await orchestrator.run(runContext("what does this do?"));
-    expect(result.summary).toBe("clarifying reply");
-    expect(worker.run).not.toHaveBeenCalled();
-    expect(updates).toEqual([
-      { sessionId: "chat_1", summary: "rewritten:clarification" },
-    ]);
+  it("passes the built context and message through to the agent", async () => {
+    const context = baseContext({ summary: "Objective: ship it" });
+    const { orchestrator, agent } = makeHarness({ context });
+    await orchestrator.run(runContext("what did you change last turn?"));
+    expect(agent.decide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "chat_1",
+        repoRef: "./repo",
+        summary: "Objective: ship it",
+        message: "what did you change last turn?",
+        delegate: expect.any(Function),
+      }),
+    );
   });
 
-  it("invokes the worker once and returns its summary when it completes on the first attempt", async () => {
-    const { orchestrator, worker, updates } = makeHarness({
-      workerRuns: [workerResult({ summary: "Fixed it" })],
+  it("returns the agent's reply directly when it never delegated", async () => {
+    const { orchestrator } = makeHarness({
+      decision: { reply: "clarifying reply", delegations: [] },
+    });
+    const result = await orchestrator.run(runContext("what does this do?"));
+    expect(result.summary).toBe("clarifying reply");
+    expect(result.workerReport).toBeUndefined();
+  });
+
+  it("returns the raw worker report alongside the composed reply on completion", async () => {
+    const { orchestrator } = makeHarness({
+      decision: {
+        reply: "Fixed it",
+        delegations: [
+          workerResult({ summary: "Fixed it", changedFiles: ["a.ts"] }),
+        ],
+      },
     });
     const result = await orchestrator.run(runContext("fix the bug"));
     expect(result.summary).toBe("Fixed it");
-    expect(worker.run).toHaveBeenCalledTimes(1);
-    expect(updates).toEqual([
-      { sessionId: "chat_1", summary: "rewritten:worker_completed" },
-    ]);
-  });
-
-  it("returns the raw worker report alongside the composed summary", async () => {
-    const { orchestrator } = makeHarness({
-      workerRuns: [
-        workerResult({ summary: "Fixed it", changedFiles: ["a.ts"] }),
-      ],
-    });
-    const result = await orchestrator.run(runContext("fix the bug"));
-    expect(result.workerReport).toBeTruthy();
     expect(JSON.parse(result.workerReport ?? "{}")).toMatchObject({
       status: "completed",
-      summary: "Fixed it",
       changedFiles: ["a.ts"],
     });
   });
 
-  it("retries with a narrow correction brief when the worker reports blocked, then completes", async () => {
-    const { orchestrator, worker, seenContexts } = makeHarness({
-      workerRuns: [
-        workerResult({
-          status: "blocked",
-          blockers: ["missing config"],
-          suggestedNextStep: "ask for config",
-        }),
-        workerResult({ status: "completed", summary: "Now fixed" }),
-      ],
-    });
-    const result = await orchestrator.run(runContext("fix the bug"));
-    expect(result.summary).toBe("Now fixed");
-    expect(worker.run).toHaveBeenCalledTimes(2);
-    expect(seenContexts[1]?.instructions).toContain("missing config");
-    expect(seenContexts[1]?.instructions).toContain("ask for config");
-  });
-
-  it("stops after the max attempt budget and surfaces blockers when still blocked", async () => {
-    const { orchestrator, worker } = makeHarness({
-      workerRuns: [
-        workerResult({ status: "blocked", blockers: ["still stuck"] }),
-        workerResult({ status: "blocked", blockers: ["still stuck"] }),
-      ],
-    });
-    const result = await orchestrator.run(runContext("fix the bug"));
-    expect(worker.run).toHaveBeenCalledTimes(DEFAULT_MAX_WORKER_ATTEMPTS);
-    expect(result.summary).toContain("still stuck");
-  });
-
-  it("throws a worker_failed ServiceError when the worker fails after exhausting attempts", async () => {
-    const { orchestrator, updates } = makeHarness({
-      workerRuns: [
-        workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
-        workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
-      ],
+  it("throws a worker_failed ServiceError when the last delegation failed", async () => {
+    const { orchestrator } = makeHarness({
+      decision: {
+        reply: "it failed",
+        delegations: [
+          workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
+        ],
+      },
     });
     await expect(orchestrator.run(runContext("fix the bug"))).rejects.toThrow(
       ServiceError,
     );
-    expect(updates).toEqual([
-      { sessionId: "chat_1", summary: "rewritten:worker_failed" },
-    ]);
   });
 
-  it("attaches the raw worker report to the thrown error so it can still be archived", async () => {
+  it("attaches the raw worker report to the thrown error", async () => {
     const { orchestrator } = makeHarness({
-      workerRuns: [
-        workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
-        workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
-      ],
+      decision: {
+        reply: "it failed",
+        delegations: [
+          workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
+        ],
+      },
     });
     try {
       await orchestrator.run(runContext("fix the bug"));
@@ -235,5 +200,36 @@ describe("RunOrchestrator", () => {
         status: "failed",
       });
     }
+  });
+
+  it("does not compact the summary on a turn below the compaction threshold", async () => {
+    const context = baseContext({ shouldCompact: false });
+    const { orchestrator, compactor, updates } = makeHarness({ context });
+    await orchestrator.run(runContext("fix the bug"));
+    expect(compactor.compact).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+  });
+
+  it("compacts the summary and advances the compaction watermark when the threshold is reached", async () => {
+    const context = baseContext({
+      shouldCompact: true,
+      messageCount: 12,
+      recentToolActivity: ["read: did stuff"],
+    });
+    const { orchestrator, compactor, updates } = makeHarness({ context });
+    await orchestrator.run(runContext("fix the bug"));
+    expect(compactor.compact).toHaveBeenCalledWith({
+      previousSummary: context.summary,
+      recentMessages: context.recentMessages,
+      recentToolActivity: context.recentToolActivity,
+      workspace: context.workspace,
+    });
+    expect(updates).toEqual([
+      {
+        sessionId: "chat_1",
+        summary: "compacted summary",
+        summaryCompactedThroughMessageCount: 12,
+      },
+    ]);
   });
 });

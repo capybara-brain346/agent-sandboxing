@@ -1,95 +1,126 @@
 import { describe, expect, it } from "vitest";
-import { SessionSummaryService } from "../src/services/chat/session-summary";
+import {
+  formatAndCap,
+  StaticSessionSummaryCompactor,
+  type CompactionInput,
+} from "../src/services/chat/session-summary-compactor";
 
-describe("SessionSummaryService", () => {
-  it("sets the objective from the first user message and carries it forward", () => {
-    const service = new SessionSummaryService();
-    const first = service.rewrite({
-      previousSummary: "",
-      userMessage: "Add auth middleware",
-      outcome: {
-        kind: "worker_completed",
-        summary: "Added middleware",
-        changedFiles: ["src/auth.ts"],
-        blockers: [],
-      },
-    });
-    expect(first).toContain("Objective: Add auth middleware");
+const baseInput = (
+  overrides: Partial<CompactionInput> = {},
+): CompactionInput => ({
+  previousSummary: "",
+  recentMessages: [],
+  recentToolActivity: [],
+  workspace: {
+    hasPriorRun: false,
+    lastRunStatus: null,
+    lastRunSummary: null,
+    changedFilesHint: [],
+  },
+  ...overrides,
+});
 
-    const second = service.rewrite({
-      previousSummary: first,
-      userMessage: "Now add tests",
-      outcome: {
-        kind: "worker_completed",
-        summary: "Added tests",
-        changedFiles: ["tests/auth.test.ts"],
-        blockers: [],
-      },
+describe("formatAndCap", () => {
+  it("caps files to MAX_FILES, keeping the most recent", () => {
+    const files = Array.from({ length: 20 }, (_, i) => `src/file-${i}.ts`);
+    const text = formatAndCap({
+      objective: "Do X",
+      state: "in progress",
+      lastResult: "",
+      files,
+      blockers: [],
     });
-    expect(second).toContain("Objective: Add auth middleware");
-    expect(second).toContain("src/auth.ts");
-    expect(second).toContain("tests/auth.test.ts");
+    expect(text).toContain("src/file-19.ts");
+    expect(text).not.toContain("src/file-0.ts");
   });
 
-  it("replaces state and blockers each turn instead of appending them", () => {
-    const service = new SessionSummaryService();
-    const blocked = service.rewrite({
-      previousSummary: "",
-      userMessage: "Add feature X",
-      outcome: {
-        kind: "worker_blocked",
-        summary: "Needs API key",
-        changedFiles: [],
-        blockers: ["missing API key"],
-      },
+  it("caps blockers to MAX_BLOCKERS", () => {
+    const blockers = Array.from({ length: 10 }, (_, i) => `blocker-${i}`);
+    const text = formatAndCap({
+      objective: "Do X",
+      state: "blocked",
+      lastResult: "",
+      files: [],
+      blockers,
     });
-    expect(blocked).toContain("Blockers: missing API key");
-
-    const resolved = service.rewrite({
-      previousSummary: blocked,
-      userMessage: "Here is the key",
-      outcome: {
-        kind: "worker_completed",
-        summary: "Feature X done",
-        changedFiles: ["src/x.ts"],
-        blockers: [],
-      },
-    });
-    expect(resolved).toContain("Blockers: none");
-    expect(resolved).not.toContain("missing API key");
+    expect(text).toContain("blocker-0");
+    expect(text).not.toContain("blocker-9");
   });
 
-  it("stays within the byte budget by dropping oldest files first", () => {
-    const service = new SessionSummaryService();
-    let summary = "";
-    for (let i = 0; i < 200; i++) {
-      summary = service.rewrite({
-        previousSummary: summary,
-        userMessage: `Change ${i}`,
-        outcome: {
-          kind: "worker_completed",
-          summary: `Change ${i} applied with a fairly long free-text description of the work`,
-          changedFiles: [`src/file-${i}.ts`],
-          blockers: [],
+  it("stays within the 4000-byte budget by dropping oldest files first", () => {
+    const files = Array.from({ length: 500 }, (_, i) => `src/file-${i}.ts`);
+    const text = formatAndCap({
+      objective: "Do X",
+      state: "in progress",
+      lastResult:
+        "a fairly long free-text description of the work that was done",
+      files,
+      blockers: [],
+    });
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(4000);
+  });
+
+  it("renders none for empty files and blockers", () => {
+    const text = formatAndCap({
+      objective: "Do X",
+      state: "awaiting clarification",
+      lastResult: "",
+      files: [],
+      blockers: [],
+    });
+    expect(text).toContain("Files: none");
+    expect(text).toContain("Blockers: none");
+  });
+});
+
+describe("StaticSessionSummaryCompactor", () => {
+  it("carries the previous Objective forward when one exists", async () => {
+    const compactor = new StaticSessionSummaryCompactor();
+    const summary = await compactor.compact(
+      baseInput({ previousSummary: "Objective: Add auth middleware" }),
+    );
+    expect(summary).toContain("Objective: Add auth middleware");
+  });
+
+  it("falls back to the first recent message when there is no previous summary", async () => {
+    const compactor = new StaticSessionSummaryCompactor();
+    const summary = await compactor.compact(
+      baseInput({
+        recentMessages: [{ role: "user", content: "Add auth middleware" }],
+      }),
+    );
+    expect(summary).toContain("Objective: Add auth middleware");
+  });
+
+  it("unions the workspace's changed-files hint into Files", async () => {
+    const compactor = new StaticSessionSummaryCompactor();
+    const summary = await compactor.compact(
+      baseInput({
+        previousSummary: "Objective: Add auth\nFiles: src/auth.ts",
+        workspace: {
+          hasPriorRun: true,
+          lastRunStatus: "completed",
+          lastRunSummary: "Added middleware",
+          changedFilesHint: ["src/auth.ts", "tests/auth.test.ts"],
         },
-      });
-      expect(Buffer.byteLength(summary, "utf8")).toBeLessThanOrEqual(4000);
-    }
+      }),
+    );
+    expect(summary).toContain("src/auth.ts");
+    expect(summary).toContain("tests/auth.test.ts");
   });
 
-  it("marks awaiting clarification state without recording files or blockers", () => {
-    const service = new SessionSummaryService();
-    const summary = service.rewrite({
-      previousSummary: "",
-      userMessage: "what does this do?",
-      outcome: {
-        kind: "clarification",
-        summary: "It's a repo-scoped chat session.",
-        changedFiles: [],
-        blockers: [],
-      },
-    });
-    expect(summary).toContain("State: awaiting user clarification.");
-    expect(summary).toContain("Files: none");
+  it("surfaces a synthetic blocker when the last run failed", async () => {
+    const compactor = new StaticSessionSummaryCompactor();
+    const summary = await compactor.compact(
+      baseInput({
+        workspace: {
+          hasPriorRun: true,
+          lastRunStatus: "failed",
+          lastRunSummary: null,
+          changedFilesHint: [],
+        },
+      }),
+    );
+    expect(summary).toContain("Blockers: last worker run failed");
   });
 });

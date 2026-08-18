@@ -52,6 +52,7 @@ model ChatSession {
   repoInstallationId String?       @map("repo_installation_id")
   image              String?
   summary            String?       @db.Text
+  summaryCompactedThroughMessageCount Int @default(0) @map("summary_compacted_through_message_count")
   nextEventSequence  Int           @default(1) @map("next_event_sequence")
   activeRunId        String?       @unique @map("active_run_id")
   lockedAt           DateTime?     @map("locked_at")
