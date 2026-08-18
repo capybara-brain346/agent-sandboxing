@@ -190,7 +190,11 @@ export const ChatWorkspacePage = () => {
         <div className="chat-workspace__thread">
           <div className="panel">
             <div className="panel__body">
-              <MessageThread messages={messages} pending={runActive} />
+              {session === null && !loadError ? (
+                <p className="message-thread--empty">Loading chat…</p>
+              ) : (
+                <MessageThread messages={messages} pending={runActive} />
+              )}
             </div>
           </div>
           {sendError && <p className="alert alert--error">{sendError}</p>}

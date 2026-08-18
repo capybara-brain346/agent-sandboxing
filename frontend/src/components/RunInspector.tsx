@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RunResult, RunSnapshot } from "../api/types";
 import { TERMINAL_STATUSES } from "../api/types";
 import { useEventStream } from "../api/useEventStream";
@@ -42,6 +42,27 @@ export const RunInspector = ({
   const isTerminal = TERMINAL_STATUSES.has(run.status);
   const files = result ? changedFiles(result.diff) : [];
 
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+
+  const handleBodyScroll = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 32;
+  };
+
+  useEffect(() => {
+    if (tab !== "timeline") return;
+    const el = bodyRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [events, tab]);
+
+  useEffect(() => {
+    if (tab === "timeline") stickToBottomRef.current = true;
+  }, [tab]);
+
   return (
     <div className="panel">
       <div className="panel__header">
@@ -60,11 +81,13 @@ export const RunInspector = ({
           )}
         </div>
       </div>
-      <div className="run-inspector__tabs">
+      <div className="run-inspector__tabs" role="tablist">
         {TABS.map((item) => (
           <button
             key={item.id}
             type="button"
+            role="tab"
+            aria-selected={tab === item.id}
             className={`run-inspector__tab ${
               tab === item.id ? "run-inspector__tab--active" : ""
             }`}
@@ -74,7 +97,12 @@ export const RunInspector = ({
           </button>
         ))}
       </div>
-      <div className="panel__body run-inspector__body">
+      <div
+        className="panel__body run-inspector__body"
+        role="tabpanel"
+        ref={bodyRef}
+        onScroll={handleBodyScroll}
+      >
         {connectionError && (
           <p className="alert alert--warning">
             Event stream disconnected, retrying…

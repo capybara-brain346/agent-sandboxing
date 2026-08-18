@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { ChatMessage } from "../api/types";
 
 const roleLabel: Record<ChatMessage["role"], string> = {
@@ -13,6 +14,22 @@ export const MessageThread = ({
   messages: ChatMessage[];
   pending: boolean;
 }) => {
+  const listRef = useRef<HTMLOListElement>(null);
+  const stickToBottomRef = useRef(true);
+
+  const handleScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 32;
+  };
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages, pending]);
+
   if (messages.length === 0 && !pending) {
     return (
       <p className="message-thread--empty">
@@ -22,7 +39,7 @@ export const MessageThread = ({
   }
 
   return (
-    <ol className="message-thread">
+    <ol className="message-thread" ref={listRef} onScroll={handleScroll}>
       {messages.map((message) => (
         <li
           key={message.messageId}
