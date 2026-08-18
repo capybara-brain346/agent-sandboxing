@@ -40,7 +40,8 @@ use them as a separate API surface.
 operations are:
 
 - `createForTaskInTransaction(tx, input, { taskId })` — inserts a `creating`
-  sandbox row and returns its internal metadata. It does not invoke Docker.
+  sandbox row and returns its sandbox ID, container name, and workspace path. It
+  does not invoke Docker.
 - `provisionForTask(sandboxId)` — validates the task-owned row, creates and
   starts the container, copies the fixture into the workspace, and returns
   `ready` or a structured provisioning failure.

@@ -180,7 +180,15 @@ The plan requires adding an internal service method or refactoring the current c
 Preferred shape:
 
 ```ts
-createForTask(input, options: { taskId: string }): Promise<{ sandboxId: string; initialEvent: PublicEvent }>;
+createForTaskInTransaction(
+  tx: Prisma.TransactionClient,
+  input,
+  options: { taskId: string },
+): Promise<{
+  sandboxId: string;
+  containerName: string;
+  workspacePath: string;
+}>;
 ```
 
 Implementation detail to decide during coding:
@@ -361,7 +369,8 @@ model Event {
 `producerService` values should be a small TypeScript union for MVP:
 
 ```ts
-type EventProducerService = "task" | "sandbox" | "command" | "runtime" | "cleanup";
+type EventProducerService =
+  "task" | "sandbox" | "command" | "runtime" | "cleanup";
 ```
 
 Future values include `agent` and `github`. Prefer a TypeScript union/string column for early migration flexibility rather than a Prisma enum unless the taxonomy has stabilized.

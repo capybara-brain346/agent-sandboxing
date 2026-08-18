@@ -142,11 +142,8 @@ describe("TaskService result capture", () => {
     const sandbox = {
       createForTaskInTransaction: vi.fn(async () => ({
         sandboxId,
-        status: "creating" as const,
         containerName: "sandbox-sbox_1",
-        image: "node:22",
         workspacePath: "/workspace/repo",
-        fixtureRepoPath: "./repo",
       })),
       provisionForTask: vi.fn(async () => {
         expect(committed).toBe(true);

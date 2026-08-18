@@ -86,8 +86,8 @@ task.
 `onToolExecutionEnd` callbacks. It appends `agent_tool_call` before tool
 execution and `agent_tool_result` after it through `EventStore.append`, then
 publishes the returned event. Each event includes the task and sandbox IDs,
-`producerService: "agent"`, `producerId: taskId`, and the SDK `callId` as its
-`correlationId`.
+`producerService: "agent"`, `producerId: taskId`, and a correlation ID shared
+by the matching call/result pair. Repeated SDK call IDs are disambiguated.
 
 Call payloads use `tool_name` and `args`. Result payloads use
 `tool_name`, a UTF-8-safe `result_snippet` bounded to 500 bytes,

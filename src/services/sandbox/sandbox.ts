@@ -12,7 +12,7 @@ import type {
   TaskSandboxInput,
 } from "../../types/sandbox.types";
 import type { PublicEvent } from "../../types/event.types";
-import { ServiceError, notFound } from "../../shared/errors";
+import { safeError, ServiceError, notFound } from "../../shared/errors";
 import { logQueryFailure, runQuery } from "../../shared/query-logging";
 import { workspaceRoot } from "./workspace";
 import { CommandExecutionService } from "./command-execution";
@@ -34,31 +34,10 @@ export const canTransition = (
   to: SandboxStatusType,
 ): boolean => transitions[from].includes(to);
 
-const safeError = (
-  error: unknown,
-  operation: string,
-): {
-  code: string;
-  message: string;
-  operation: string;
-  retryable: boolean;
-} => ({
-  code: error instanceof ServiceError ? error.code : "unknown",
-  message:
-    error instanceof ServiceError
-      ? error.message
-      : "Sandbox runtime operation failed",
-  operation,
-  retryable: false,
-});
-
 export type TaskSandboxCreation = {
   sandboxId: string;
-  status: "creating";
   containerName: string;
-  image: string;
   workspacePath: string;
-  fixtureRepoPath: string;
 };
 
 export type SandboxProvisionResult =
@@ -112,51 +91,8 @@ export class SandboxService {
     });
     return {
       sandboxId: sandbox.id,
-      status: "creating",
       containerName: sandbox.containerName,
-      image: sandbox.image,
       workspacePath: sandbox.workspacePath,
-      fixtureRepoPath: sandbox.fixtureRepoPath,
-    };
-  }
-
-  async createForTask(
-    input: TaskSandboxInput,
-    options: { taskId: string },
-  ): Promise<{ sandboxId: string; initialEvent: PublicEvent }> {
-    const result = await runQuery(
-      "create_task_sandbox",
-      { taskId: options.taskId },
-      () =>
-        this.prisma.$transaction(async (tx) => {
-          const sandbox = await this.createForTaskInTransaction(
-            tx,
-            input,
-            options,
-          );
-          await tx.task.update({
-            where: { id: options.taskId },
-            data: { sandboxId: sandbox.sandboxId },
-          });
-          const initialEvent = await this.events.appendInTransaction(tx, {
-            taskId: options.taskId,
-            sandboxId: sandbox.sandboxId,
-            type: "sandbox_created",
-            producerService: "sandbox",
-            producerId: sandbox.sandboxId,
-            correlationId: randomUUID(),
-            payload: {
-              container_name: sandbox.containerName,
-              workspace_path: sandbox.workspacePath,
-            },
-          });
-          return { sandbox, initialEvent };
-        }),
-    );
-    this.publish(result.initialEvent);
-    return {
-      sandboxId: result.sandbox.sandboxId,
-      initialEvent: result.initialEvent,
     };
   }
 

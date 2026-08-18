@@ -68,11 +68,8 @@ describe("TaskService provisioning", () => {
     const sandbox = {
       createForTaskInTransaction: vi.fn(async () => ({
         sandboxId: "sbox_1",
-        status: "creating" as const,
         containerName: "sandbox-sbox_1",
-        image: "node:22",
         workspacePath: "/workspace/repo",
-        fixtureRepoPath: "./repo",
       })),
       provisionForTask: vi.fn(async () => {
         expect(committed).toBe(true);
@@ -146,11 +143,8 @@ describe("TaskService provisioning", () => {
     const sandbox = {
       createForTaskInTransaction: vi.fn(async () => ({
         sandboxId: "sbox_1",
-        status: "creating" as const,
         containerName: "sandbox-sbox_1",
-        image: "node:22",
         workspacePath: "/workspace/repo",
-        fixtureRepoPath: "./repo",
       })),
       provisionForTask: vi.fn(async () => ({
         status: "failed" as const,
@@ -222,7 +216,7 @@ describe("TaskService create", () => {
         async (
           _transaction: unknown,
           sandboxInput: { fixtureRepoPath?: string; image?: string },
-          options: { taskId: string },
+          _options: { taskId: string },
         ) => {
           calls.push("sandbox.create");
           expect(sandboxInput).toEqual({
@@ -231,12 +225,8 @@ describe("TaskService create", () => {
           });
           return {
             sandboxId: "sbox_1",
-            status: "creating" as const,
             containerName: "sandbox-sbox_1",
-            image: "node:22",
             workspacePath: "/workspace/repo",
-            fixtureRepoPath: "./repo",
-            taskId: options.taskId,
           };
         },
       ),

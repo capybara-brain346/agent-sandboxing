@@ -1,29 +1,17 @@
 import { access, lstat, realpath } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { promisify } from "node:util";
 import path from "node:path";
 import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
+import { takeUtf8Prefix } from "../../shared/utf8";
 import type {
   RuntimeOutput,
   RuntimeResult,
   SimpleExecOptions,
   SimpleExecResult,
 } from "../../types/sandbox.types";
-
-const takeUtf8Prefix = (text: string, maxBytes: number): string => {
-  let result = "";
-  let bytesUsed = 0;
-
-  for (const character of text) {
-    const bytes = Buffer.byteLength(character);
-    if (bytesUsed + bytes > maxBytes) break;
-    result += character;
-    bytesUsed += bytes;
-  }
-
-  return result;
-};
 
 class OutputBudget {
   remaining: number;
@@ -79,58 +67,7 @@ const abortError = (): Error => {
   return error;
 };
 
-const execFile = (
-  args: string[],
-  options: { timeoutMs?: number } = {},
-): Promise<{ stdout: string; stderr: string }> =>
-  new Promise((resolve, reject) => {
-    const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (data: string) => {
-      stdout += data;
-    });
-    child.stderr.on("data", (data: string) => {
-      stderr += data;
-    });
-    const timer = options.timeoutMs
-      ? setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          child.kill("SIGKILL");
-          reject(
-            new ServiceError(
-              "docker_timeout",
-              "Docker operation timed out",
-              500,
-            ),
-          );
-        }, options.timeoutMs)
-      : undefined;
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      if (code === 0) resolve({ stdout, stderr });
-      else
-        reject(
-          new ServiceError(
-            "docker_runtime_error",
-            stderr.trim() || `Docker exited with code ${code ?? "unknown"}`,
-            500,
-          ),
-        );
-    });
-  });
+const execFile = promisify(execFileCallback);
 
 export class SandboxRuntime {
   constructor(private readonly config: Config) {}
@@ -263,6 +200,7 @@ export class SandboxRuntime {
       "com.agent-sandboxing.managed=true",
     ];
     const created = await execFile(
+      "docker",
       [
         "create",
         "--name",
@@ -278,14 +216,14 @@ export class SandboxRuntime {
         "sleep",
         "infinity",
       ],
-      { timeoutMs: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+      { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
     );
     const containerId = created.stdout.trim();
     try {
-      await execFile(["start", containerId], {
-        timeoutMs: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
+      await execFile("docker", ["start", containerId], {
+        timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
       });
-      await execFile([
+      await execFile("docker", [
         "exec",
         "-u",
         "0",
@@ -294,10 +232,14 @@ export class SandboxRuntime {
         "-p",
         "/workspace/repo",
       ]);
-      await execFile(["cp", `${root}/.`, `${containerId}:/workspace/repo/`], {
-        timeoutMs: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
-      });
-      await execFile([
+      await execFile(
+        "docker",
+        ["cp", `${root}/.`, `${containerId}:/workspace/repo/`],
+        {
+          timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
+        },
+      );
+      await execFile("docker", [
         "exec",
         "-u",
         "0",
@@ -306,7 +248,7 @@ export class SandboxRuntime {
         "-e",
         "/workspace/repo/.git",
       ]);
-      await execFile([
+      await execFile("docker", [
         "exec",
         "-u",
         "0",
@@ -382,6 +324,7 @@ export class SandboxRuntime {
   async diff(containerName: string): Promise<string> {
     return (
       await execFile(
+        "docker",
         [
           "exec",
           "-u",
@@ -393,22 +336,23 @@ export class SandboxRuntime {
           "-lc",
           "git diff --binary",
         ],
-        { timeoutMs: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
+        { timeout: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
       )
     ).stdout;
   }
 
   async stop(containerName: string, graceMs: number): Promise<void> {
     await execFile(
+      "docker",
       ["stop", "--time", String(Math.ceil(graceMs / 1000)), containerName],
-      { timeoutMs: graceMs + 5000 },
+      { timeout: graceMs + 5000 },
     ).catch((error: ServiceError) => {
       if (!error.message.toLowerCase().includes("no such container"))
         throw error;
     });
 
-    await execFile(["rm", "-f", containerName], { timeoutMs: 10000 }).catch(
-      () => undefined,
-    );
+    await execFile("docker", ["rm", "-f", containerName], {
+      timeout: 10000,
+    }).catch(() => undefined);
   }
 }

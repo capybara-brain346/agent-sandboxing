@@ -3,6 +3,7 @@ import { ServiceError } from "../../../shared/errors";
 import type { SimpleExecResult } from "../../../types/sandbox.types";
 import type { SandboxRuntime } from "../../sandbox/runtime";
 import { workspaceRoot } from "../../sandbox/workspace";
+export { boundUtf8 } from "../../../shared/utf8";
 
 export type AgentToolRuntime = Pick<SandboxRuntime, "simpleExec">;
 
@@ -71,26 +72,6 @@ export const validateToolText = (value: string, name: string): string => {
 
 export const shellQuote = (value: string): string =>
   `'${value.replaceAll("'", "'\\''")}'`;
-
-export type Utf8Bounded = { value: string; truncated: boolean };
-
-export const takeUtf8Prefix = (value: string, maxBytes: number): string => {
-  if (maxBytes <= 0) return "";
-  let bytesUsed = 0;
-  let result = "";
-  for (const character of value) {
-    const characterBytes = Buffer.byteLength(character, "utf8");
-    if (bytesUsed + characterBytes > maxBytes) break;
-    result += character;
-    bytesUsed += characterBytes;
-  }
-  return result;
-};
-
-export const boundUtf8 = (value: string, maxBytes: number): Utf8Bounded => {
-  const bounded = takeUtf8Prefix(value, maxBytes);
-  return { value: bounded, truncated: bounded.length < value.length };
-};
 
 export const byteLength = (value: string): number =>
   Buffer.byteLength(value, "utf8");

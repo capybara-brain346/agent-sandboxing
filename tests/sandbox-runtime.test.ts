@@ -1,9 +1,12 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }));
+const { execFile, spawn } = vi.hoisted(() => ({
+  execFile: vi.fn(),
+  spawn: vi.fn(),
+}));
 
-vi.mock("node:child_process", () => ({ spawn }));
+vi.mock("node:child_process", () => ({ execFile, spawn }));
 
 import type { Config } from "../src/config";
 import { SandboxRuntime } from "../src/services/sandbox/runtime";
@@ -34,6 +37,7 @@ const runtime = (maxBytes = 1024): SandboxRuntime =>
 
 describe("SandboxRuntime.simpleExec", () => {
   beforeEach(() => {
+    execFile.mockReset();
     spawn.mockReset();
   });
 

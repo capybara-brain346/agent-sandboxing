@@ -118,11 +118,8 @@ const makeHarness = (
   const sandbox = {
     createForTaskInTransaction: vi.fn(async () => ({
       sandboxId: "sbox_1",
-      status: "creating" as const,
       containerName: "sandbox-sbox_1",
-      image: "node:22",
       workspacePath: "/workspace/repo",
-      fixtureRepoPath: "./repo",
     })),
     provisionForTask: vi.fn(async () => ({ status: "ready" as const })),
     diff: vi.fn(async () => ({

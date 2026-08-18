@@ -70,7 +70,11 @@ describe("SandboxService", () => {
       { taskId: "task_1" },
     );
 
-    expect(result.status).toBe("creating");
+    expect(result).toEqual({
+      sandboxId: expect.any(String),
+      containerName: expect.stringMatching(/^sandbox-sbox_/),
+      workspacePath: "/workspace/repo",
+    });
     expect(create).toHaveBeenCalledWith({
       data: expect.objectContaining({ taskId: "task_1", status: "creating" }),
     });
