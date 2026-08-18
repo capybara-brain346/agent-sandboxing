@@ -2,10 +2,10 @@ import type { ReactNode } from "react";
 import { Link, useMatch } from "react-router-dom";
 
 const useSurfaceLabel = (): string => {
-  const isNewRun = useMatch("/");
-  const isRunDetail = useMatch("/tasks/:taskId");
-  if (isRunDetail) return "Run detail";
-  if (isNewRun) return "New run";
+  const isRepoSelect = useMatch("/");
+  const isChatWorkspace = useMatch("/sessions/:sessionId");
+  if (isChatWorkspace) return "Chat";
+  if (isRepoSelect) return "Repos";
   return "";
 };
 

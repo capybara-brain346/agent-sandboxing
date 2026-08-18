@@ -170,11 +170,23 @@ Callers:
 `SessionContextBuilder` never reads the `Artifact` table, so artifacts cannot
 enter the orchestrator's prompt context by default.
 
-## Compatibility
+## Phase 8: compatibility removal
 
-The old `/tasks` routes remain as a temporary compatibility surface. They emit
-deprecation headers and retain their existing task response contract. New API
-and frontend work must use session, message, and run terminology.
+The old `/tasks` routes and the standalone `TaskService` were removed once
+this module's session -> message -> run -> result path, session/run SSE, and
+the migrated frontend reached equivalent acceptance coverage (see the
+[master plan](../../planning/repo-scoped-chat-session-agent-harness-plan.md)
+and the [Phase 0 decision record](../../planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)).
+`/tasks/*` and the retired `/sandboxes/*` routes now return
+`404 not_found`. There is one product path — session, message, and run
+terminology only. The historical `/tasks` contract is documented for
+reference in [`docs/modules/task-service/README.md`](../task-service/README.md#history).
+
+`src/services/task/task.ts` still exists as shared execution runtime
+(`canTransition`, `taskServiceRunner`, `taskServiceArtifacts`) consumed only
+by this module — see
+[`docs/modules/task-service/README.md`](../task-service/README.md) for what
+remains and why.
 
 ## Verification
 

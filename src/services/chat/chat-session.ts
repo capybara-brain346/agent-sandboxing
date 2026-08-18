@@ -439,16 +439,16 @@ export class ChatSessionService {
           if (runId && session.activeRunId)
             throw this.activeRunError(sessionId, session.activeRunId);
 
-          const message = await tx.chatMessage.create({
-            data: {
-              id: messageId,
-              sessionId,
-              runId,
-              role: "user",
-              content: input.content,
-            },
-          });
           if (!runId) {
+            const message = await tx.chatMessage.create({
+              data: {
+                id: messageId,
+                sessionId,
+                runId: null,
+                role: "user",
+                content: input.content,
+              },
+            });
             await tx.chatSession.update({
               where: { id: sessionId },
               data: { updatedAt: new Date() },
@@ -490,6 +490,16 @@ export class ChatSessionService {
           });
           if (claimed.count === 0)
             throw this.activeRunError(sessionId, session.activeRunId ?? runId);
+
+          const message = await tx.chatMessage.create({
+            data: {
+              id: messageId,
+              sessionId,
+              runId,
+              role: "user",
+              content: input.content,
+            },
+          });
 
           const messageEvent =
             await this.events.appendSessionEventInTransaction(tx, {

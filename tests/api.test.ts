@@ -8,7 +8,6 @@ vi.mock("../src/db/prisma", () => ({
 }));
 
 const { createApp } = await import("../src/server");
-const { taskService } = await import("../src/services/task/task");
 
 describe("HTTP wiring", () => {
   const app = createApp();
@@ -19,17 +18,6 @@ describe("HTTP wiring", () => {
     const response = await request(app).get("/health");
     expect(response.status).toBe(200);
     expect(response.body.status).toBe("ok");
-  });
-
-  it("keeps task routes strict", async () => {
-    const response = await request(app).post("/tasks").send({
-      repoRef: "./repo",
-      instructions: "No-op",
-      sandboxId: "sbox_1",
-    });
-
-    expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe("invalid_request");
   });
 
   it("exposes strict chat-session routes", async () => {
@@ -52,33 +40,14 @@ describe("HTTP wiring", () => {
     ["get", "/sandboxes/sbox_1/commands/cmd_1"],
     ["get", "/sandboxes/sbox_1/diff"],
     ["delete", "/sandboxes/sbox_1"],
-  ] as const)(
-    "returns 404 for retired sandbox route %s %s",
-    async (method, path) => {
-      const response = await request(app)[method](path);
-      expect(response.status).toBe(404);
-      expect(response.body.error.code).toBe("not_found");
-    },
-  );
-
-  it("keeps task creation as the product boundary", async () => {
-    vi.spyOn(taskService, "create").mockResolvedValue({
-      taskId: "task_1",
-      status: "created",
-      eventsUrl: "/tasks/task_1/events",
-    });
-
-    const response = await request(app).post("/tasks").send({
-      repoRef: "./repo",
-      instructions: "No-op",
-    });
-
-    expect(response.status).toBe(202);
-    expect(response.body).toEqual({
-      taskId: "task_1",
-      status: "created",
-      eventsUrl: "/tasks/task_1/events",
-    });
-    expect(response.headers.deprecation).toBe("true");
+    ["post", "/tasks"],
+    ["get", "/tasks/task_1"],
+    ["get", "/tasks/task_1/events"],
+    ["get", "/tasks/task_1/result"],
+    ["delete", "/tasks/task_1"],
+  ] as const)("returns 404 for retired route %s %s", async (method, path) => {
+    const response = await request(app)[method](path);
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("not_found");
   });
 });

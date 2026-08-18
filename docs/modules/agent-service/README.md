@@ -1,20 +1,23 @@
 # Agent Service — Agent Runner, Event Relay, and Live Acceptance
 
-The Agent Service owns the control-plane agent loop. It runs inside the task
+The Agent Service owns the control-plane agent loop. It runs inside the API
 process, uses the AI SDK 7 `generateText` loop with the configured OpenRouter
-model, proxies seven tools through the task-owned sandbox runtime, and relays
-tool lifecycle events to the shared task event stream. It does not expose an
-HTTP route or call the persisted command API.
+model, proxies seven tools through the session-owned sandbox runtime, and
+relays tool lifecycle events to the shared run event stream. It does not
+expose an HTTP route or call the persisted command API.
 
-TaskService remains responsible for task lifecycle transitions, terminal
-results, cancellation, diff capture, and cleanup. AgentRunner returns a final
-summary or throws; it does not mutate task state.
+`RunService` remains responsible for run lifecycle transitions, terminal
+results, cancellation, and diff capture; the sandbox is never stopped by a
+completed run. AgentRunner returns a final summary or throws; it does not
+mutate run state. `CodeWorkerRunner` wraps `AgentRunner` to parse its free
+text into the harness's schema-validated `WorkerResult` — see the
+[Chat Session Service](../chat-session/README.md#phase-5-orchestrator-worker-harness).
 
 ## Read first
 
 - [`docs/agent-sandboxing-project.md`](../../agent-sandboxing-project.md) — product direction and control-plane/execution-plane boundary
-- [`Task Service`](../task-service/README.md) — task lifecycle and runner seam
-- [`Sandbox Service`](../sandbox-service/README.md) — task-owned runtime target and execution boundary
+- [`Chat Session Service`](../chat-session/README.md) — run lifecycle, orchestrator-worker harness, and runner seam
+- [`Sandbox Service`](../sandbox-service/README.md) — session-owned runtime target and execution boundary
 - [`Event Service`](../event-service/README.md) — durable event and SSE contract
 - [`docs/planning/agent-service-atomic-mvp-plan.md`](../../planning/agent-service-atomic-mvp-plan.md) — MVP decisions and non-goals
 
@@ -31,7 +34,8 @@ summary or throws; it does not mutate task state.
 The production composition path selects `AgentRunner` outside test mode; test
 mode retains the placeholder runner so the DB-independent suite can run
 without provider credentials. The runner is an in-process collaborator of
-TaskService, not a separate HTTP service.
+`RunService` (via `CodeWorkerRunner`/`RunOrchestrator`), not a separate HTTP
+service.
 
 ## Composition and model configuration
 
@@ -47,8 +51,8 @@ environment variables, tool inputs, events, provider error messages, or logs.
 
 ## Runtime boundary
 
-Each factory receives a `Pick<SandboxRuntime, "simpleExec">`, the task's
-container name, loaded `Config`, and the task `AbortSignal`. The factory returns
+Each factory receives a `Pick<SandboxRuntime, "simpleExec">`, the sandbox's
+container name, loaded `Config`, and the run `AbortSignal`. The factory returns
 an AI SDK 7 `tool({ inputSchema, execute })` object. The registry contains
 exactly these keys:
 
@@ -56,37 +60,37 @@ exactly these keys:
 
 The tools execute in `/workspace/repo` through `SandboxRuntime.simpleExec`.
 They do not access Prisma, `SandboxService`, Docker, the event store, or
-`process.env` directly. Every runtime call receives the task signal and either
+`process.env` directly. Every runtime call receives the run signal and either
 `AGENT_TOOL_TIMEOUT_MS` or `AGENT_BASH_TIMEOUT_MS`.
 
 Before creating the registry, AgentRunner asks
-`SandboxService.getAgentToolTarget(taskId, sandboxId)` for the task-owned,
-`ready` sandbox. That internal seam queries both identifiers and returns only
-the container name and `simpleExec`; no Prisma or Docker details enter the
-Agent Service.
+`SandboxService.getAgentToolTarget(sessionId, runId, sandboxId)` for the
+session-owned, `ready` sandbox. That internal seam queries session ownership
+and returns only the container name and `simpleExec`; no Prisma or Docker
+details enter the Agent Service.
 
 ## AgentRunner and cancellation
 
-AgentRunner checks the task signal before target lookup and before the model
-call. It calls `generateText` with one user message containing the task
-instructions, the system prompt, all seven tools, the same `abortSignal`, and
+AgentRunner checks the run signal before target lookup and before the model
+call. It calls `generateText` with one user message containing the worker
+brief, the system prompt, all seven tools, the same `abortSignal`, and
 `stopWhen: isStepCount(config.AGENT_MAX_STEPS)`. Tool executions are serialized
-per task because the AI SDK may request multiple tools concurrently while the
+per run because the AI SDK may request multiple tools concurrently while the
 tools share one workspace. The final text is trimmed and returned as the
-nullable task summary.
+nullable run summary.
 
-An `AbortError` is re-thrown so TaskService's existing cancellation path owns
+An `AbortError` is re-thrown so `RunService`'s existing cancellation path owns
 the terminal `cancelled` state. Other provider/model failures become the safe
-`agent_run_failed` service error and are persisted by TaskService as a failed
-task.
+`agent_run_failed` service error and are persisted by `RunService` as a failed
+run.
 
 ## Tool event relay
 
 `ToolEventRelay` handles AI SDK `onToolExecutionStart` and
 `onToolExecutionEnd` callbacks. It appends `agent_tool_call` before tool
 execution and `agent_tool_result` after it through `EventStore.append`, then
-publishes the returned event. Each event includes the task and sandbox IDs,
-`producerService: "agent"`, `producerId: taskId`, and a correlation ID shared
+publishes the returned event. Each event includes the run and sandbox IDs,
+`producerService: "agent"`, `producerId: runId`, and a correlation ID shared
 by the matching call/result pair. Repeated SDK call IDs are disambiguated.
 
 Call payloads use `tool_name` and `args`. Result payloads use
@@ -151,14 +155,14 @@ The public runtime configuration contract is defined only in
 The tools are intentionally DB-independent and Docker-independent in tests;
 tests mock only the `simpleExec` seam.
 
-## Live acceptance (Slice 4)
+## Live acceptance
 
-Live coverage extends the existing task-service harness; no second acceptance
-script is required. From the repository root, run:
+Live coverage extends the chat-session harness; no second acceptance script is
+required. From the repository root, run:
 
 ```bash
 NODE_ENV=development BASE_URL=http://localhost:3000 \
-  scripts/acceptance/task-service-atomic-mvp.sh
+  scripts/acceptance/chat-session-atomic-mvp.sh
 ```
 
 The command requires a non-test API running against the repository workspace,
@@ -187,10 +191,11 @@ The scenarios are:
    strict ordering and include the agent events.
 4. Cancellation and missing-fixture provisioning failure remain covered.
 
-For each live agent task, assertions validate the durable event envelope,
-task/sandbox ownership, matching tool-call correlation IDs and ordering,
-bounded result snippets, exit codes, truncation flags, durations, sanitized
-provider output, diff lifecycle events, and sandbox cleanup. They deliberately
-do not compare exact model prose. Agent edits happen only in copied sandbox
+For each live agent run, assertions validate the durable event envelope,
+session/run/sandbox ownership, matching tool-call correlation IDs and
+ordering, bounded result snippets, exit codes, truncation flags, durations,
+sanitized provider output, diff lifecycle events, and that the sandbox is
+reused (not stopped) across runs in the same session. They deliberately do
+not compare exact model prose. Agent edits happen only in copied sandbox
 workspaces; the host fixture is checked for changes and restored after the
 provisioning-failure scenario on every exit path.

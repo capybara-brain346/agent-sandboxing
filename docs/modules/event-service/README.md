@@ -12,11 +12,14 @@ collaborators rather than a standalone HTTP service:
 - [`SseHub`](../../../src/services/events/sse-hub.ts) fans committed events out
   to open SSE responses in the current process.
 
-The existing public compatibility stream is exposed by
-[`GET /tasks/:taskId/events`](../../../src/routes/task.routes.ts). New callers
-use [`GET /chat-sessions/:sessionId/events`](../../../src/routes/chat-session.routes.ts)
-for chat milestones and the nested run event route for detailed execution
-telemetry. The task route remains a deprecated compatibility adapter.
+The public SSE surface is
+[`GET /chat-sessions/:sessionId/events`](../../../src/routes/chat-session.routes.ts)
+for chat milestones and
+`GET /chat-sessions/:sessionId/runs/:runId/events` for detailed execution
+telemetry. The legacy `GET /tasks/:taskId/events` compatibility route was
+removed in Phase 8 (see the
+[Task Run Runtime history](../task-service/README.md#history)); `/tasks/*`
+now returns `404`.
 
 ## Design invariants
 
@@ -24,8 +27,10 @@ The following rules define the event contract:
 
 1. Canonical streams use `streamScope` plus `streamId`: `session` streams are
    keyed by `ChatSession.id`, and `run` streams are keyed by the transitional
-   `Task.id` used as the TaskRun identifier. Legacy `task` streams remain
-   readable during migration.
+   `Task.id` used as the TaskRun identifier. The legacy `task` stream scope
+   still exists in `EventStore`/`toPublic` for internal replay compatibility,
+   but no public route reads or writes it anymore (Phase 8 removed
+   `/tasks/*`).
 2. Sequences are positive integers, start at `1`, and are strictly increasing
    within one scoped stream. Session and run streams have independent cursors.
 3. A state mutation and its lifecycle event are committed in the same database
@@ -40,7 +45,7 @@ The following rules define the event contract:
 ## Architecture
 
 ```text
-Session/Run services / TaskService / SandboxService / CommandExecutionService
+ChatSessionService / RunService / SandboxService / CommandExecutionService
                          / AgentRunner
                          |
                          v
@@ -189,11 +194,11 @@ before treating them as emitted behavior.
 
 ## SSE delivery and replay
 
-Each single-stream SSE route accepts a non-negative integer cursor. The legacy
-task route is:
+Each single-stream SSE route accepts a non-negative integer cursor:
 
 ```http
-GET /tasks/task_<id>/events?after=12
+GET /chat-sessions/chat_<id>/events?after=12
+GET /chat-sessions/chat_<id>/runs/run_<id>/events?after=12
 ```
 
 If `after` is omitted, the route uses the `Last-Event-ID` header; an explicit
@@ -253,8 +258,8 @@ Event-specific tests are:
   allocation, scoped streams, task-stream replay, and rollback behavior;
 - [`tests/sse-hub.test.ts`](../../../tests/sse-hub.test.ts) — fanout, replay
   buffering, ordering, and duplicate suppression; and
-- [`tests/task-routes.test.ts`](../../../tests/task-routes.test.ts) — HTTP SSE
-  headers and replay integration.
+- [`tests/chat-routes.test.ts`](../../../tests/chat-routes.test.ts) — HTTP SSE
+  headers and replay integration for the session/run routes.
 
 Run the normal repository checks from the root:
 

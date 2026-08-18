@@ -44,27 +44,32 @@ operations, or structure.
 
 ## Architecture invariants
 
-- Keep the dependency direction: product routes → `TaskService` →
-  task/sandbox/event services → Prisma or `SandboxRuntime`. The SSE route is an
-  intentional exception: it directly coordinates replay and subscription with
-  `SseHub`.
+- Keep the dependency direction: product routes → `ChatSessionService`/
+  `RunService` → sandbox/event/artifact services → Prisma or `SandboxRuntime`.
+  The SSE route is an intentional exception: it directly coordinates replay
+  and subscription with `SseHub`. There is one product path — session,
+  message, run — not a parallel task-first surface; the old `/tasks` HTTP
+  routes and standalone `TaskService` were removed (see
+  `docs/modules/task-service/README.md`).
 - Routes must not access Prisma or sandbox internals. Domain and orchestration
   services must not import Express types; `SseHub` is the intentional
   transport-layer exception because it manages live `Response` connections.
 - `SandboxRuntime` is the only module that invokes Docker.
-- Task status transitions have an authoritative map in `src/services/task/task.ts`;
-  update its production checks and transition tests when changing them.
+- Run (`TaskRun`) status transitions have an authoritative map in
+  `src/services/task/task.ts` (`canTransition`); update its production checks
+  and transition tests when changing them.
 - The sandbox `transitions` map is currently a helper/test contract, not the
   runtime enforcement point. When changing legal sandbox status transitions,
   update the map, the enforcing database predicates/assignments in
   `sandbox.ts`, and transition tests together. Command outcomes are handled in
   `command-execution.ts`.
-- Persist a lifecycle state change and its task event in one transaction; publish
-  to `sseHub` only after commit. Every event has a `taskId`.
+- Persist a lifecycle state change and its event in one transaction; publish
+  to `sseHub` only after commit. Every event has a `sessionId` and, once a run
+  exists, a `runId`.
 - Avoid speculative implementation abstractions. Boundary contracts and
-  deliberate seams such as `TaskRunner` and `TaskServicePort` are allowed when
-  they enforce dependency direction or enable a planned replacement. Do not
-  add a `SandboxRuntime` interface until a second runtime implementation exists.
+  deliberate seams such as `TaskRunner` are allowed when they enforce
+  dependency direction or enable a planned replacement. Do not add a
+  `SandboxRuntime` interface until a second runtime implementation exists.
 
 ## Working method
 
@@ -101,7 +106,7 @@ Run from the repository root:
 - `npm run test:runtime` — reserved for `tests/runtime/**/*.test.ts`; that
   directory is currently absent, so this command exits with “No test files
   found” and must not be reported as a passing check until runtime tests return.
-- `BASE_URL=http://localhost:3000 scripts/acceptance/task-service-atomic-mvp.sh`
+- `BASE_URL=http://localhost:3000 scripts/acceptance/chat-session-atomic-mvp.sh`
   — end-to-end acceptance harness. It requires the API, Postgres, and Docker
   to be running, plus `jq`, `curl`, `git`, `timeout`, and POSIX shell tools.
 - `npm run typecheck` — TypeScript check.

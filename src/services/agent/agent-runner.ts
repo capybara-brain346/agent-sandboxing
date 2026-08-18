@@ -28,7 +28,7 @@ import {
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
 
 export const AGENT_SYSTEM_PROMPT = [
-  "You are a careful coding agent working on a task-owned repository.",
+  "You are a careful coding agent working on a session-owned repository.",
   "Use the available tools to inspect and modify files under /workspace/repo.",
   "Work only within that workspace, follow the user's instructions, and keep changes focused.",
   "When the work is complete, respond with a concise summary of what you changed.",
@@ -94,16 +94,11 @@ export class AgentRunner implements TaskRunner {
 
   async run(context: TaskRunContext): Promise<TaskRunResult> {
     throwIfAborted(context.signal);
-    const target = context.sessionId
-      ? await this.dependencies.sandbox.getAgentToolTarget(
-          context.sessionId,
-          context.taskId,
-          context.sandboxId,
-        )
-      : await this.dependencies.sandbox.getAgentToolTarget(
-          context.taskId,
-          context.sandboxId,
-        );
+    const target = await this.dependencies.sandbox.getAgentToolTarget(
+      context.sessionId,
+      context.taskId,
+      context.sandboxId,
+    );
     throwIfAborted(context.signal);
 
     const tools = serializeToolRegistry(

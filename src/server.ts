@@ -10,7 +10,6 @@ import { logger } from "./logger";
 import { ServiceError } from "./shared/errors";
 import { prisma } from "./db/prisma";
 import { chatSessionRouter } from "./routes/chat-session.routes";
-import { taskRouter } from "./routes/task.routes";
 
 const pkgVersion: string = JSON.parse(
   readFileSync(
@@ -125,7 +124,6 @@ export const createApp = (): express.Express => {
   });
 
   app.use(chatSessionRouter);
-  app.use(taskRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { API_BASE_URL } from "./client";
-import { EVENT_TYPES, type PublicTaskEvent } from "./types";
+import { EVENT_TYPES, type PublicChatEvent } from "./types";
 
-export const useTaskEvents = (
+export const useEventStream = (
   eventsUrl: string | null,
-): { events: PublicTaskEvent[]; connectionError: boolean } => {
-  const [events, setEvents] = useState<PublicTaskEvent[]>([]);
+): { events: PublicChatEvent[]; connectionError: boolean } => {
+  const [events, setEvents] = useState<PublicChatEvent[]>([]);
   const [connectionError, setConnectionError] = useState(false);
   const seenSequences = useRef<Set<number>>(new Set());
 
@@ -18,7 +18,7 @@ export const useTaskEvents = (
     const source = new EventSource(`${API_BASE_URL}${eventsUrl}`);
 
     const onEvent = (message: MessageEvent<string>): void => {
-      const parsed = JSON.parse(message.data) as PublicTaskEvent;
+      const parsed = JSON.parse(message.data) as PublicChatEvent;
       if (seenSequences.current.has(parsed.sequence)) return;
       seenSequences.current.add(parsed.sequence);
       setEvents((previous) =>

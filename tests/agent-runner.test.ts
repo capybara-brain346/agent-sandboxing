@@ -48,6 +48,8 @@ const makeContext = (
   sandboxId: "sbox_1",
   instructions: "Update the greeting",
   signal,
+  sessionId: "chat_1",
+  messageId: "msg_1",
 });
 
 const makeRunner = (overrides: Partial<Config> = {}) => {
@@ -97,6 +99,7 @@ describe("AgentRunner", () => {
     });
 
     expect(harness.sandbox.getAgentToolTarget).toHaveBeenCalledWith(
+      "chat_1",
       "task_1",
       "sbox_1",
     );

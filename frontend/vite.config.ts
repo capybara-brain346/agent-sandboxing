@@ -14,7 +14,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/tasks": {
+      "/chat-sessions": {
         target: "http://localhost:3000",
         bypass: bypassNavigationRequests,
       },

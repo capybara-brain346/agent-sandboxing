@@ -7,18 +7,20 @@
 
 ## Module guides
 
-- [Task Service](modules/task-service/README.md) — task lifecycle, public HTTP
-  API, orchestration, and task-scoped events.
-- [Sandbox Service](modules/sandbox-service/README.md) — sandbox runtime,
-  command execution, diff capture, and execution-plane behavior.
+- [Chat Session Service](modules/chat-session/README.md) — the product
+  boundary: repo-scoped chat, messages, runs, the orchestrator-worker
+  harness, artifacts, and session/run SSE APIs.
+- [Sandbox Service](modules/sandbox-service/README.md) — session-owned
+  sandbox runtime, diff capture, and execution-plane behavior.
 - [Event Service](modules/event-service/README.md) — event persistence,
   replay, and Server-Sent Events delivery.
-- [Chat Session Service](modules/chat-session/README.md) — repo-scoped chat,
-  messages, runs, and session/run SSE APIs.
 - [Agent Service](modules/agent-service/README.md) — agent runner, tools, and
   tool-event relay.
-- [Frontend](modules/frontend/README.md) — dashboard architecture and public
-  backend contract usage.
+- [Task Run Runtime](modules/task-service/README.md) — shared execution
+  runtime consumed by the chat-session harness, and the retired `/tasks` API
+  history.
+- [Frontend](modules/frontend/README.md) — chat workspace architecture and
+  public backend contract usage.
 
 ## Planning
 

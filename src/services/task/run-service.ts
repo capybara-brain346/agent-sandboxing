@@ -351,13 +351,18 @@ export class RunService {
     }
   }
 
-  private artifactCreatedEvents(
+  // Event sequence allocation locks the stream row `FOR UPDATE` but does not
+  // self-block within the same transaction, so concurrent appends on one
+  // transaction can read the same next-sequence value before either commits
+  // its increment. Appends within a transaction must run sequentially.
+  private async artifactCreatedEvents(
     tx: Prisma.TransactionClient,
     sessionId: string,
     runId: string,
     artifacts: ArtifactPreview[],
-  ): Array<Promise<PublicEvent>> {
-    return artifacts.flatMap((artifact) => {
+  ): Promise<PublicEvent[]> {
+    const events: PublicEvent[] = [];
+    for (const artifact of artifacts) {
       const payload = {
         artifact_id: artifact.artifactId,
         kind: artifact.kind,
@@ -367,8 +372,8 @@ export class RunService {
         redacted: artifact.redacted,
         preview: artifact.preview,
       };
-      return [
-        this.events.appendRunEventInTransaction(tx, {
+      events.push(
+        await this.events.appendRunEventInTransaction(tx, {
           sessionId,
           runId,
           artifactId: artifact.artifactId,
@@ -379,7 +384,9 @@ export class RunService {
           domain: "artifact",
           payload,
         }),
-        this.events.appendSessionEventInTransaction(tx, {
+      );
+      events.push(
+        await this.events.appendSessionEventInTransaction(tx, {
           sessionId,
           runId,
           artifactId: artifact.artifactId,
@@ -390,8 +397,9 @@ export class RunService {
           domain: "artifact",
           payload,
         }),
-      ];
-    });
+      );
+    }
+    return events;
   }
 
   private async completeRun(
@@ -519,8 +527,11 @@ export class RunService {
             runResultReady,
             sessionCompleted,
             sessionResultReady,
-            ...(await Promise.all(
-              this.artifactCreatedEvents(tx, sessionId, runId, artifacts),
+            ...(await this.artifactCreatedEvents(
+              tx,
+              sessionId,
+              runId,
+              artifacts,
             )),
           ];
         }),
@@ -630,8 +641,11 @@ export class RunService {
             runResultReady,
             sessionFailed,
             sessionResultReady,
-            ...(await Promise.all(
-              this.artifactCreatedEvents(tx, sessionId, runId, artifacts),
+            ...(await this.artifactCreatedEvents(
+              tx,
+              sessionId,
+              runId,
+              artifacts,
             )),
           ];
         }),

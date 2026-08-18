@@ -1,10 +1,17 @@
 import type {
   ApiErrorBody,
-  CreateTaskRequest,
-  CreateTaskResponse,
-  TaskCancellationResponse,
-  TaskResult,
-  TaskSnapshot,
+  ArtifactContent,
+  ChatSession,
+  ChatSessionListItem,
+  ChatMessage,
+  CreateChatSessionRequest,
+  CreateMessageRequest,
+  CreateMessageResponse,
+  Page,
+  RunCancellationResponse,
+  RunResult,
+  RunSnapshot,
+  UpdateChatSessionRequest,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -39,18 +46,89 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
-export const createTask = (
-  input: CreateTaskRequest,
-): Promise<CreateTaskResponse> =>
-  request("/tasks", { method: "POST", body: JSON.stringify(input) });
+export const createChatSession = (
+  input: CreateChatSessionRequest,
+): Promise<ChatSession> =>
+  request("/chat-sessions", { method: "POST", body: JSON.stringify(input) });
 
-export const getTask = (taskId: string): Promise<TaskSnapshot> =>
-  request(`/tasks/${taskId}`);
+export const listChatSessions = (
+  params: { limit?: number; cursor?: string } = {},
+): Promise<Page<ChatSessionListItem>> => {
+  const query = new URLSearchParams();
+  if (params.limit) query.set("limit", String(params.limit));
+  if (params.cursor) query.set("cursor", params.cursor);
+  const suffix = query.toString();
+  return request(`/chat-sessions${suffix ? `?${suffix}` : ""}`);
+};
 
-export const getTaskResult = (taskId: string): Promise<TaskResult> =>
-  request(`/tasks/${taskId}/result`);
+export const getChatSession = (sessionId: string): Promise<ChatSession> =>
+  request(`/chat-sessions/${sessionId}`);
 
-export const cancelTask = (taskId: string): Promise<TaskCancellationResponse> =>
-  request(`/tasks/${taskId}`, { method: "DELETE" });
+export const updateChatSession = (
+  sessionId: string,
+  input: UpdateChatSessionRequest,
+): Promise<ChatSession> =>
+  request(`/chat-sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+
+export const listMessages = (
+  sessionId: string,
+  params: { limit?: number; before?: string } = {},
+): Promise<Page<ChatMessage>> => {
+  const query = new URLSearchParams();
+  if (params.limit) query.set("limit", String(params.limit));
+  if (params.before) query.set("before", params.before);
+  const suffix = query.toString();
+  return request(
+    `/chat-sessions/${sessionId}/messages${suffix ? `?${suffix}` : ""}`,
+  );
+};
+
+export const sendMessage = (
+  sessionId: string,
+  input: CreateMessageRequest,
+): Promise<CreateMessageResponse> =>
+  request(`/chat-sessions/${sessionId}/messages`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const listRuns = (
+  sessionId: string,
+  params: { limit?: number; cursor?: string } = {},
+): Promise<Page<RunSnapshot>> => {
+  const query = new URLSearchParams();
+  if (params.limit) query.set("limit", String(params.limit));
+  if (params.cursor) query.set("cursor", params.cursor);
+  const suffix = query.toString();
+  return request(
+    `/chat-sessions/${sessionId}/runs${suffix ? `?${suffix}` : ""}`,
+  );
+};
+
+export const getRun = (
+  sessionId: string,
+  runId: string,
+): Promise<RunSnapshot> => request(`/chat-sessions/${sessionId}/runs/${runId}`);
+
+export const getRunResult = (
+  sessionId: string,
+  runId: string,
+): Promise<RunResult> =>
+  request(`/chat-sessions/${sessionId}/runs/${runId}/result`);
+
+export const cancelRun = (
+  sessionId: string,
+  runId: string,
+): Promise<RunCancellationResponse> =>
+  request(`/chat-sessions/${sessionId}/runs/${runId}`, { method: "DELETE" });
+
+export const getArtifact = (
+  sessionId: string,
+  artifactId: string,
+): Promise<ArtifactContent> =>
+  request(`/chat-sessions/${sessionId}/artifacts/${artifactId}`);
 
 export { API_BASE_URL };

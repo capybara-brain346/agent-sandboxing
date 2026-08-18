@@ -16,12 +16,12 @@ cleanup() {
 trap cleanup EXIT
 
 fail() {
-  printf '[task-curl] ERROR: %s\n' "$*" >&2
+  printf '[chat-session-curl] ERROR: %s\n' "$*" >&2
   exit 1
 }
 
 log() {
-  printf '[task-curl] %s\n' "$*"
+  printf '[chat-session-curl] %s\n' "$*"
 }
 
 require_command() {
@@ -94,47 +94,49 @@ curl_json() {
 }
 
 poll_for_completion() {
-  local task_id="$1"
-  local output="${TMP_DIR}/task.json"
+  local session_id="$1"
+  local run_id="$2"
+  local output="${TMP_DIR}/run.json"
   local deadline=$((SECONDS + POLL_SECONDS))
   local status
 
   while (( SECONDS < deadline )); do
-    curl_json GET "/tasks/${task_id}" '' 200 "${output}"
+    curl_json GET "/chat-sessions/${session_id}/runs/${run_id}" '' 200 "${output}"
     status="$(jq -r '.status // empty' "${output}")"
     case "${status}" in
       completed)
-        cp -- "${output}" "${TMP_DIR}/task-completed.json"
-        log "task ${task_id} reached completed"
+        cp -- "${output}" "${TMP_DIR}/run-completed.json"
+        log "run ${run_id} reached completed"
         return
         ;;
       failed|cancelled)
         dump_response "${output}"
-        fail "task ${task_id} reached ${status}"
+        fail "run ${run_id} reached ${status}"
         ;;
       created|provisioning|running)
         sleep 1
         ;;
       *)
         dump_response "${output}"
-        fail "task ${task_id} returned unknown status: ${status}"
+        fail "run ${run_id} returned unknown status: ${status}"
         ;;
     esac
   done
 
   dump_response "${output}"
-  fail "task ${task_id} did not complete within ${POLL_SECONDS}s"
+  fail "run ${run_id} did not complete within ${POLL_SECONDS}s"
 }
 
 capture_sse() {
-  local task_id="$1"
+  local session_id="$1"
+  local run_id="$2"
   local output="${TMP_DIR}/events.sse"
   local headers="${TMP_DIR}/events.headers"
   local exit_code
 
   set +e
   timeout "${SSE_TIMEOUT_SECONDS}" curl -sS -N -D "${headers}" \
-    "${BASE_URL}/tasks/${task_id}/events?after=0" >"${output}"
+    "${BASE_URL}/chat-sessions/${session_id}/runs/${run_id}/events?after=0" >"${output}"
   exit_code=$?
   set -e
 
@@ -151,15 +153,15 @@ capture_sse() {
 }
 
 validate_sse() {
-  local task_id="$1"
+  local run_id="$1"
   local output="${TMP_DIR}/events.sse"
   local jsonl="${TMP_DIR}/events.jsonl"
   local events_json="${TMP_DIR}/events.json"
   local last_sequence
 
   for event_type in \
-    task_created sandbox_created task_provisioning_started sandbox_ready \
-    task_running agent_tool_call agent_tool_result task_completed task_result_ready; do
+    sandbox_created sandbox_provisioning_started sandbox_ready \
+    agent_tool_call agent_tool_result run_completed run_result_ready; do
     assert_sse_event "${output}" "${event_type}"
   done
 
@@ -182,13 +184,13 @@ validate_sse() {
     dump_response "${output}"
     fail 'SSE event data was not valid JSON'
   fi
-  assert_json_arg task_id "${task_id}" \
-    'length > 0 and all(.[]; .taskId == $task_id and .streamId == $task_id and (.sequence | type) == "number")' \
+  assert_json_arg run_id "${run_id}" \
+    'length > 0 and all(.[]; .runId == $run_id and .streamId == $run_id and (.sequence | type) == "number")' \
     "${events_json}"
 
   last_sequence="$(awk '/^id: / { id = $2 } END { print id }' "${output}")"
   [[ "${last_sequence}" =~ ^[0-9]+$ ]] || fail 'SSE stream had no final sequence'
-  log "replayed task events through sequence ${last_sequence}"
+  log "replayed run events through sequence ${last_sequence}"
 }
 
 require_command curl
@@ -202,31 +204,36 @@ log "checking ${BASE_URL}/health"
 curl_json GET /health '' 200 "${TMP_DIR}/health.json"
 assert_json '.status == "ok" and .checks.database.status == "ok"' "${TMP_DIR}/health.json"
 
-create_body="$(jq -cn --arg repo "${REPO_REF}" --arg instructions "${INSTRUCTIONS}" \
-  '{repoRef: $repo, instructions: $instructions}')"
-log 'creating task'
-curl_json POST /tasks "${create_body}" 202 "${TMP_DIR}/create.json"
-assert_json '.taskId | startswith("task_")' "${TMP_DIR}/create.json"
-assert_json '.status == "created" and (.eventsUrl | endswith("/events"))' "${TMP_DIR}/create.json"
-TASK_ID="$(jq -r '.taskId' "${TMP_DIR}/create.json")"
+log 'creating chat session'
+create_body="$(jq -cn --arg ref "${REPO_REF}" '{repo: {source: "fixture", ref: $ref}}')"
+curl_json POST /chat-sessions "${create_body}" 201 "${TMP_DIR}/session.json"
+assert_json '.chatSessionId | startswith("chat_")' "${TMP_DIR}/session.json"
+SESSION_ID="$(jq -r '.chatSessionId' "${TMP_DIR}/session.json")"
 
-log "checking initial snapshot for ${TASK_ID}"
-curl_json GET "/tasks/${TASK_ID}" '' 200 "${TMP_DIR}/initial-task.json"
-assert_json_arg task_id "${TASK_ID}" \
-  '.taskId == $task_id and .eventsUrl == ("/tasks/" + $task_id + "/events") and .resultUrl == ("/tasks/" + $task_id + "/result")' \
-  "${TMP_DIR}/initial-task.json"
+log "sending message to ${SESSION_ID}"
+message_body="$(jq -cn --arg content "${INSTRUCTIONS}" '{content: $content}')"
+curl_json POST "/chat-sessions/${SESSION_ID}/messages" "${message_body}" 202 "${TMP_DIR}/create.json"
+assert_json '.run.taskRunId | startswith("run_")' "${TMP_DIR}/create.json"
+assert_json '.run.status == "created" and (.run.eventsUrl | endswith("/events"))' "${TMP_DIR}/create.json"
+RUN_ID="$(jq -r '.run.taskRunId' "${TMP_DIR}/create.json")"
 
-poll_for_completion "${TASK_ID}"
-curl_json GET "/tasks/${TASK_ID}/result" '' 200 "${TMP_DIR}/result.json"
-assert_json_arg task_id "${TASK_ID}" \
-  '.taskId == $task_id and .status == "completed" and .exitReason == "completed" and (.diff | type) == "string" and (.agentSummary | type) == "string" and (.agentSummary | length) > 0' \
+log "checking initial snapshot for ${RUN_ID}"
+curl_json GET "/chat-sessions/${SESSION_ID}/runs/${RUN_ID}" '' 200 "${TMP_DIR}/initial-run.json"
+assert_json_arg run_id "${RUN_ID}" \
+  '.taskRunId == $run_id and .eventsUrl == ("/chat-sessions/'"${SESSION_ID}"'/runs/" + $run_id + "/events") and .resultUrl == ("/chat-sessions/'"${SESSION_ID}"'/runs/" + $run_id + "/result")' \
+  "${TMP_DIR}/initial-run.json"
+
+poll_for_completion "${SESSION_ID}" "${RUN_ID}"
+curl_json GET "/chat-sessions/${SESSION_ID}/runs/${RUN_ID}/result" '' 200 "${TMP_DIR}/result.json"
+assert_json_arg run_id "${RUN_ID}" \
+  '.taskRunId == $run_id and .status == "completed" and .exitReason == "completed" and (.diff | type) == "string" and (.agentSummary | type) == "string" and (.agentSummary | length) > 0' \
   "${TMP_DIR}/result.json"
 
-capture_sse "${TASK_ID}"
-validate_sse "${TASK_ID}"
+capture_sse "${SESSION_ID}" "${RUN_ID}"
+validate_sse "${RUN_ID}"
 
 log 'checking terminal cancellation response'
-curl_json DELETE "/tasks/${TASK_ID}" '' 409 "${TMP_DIR}/cancel.json"
-assert_json '.error.code == "task_already_terminal"' "${TMP_DIR}/cancel.json"
+curl_json DELETE "/chat-sessions/${SESSION_ID}/runs/${RUN_ID}" '' 409 "${TMP_DIR}/cancel.json"
+assert_json '.error.code == "run_already_terminal"' "${TMP_DIR}/cancel.json"
 
-printf 'PASS task service curl flow (%s)\n' "${TASK_ID}"
+printf 'PASS chat session curl flow (%s / %s)\n' "${SESSION_ID}" "${RUN_ID}"

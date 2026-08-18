@@ -1,6 +1,6 @@
-import type { PublicTaskEvent } from "../api/types";
+import type { PublicChatEvent } from "../api/types";
 
-const describePayload = (event: PublicTaskEvent): string | null => {
+const describePayload = (event: PublicChatEvent): string | null => {
   const payload = event.payload;
   switch (event.type) {
     case "command_started":
@@ -31,7 +31,7 @@ const describePayload = (event: PublicTaskEvent): string | null => {
   }
 };
 
-export const EventTimeline = ({ events }: { events: PublicTaskEvent[] }) => {
+export const EventTimeline = ({ events }: { events: PublicChatEvent[] }) => {
   if (events.length === 0) {
     return <p className="event-timeline--empty">Waiting for activity…</p>;
   }
