@@ -25,6 +25,10 @@ operations, or structure.
 - `src/db/` — Prisma client setup.
 - `src/shared/` and `src/types/` — cross-service errors, helpers, and types.
 - `prisma/schema.prisma` — database schema; `prisma/migrations/` — migration history.
+- `prompts/` — versioned system prompt YAML files, loaded via
+  `src/prompts/load-prompt.ts`; not under `src/` so the same
+  `process.cwd()`-relative path resolves in both `tsx` dev and the
+  esbuild-bundled production build.
 - `tests/` — Vitest unit and integration tests.
 - `repo/` — fixture repository copied into sandboxes; not application source.
 - `frontend/` — standalone Vite/React/TypeScript dashboard; own `package.json`
@@ -41,35 +45,6 @@ operations, or structure.
 - `prisma/schema.prisma` and committed migrations define database shape.
 - Do not hand-edit generated files or files under `prisma/migrations/`; use the
   project’s Prisma commands.
-
-## Architecture invariants
-
-- Keep the dependency direction: product routes → `ChatSessionService`/
-  `RunService` → sandbox/event/artifact services → Prisma or `SandboxRuntime`.
-  The SSE route is an intentional exception: it directly coordinates replay
-  and subscription with `SseHub`. There is one product path — session,
-  message, run — not a parallel task-first surface; the old `/tasks` HTTP
-  routes and standalone `TaskService` were removed (see
-  `docs/modules/task-service/README.md`).
-- Routes must not access Prisma or sandbox internals. Domain and orchestration
-  services must not import Express types; `SseHub` is the intentional
-  transport-layer exception because it manages live `Response` connections.
-- `SandboxRuntime` is the only module that invokes Docker.
-- Run (`TaskRun`) status transitions have an authoritative map in
-  `src/services/task/task.ts` (`canTransition`); update its production checks
-  and transition tests when changing them.
-- The sandbox `transitions` map is currently a helper/test contract, not the
-  runtime enforcement point. When changing legal sandbox status transitions,
-  update the map, the enforcing database predicates/assignments in
-  `sandbox.ts`, and transition tests together. Command outcomes are handled in
-  `command-execution.ts`.
-- Persist a lifecycle state change and its event in one transaction; publish
-  to `sseHub` only after commit. Every event has a `sessionId` and, once a run
-  exists, a `runId`.
-- Avoid speculative implementation abstractions. Boundary contracts and
-  deliberate seams such as `TaskRunner` are allowed when they enforce
-  dependency direction or enable a planned replacement. Do not add a
-  `SandboxRuntime` interface until a second runtime implementation exists.
 
 ## Working method
 
@@ -125,19 +100,6 @@ when the public configuration contract changes. Do not weaken tests/lint/type
 checks, rewrite Git history, or commit, push, merge, or publish unless asked.
 Ask before adding production dependencies or running destructive database or
 infrastructure commands.
-
-## Out of scope
-
-Unless a task explicitly says otherwise, this service does not implement the
-agent loop, GitHub integration, LLM/provider credentials, authentication, or
-queues. The dashboard frontend is a separate app in `frontend/`; see the
-Frontend guide indexed in `docs/README.md`.
-
-## Definition of done
-
-A task is complete when the requested behavior is implemented, relevant tests
-and checks pass, required documentation is updated, and the final report states
-what changed, commands actually run, and any remaining risks or skipped checks.
 
 Keep detailed architecture, workflows, and personal communication preferences
 in their appropriate documentation, skills, or global instructions instead of
