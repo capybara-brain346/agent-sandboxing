@@ -26,6 +26,7 @@
 
 - [Repo-scoped chat session agent harness Phase 0 decisions](planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)
 - [Repo-scoped chat session agent harness plan](planning/repo-scoped-chat-session-agent-harness-plan.md)
+- [Orchestrator and subagent eval plan](planning/orchestrator-subagent-eval-plan.md)
 - [Task Service Atomic MVP plan](planning/task-service-atomic-mvp-plan.md)
 - [Sandbox Service Atomic MVP plan](planning/sandbox-service-atomic-mvp-plan.md)
 - [Agent Service Atomic MVP plan](planning/agent-service-atomic-mvp-plan.md)
