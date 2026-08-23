@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { RunOrchestrator } from "../src/services/chat/run-orchestrator";
-import type { OrchestratorAgent } from "../src/services/chat/orchestrator-agent";
+import type { OrchestratorAgent } from "../src/services/agent/orchestrator-agent";
 import type { SessionContextBuilder } from "../src/services/chat/session-context-builder";
-import type { SessionSummaryCompactor } from "../src/services/chat/session-summary-compactor";
+import type { SessionSummaryCompactor } from "../src/services/agent/session-summary-compactor";
 import type { CodeWorkerRunner } from "../src/services/agent/code-worker-runner";
 import type {
   OrchestratorContext,
@@ -128,13 +128,18 @@ describe("RunOrchestrator", () => {
   it("passes the built context and message through to the agent", async () => {
     const context = baseContext({ summary: "Objective: ship it" });
     const { orchestrator, agent } = makeHarness({ context });
-    await orchestrator.run(runContext("what did you change last turn?"));
+    const signal = new AbortController().signal;
+    await orchestrator.run({
+      ...runContext("what did you change last turn?"),
+      signal,
+    });
     expect(agent.decide).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "chat_1",
         repoRef: "./repo",
         summary: "Objective: ship it",
         message: "what did you change last turn?",
+        signal,
         delegate: expect.any(Function),
       }),
     );
@@ -217,12 +222,13 @@ describe("RunOrchestrator", () => {
       recentToolActivity: ["read: did stuff"],
     });
     const { orchestrator, compactor, updates } = makeHarness({ context });
-    await orchestrator.run(runContext("fix the bug"));
+    const signal = new AbortController().signal;
+    await orchestrator.run({ ...runContext("fix the bug"), signal });
     expect(compactor.compact).toHaveBeenCalledWith({
       previousSummary: context.summary,
       recentMessages: context.recentMessages,
       recentToolActivity: context.recentToolActivity,
-      workspace: context.workspace,
+      signal,
     });
     expect(updates).toEqual([
       {

@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { RunService } from "../src/services/task/run-service";
 import { RunOrchestrator } from "../src/services/chat/run-orchestrator";
-import { StaticOrchestratorAgent } from "../src/services/chat/orchestrator-agent";
+import type { OrchestratorAgent } from "../src/services/agent/orchestrator-agent";
 import { CodeWorkerRunner } from "../src/services/agent/code-worker-runner";
 import type { SessionContextBuilder } from "../src/services/chat/session-context-builder";
-import { StaticSessionSummaryCompactor } from "../src/services/chat/session-summary-compactor";
+import type { SessionSummaryCompactor } from "../src/services/agent/session-summary-compactor";
 import type { EventStore } from "../src/services/events/event-store";
 import type { SessionSandboxCollaborator } from "../src/services/sandbox/sandbox";
 import type { PublicEvent } from "../src/types/event.types";
@@ -168,6 +168,24 @@ describe("message -> run -> worker -> assistant message -> summary update", () =
       }),
     };
 
+    const agent: OrchestratorAgent = {
+      decide: vi.fn(async (input) => {
+        const worker = await input.delegate(input.message);
+        return { reply: worker.summary, delegations: [worker] };
+      }),
+    };
+    const compactor: SessionSummaryCompactor = {
+      compact: vi.fn(async () =>
+        [
+          "Objective: Fix the bug",
+          "State: completed",
+          "LastResult: Fixed the bug in src/x.ts",
+          "Files: src/x.ts",
+          "Blockers: none",
+        ].join("\n"),
+      ),
+    };
+
     const orchestratorPrisma = {
       chatSession: {
         updateMany: vi.fn(async ({ data }: { data: { summary: string } }) => {
@@ -180,9 +198,9 @@ describe("message -> run -> worker -> assistant message -> summary update", () =
     const orchestrator = new RunOrchestrator(
       orchestratorPrisma,
       contextBuilder,
-      new StaticSessionSummaryCompactor(),
+      compactor,
       new CodeWorkerRunner(underlyingWorker),
-      new StaticOrchestratorAgent(),
+      agent,
     );
 
     const publish = vi.fn();

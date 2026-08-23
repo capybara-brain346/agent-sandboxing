@@ -5,7 +5,6 @@ import type {
   OrchestratorContext,
   WorkerResult,
 } from "../../types/harness.types";
-import { classifyMessage } from "./message-classifier";
 import { buildWorkerBrief, type WorkerCorrection } from "./worker-brief";
 import { getPromptText } from "../../prompts/load-prompt";
 
@@ -20,6 +19,7 @@ export type OrchestratorAgentInput = {
   recentToolActivity: string[];
   workspace: OrchestratorContext["workspace"];
   message: string;
+  signal: AbortSignal;
   delegate: (brief: string) => Promise<WorkerResult>;
 };
 
@@ -30,17 +30,6 @@ export type OrchestratorDecision = {
 
 export type OrchestratorAgent = {
   decide(input: OrchestratorAgentInput): Promise<OrchestratorDecision>;
-};
-
-const composeResponse = (result: WorkerResult): string => {
-  if (result.status === "completed") return result.summary;
-  const blockerText = result.blockers.length
-    ? ` Blockers: ${result.blockers.join("; ")}.`
-    : "";
-  const nextStep = result.suggestedNextStep
-    ? ` Suggested next step: ${result.suggestedNextStep}.`
-    : "";
-  return `${result.summary}${blockerText}${nextStep}`.trim();
 };
 
 type WorkerBriefContext = Pick<
@@ -55,41 +44,6 @@ const toWorkerBriefContext = (
   summary: input.summary,
   workspace: input.workspace,
 });
-
-/**
- * Deterministic fallback agent for test-mode: a direct repackaging of the
- * former classify-then-retry loop, with zero model calls.
- */
-export class StaticOrchestratorAgent implements OrchestratorAgent {
-  async decide(input: OrchestratorAgentInput): Promise<OrchestratorDecision> {
-    const intent = classifyMessage(input.message);
-    if (intent === "clarification") {
-      const reply = input.summary
-        ? `Could you clarify what change you'd like next? Current context: ${input.summary}`
-        : "Could you clarify what change you'd like me to make? No prior work exists in this session yet.";
-      return { reply, delegations: [] };
-    }
-
-    const context = toWorkerBriefContext(input);
-    const delegations: WorkerResult[] = [];
-    let attempt = 0;
-    let correction: WorkerCorrection | undefined;
-    let result: WorkerResult | undefined;
-    while (attempt < MAX_DELEGATIONS_PER_TURN) {
-      attempt += 1;
-      const brief = buildWorkerBrief(context, input.message, correction);
-      result = await input.delegate(brief);
-      delegations.push(result);
-      if (result.status !== "blocked") break;
-      correction = {
-        blockers: result.blockers,
-        suggestedNextStep: result.suggestedNextStep,
-      };
-    }
-    if (!result) throw new Error("StaticOrchestratorAgent produced no result");
-    return { reply: composeResponse(result), delegations };
-  }
-}
 
 const ORCHESTRATOR_SYSTEM_PROMPT = getPromptText("orchestrator");
 
@@ -172,6 +126,7 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
         { role: "user", content: input.message },
       ],
       tools: { delegate_to_code_worker: delegateTool },
+      abortSignal: input.signal,
       stopWhen: stepCountIs(ORCHESTRATOR_MAX_STEPS),
     });
 

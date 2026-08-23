@@ -1,10 +1,11 @@
 # Agent Service — Agent Runner, Event Relay, and Live Acceptance
 
-The Agent Service owns the control-plane agent loop. It runs inside the API
-process, uses the AI SDK 7 `generateText` loop with the configured OpenRouter
-model, proxies seven tools through the session-owned sandbox runtime, and
-relays tool lifecycle events to the shared run event stream. It does not
-expose an HTTP route or call the persisted command API.
+The Agent Service owns all model-backed agent behavior. It runs inside the API
+process, uses the AI SDK 7 `generateText` calls with the configured OpenRouter
+model, owns orchestration and summary-compaction decisions, proxies seven tools
+through the session-owned sandbox runtime, and relays tool lifecycle events to
+the shared run event stream. It does not expose an HTTP route or call the
+persisted command API.
 
 `RunService` remains responsible for run lifecycle transitions, terminal
 results, cancellation, and diff capture; the sandbox is never stopped by a
@@ -26,18 +27,24 @@ text into the harness's schema-validated `WorkerResult` — see the
 - [`AgentRunner`](../../../src/services/agent/agent-runner.ts) — model loop, tool registry, cancellation, and summary extraction
 - [`ToolEventRelay`](../../../src/services/agent/tool-event-relay.ts) — durable tool-call/result events and safe payloads
 - [`model.ts`](../../../src/services/agent/model.ts) — OpenRouter model resolution
+- [`orchestrator-agent.ts`](../../../src/services/agent/orchestrator-agent.ts) — direct-reply/delegation model
+- [`session-summary-compactor.ts`](../../../src/services/agent/session-summary-compactor.ts) — bounded summary-compaction model
 - [`load-prompt.ts`](../../../src/prompts/load-prompt.ts) — loads and validates the versioned system prompt YAML files
 - [`prompts/code-worker.yaml`](../../../prompts/code-worker.yaml) — CodeWorker's `generateText` system prompt
 - [`tools/`](../../../src/services/agent/tools/) — sandbox-proxied tool implementations and bash policy
 - [`tests/agent-runner.test.ts`](../../../tests/agent-runner.test.ts) — runner behavior and cancellation
+- [`tests/orchestrator-agent.test.ts`](../../../tests/orchestrator-agent.test.ts) — orchestration behavior and delegation bounds
+- [`tests/session-summary.test.ts`](../../../tests/session-summary.test.ts) — summary compaction and bounds
 - [`tests/agent-tool-relay.test.ts`](../../../tests/agent-tool-relay.test.ts) — event ordering and payload bounds
 - [`tests/agent-tools.test.ts`](../../../tests/agent-tools.test.ts) — tool validation and runtime behavior
 
-The production composition path selects `AgentRunner` outside test mode; test
-mode retains the placeholder runner so the DB-independent suite can run
-without provider credentials. The runner is an in-process collaborator of
-`RunService` (via `CodeWorkerRunner`/`RunOrchestrator`), not a separate HTTP
-service.
+The production composition path selects the model-backed AgentRunner,
+OrchestratorAgent, and SessionSummaryCompactor. The default test composition
+uses the existing placeholder runner; harness tests inject small collaborators
+directly so they do not need provider credentials. These are in-process
+collaborators of `RunService` through `CodeWorkerRunner` and `RunOrchestrator`,
+not a separate HTTP service. The chat service wires production collaborators
+explicitly but does not contain their model calls.
 
 ## Composition and model configuration
 
@@ -78,13 +85,20 @@ call. It calls `generateText` with one user message containing the worker
 brief, the system prompt, all seven tools, the same `abortSignal`, and
 `stopWhen: isStepCount(config.AGENT_MAX_STEPS)`. Tool executions are serialized
 per run because the AI SDK may request multiple tools concurrently while the
-tools share one workspace. The final text is trimmed and returned as the
-nullable run summary.
+tools share one workspace. It then makes a second, tools-free structured-output
+call over the completed transcript. The final text is trimmed and returned as
+the nullable run summary.
 
 An `AbortError` is re-thrown so `RunService`'s existing cancellation path owns
 the terminal `cancelled` state. Other provider/model failures become the safe
 `agent_run_failed` service error and are persisted by `RunService` as a failed
 run.
+
+`ModelOrchestratorAgent` and `ModelSessionSummaryCompactor` use the same
+configured model seam for chat orchestration and periodic summary compaction.
+Both receive the run `AbortSignal`. `RunOrchestrator` remains responsible for
+loading context and persisting the compaction result; it does not import the AI
+SDK or call a provider.
 
 ## System prompt loading
 

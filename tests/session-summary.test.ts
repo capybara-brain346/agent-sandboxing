@@ -1,9 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { LanguageModel } from "ai";
 import {
-  formatAndCap,
-  StaticSessionSummaryCompactor,
+  ModelSessionSummaryCompactor,
   type CompactionInput,
-} from "../src/services/chat/session-summary-compactor";
+} from "../src/services/agent/session-summary-compactor";
+
+const aiMocks = vi.hoisted(() => ({
+  generateText: vi.fn(),
+}));
+
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ai")>();
+  return { ...actual, generateText: aiMocks.generateText };
+});
 
 const baseInput = (
   overrides: Partial<CompactionInput> = {},
@@ -11,116 +20,49 @@ const baseInput = (
   previousSummary: "",
   recentMessages: [],
   recentToolActivity: [],
-  workspace: {
-    hasPriorRun: false,
-    lastRunStatus: null,
-    lastRunSummary: null,
-    changedFilesHint: [],
-  },
+  signal: new AbortController().signal,
   ...overrides,
 });
 
-describe("formatAndCap", () => {
-  it("caps files to MAX_FILES, keeping the most recent", () => {
-    const files = Array.from({ length: 20 }, (_, i) => `src/file-${i}.ts`);
-    const text = formatAndCap({
-      objective: "Do X",
-      state: "in progress",
-      lastResult: "",
-      files,
+describe("ModelSessionSummaryCompactor", () => {
+  it("passes the run signal to the model and formats the result", async () => {
+    const output = {
+      objective: "Add auth",
+      state: "complete",
+      lastResult: "Added middleware",
+      files: ["src/auth.ts"],
       blockers: [],
-    });
-    expect(text).toContain("src/file-19.ts");
-    expect(text).not.toContain("src/file-0.ts");
-  });
+    };
+    aiMocks.generateText.mockResolvedValueOnce({ output });
+    const signal = new AbortController().signal;
+    const compactor = new ModelSessionSummaryCompactor({} as LanguageModel);
 
-  it("caps blockers to MAX_BLOCKERS", () => {
-    const blockers = Array.from({ length: 10 }, (_, i) => `blocker-${i}`);
-    const text = formatAndCap({
-      objective: "Do X",
-      state: "blocked",
-      lastResult: "",
-      files: [],
-      blockers,
-    });
-    expect(text).toContain("blocker-0");
-    expect(text).not.toContain("blocker-9");
-  });
+    const summary = await compactor.compact(baseInput({ signal }));
 
-  it("stays within the 4000-byte budget by dropping oldest files first", () => {
-    const files = Array.from({ length: 500 }, (_, i) => `src/file-${i}.ts`);
-    const text = formatAndCap({
-      objective: "Do X",
-      state: "in progress",
-      lastResult:
-        "a fairly long free-text description of the work that was done",
-      files,
-      blockers: [],
-    });
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(4000);
-  });
-
-  it("renders none for empty files and blockers", () => {
-    const text = formatAndCap({
-      objective: "Do X",
-      state: "awaiting clarification",
-      lastResult: "",
-      files: [],
-      blockers: [],
-    });
-    expect(text).toContain("Files: none");
-    expect(text).toContain("Blockers: none");
-  });
-});
-
-describe("StaticSessionSummaryCompactor", () => {
-  it("carries the previous Objective forward when one exists", async () => {
-    const compactor = new StaticSessionSummaryCompactor();
-    const summary = await compactor.compact(
-      baseInput({ previousSummary: "Objective: Add auth middleware" }),
+    expect(summary).toContain("Objective: Add auth");
+    expect(aiMocks.generateText).toHaveBeenCalledWith(
+      expect.objectContaining({ abortSignal: signal }),
     );
-    expect(summary).toContain("Objective: Add auth middleware");
   });
 
-  it("falls back to the first recent message when there is no previous summary", async () => {
-    const compactor = new StaticSessionSummaryCompactor();
-    const summary = await compactor.compact(
-      baseInput({
-        recentMessages: [{ role: "user", content: "Add auth middleware" }],
-      }),
-    );
-    expect(summary).toContain("Objective: Add auth middleware");
-  });
+  it("bounds the model's summary fields before persistence", async () => {
+    aiMocks.generateText.mockResolvedValueOnce({
+      output: {
+        objective: "Do X",
+        state: "in progress",
+        lastResult: "",
+        files: Array.from({ length: 500 }, (_, i) => `src/file-${i}.ts`),
+        blockers: Array.from({ length: 10 }, (_, i) => `blocker-${i}`),
+      },
+    });
+    const compactor = new ModelSessionSummaryCompactor({} as LanguageModel);
 
-  it("unions the workspace's changed-files hint into Files", async () => {
-    const compactor = new StaticSessionSummaryCompactor();
-    const summary = await compactor.compact(
-      baseInput({
-        previousSummary: "Objective: Add auth\nFiles: src/auth.ts",
-        workspace: {
-          hasPriorRun: true,
-          lastRunStatus: "completed",
-          lastRunSummary: "Added middleware",
-          changedFilesHint: ["src/auth.ts", "tests/auth.test.ts"],
-        },
-      }),
-    );
-    expect(summary).toContain("src/auth.ts");
-    expect(summary).toContain("tests/auth.test.ts");
-  });
+    const summary = await compactor.compact(baseInput());
 
-  it("surfaces a synthetic blocker when the last run failed", async () => {
-    const compactor = new StaticSessionSummaryCompactor();
-    const summary = await compactor.compact(
-      baseInput({
-        workspace: {
-          hasPriorRun: true,
-          lastRunStatus: "failed",
-          lastRunSummary: null,
-          changedFilesHint: [],
-        },
-      }),
-    );
-    expect(summary).toContain("Blockers: last worker run failed");
+    expect(summary).toContain("src/file-499.ts");
+    expect(summary).not.toContain("src/file-0.ts");
+    expect(summary).toContain("blocker-0");
+    expect(summary).not.toContain("blocker-9");
+    expect(Buffer.byteLength(summary, "utf8")).toBeLessThanOrEqual(4000);
   });
 });

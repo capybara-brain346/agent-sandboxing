@@ -3,9 +3,8 @@ import type { LanguageModel } from "ai";
 import {
   MAX_DELEGATIONS_PER_TURN,
   ModelOrchestratorAgent,
-  StaticOrchestratorAgent,
   type OrchestratorAgentInput,
-} from "../src/services/chat/orchestrator-agent";
+} from "../src/services/agent/orchestrator-agent";
 import type { WorkerResult } from "../src/types/harness.types";
 
 const aiMocks = vi.hoisted(() => ({
@@ -42,77 +41,9 @@ const baseInput = (
     changedFilesHint: [],
   },
   message: "fix the bug",
+  signal: new AbortController().signal,
   delegate: vi.fn(async () => workerResult()),
   ...overrides,
-});
-
-describe("StaticOrchestratorAgent", () => {
-  it("answers a clarification message without delegating", async () => {
-    const agent = new StaticOrchestratorAgent();
-    const delegate = vi.fn(async () => workerResult());
-    const decision = await agent.decide(
-      baseInput({ message: "what does this do?", delegate }),
-    );
-    expect(delegate).not.toHaveBeenCalled();
-    expect(decision.delegations).toEqual([]);
-    expect(decision.reply).toContain("Objective: do X");
-  });
-
-  it("delegates once and returns the composed summary on completion", async () => {
-    const agent = new StaticOrchestratorAgent();
-    const delegate = vi.fn(async () => workerResult({ summary: "Fixed it" }));
-    const decision = await agent.decide(baseInput({ delegate }));
-    expect(delegate).toHaveBeenCalledTimes(1);
-    expect(decision.reply).toBe("Fixed it");
-    expect(decision.delegations).toEqual([
-      workerResult({ summary: "Fixed it" }),
-    ]);
-  });
-
-  it("retries once with a narrowed brief when blocked, then completes", async () => {
-    const results = [
-      workerResult({
-        status: "blocked",
-        blockers: ["missing config"],
-        suggestedNextStep: "ask for config",
-      }),
-      workerResult({ status: "completed", summary: "Now fixed" }),
-    ];
-    let call = 0;
-    const briefs: string[] = [];
-    const delegate = vi.fn(async (brief: string) => {
-      briefs.push(brief);
-      const result = results[call];
-      call += 1;
-      return result;
-    });
-    const agent = new StaticOrchestratorAgent();
-    const decision = await agent.decide(baseInput({ delegate }));
-    expect(delegate).toHaveBeenCalledTimes(2);
-    expect(decision.reply).toBe("Now fixed");
-    expect(briefs[1]).toContain("missing config");
-    expect(briefs[1]).toContain("ask for config");
-  });
-
-  it("stops after the max delegation budget and surfaces blockers when still blocked", async () => {
-    const delegate = vi.fn(async () =>
-      workerResult({ status: "blocked", blockers: ["still stuck"] }),
-    );
-    const agent = new StaticOrchestratorAgent();
-    const decision = await agent.decide(baseInput({ delegate }));
-    expect(delegate).toHaveBeenCalledTimes(MAX_DELEGATIONS_PER_TURN);
-    expect(decision.reply).toContain("still stuck");
-  });
-
-  it("does not retry a failed delegation", async () => {
-    const delegate = vi.fn(async () =>
-      workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
-    );
-    const agent = new StaticOrchestratorAgent();
-    const decision = await agent.decide(baseInput({ delegate }));
-    expect(delegate).toHaveBeenCalledTimes(1);
-    expect(decision.delegations[0]?.status).toBe("failed");
-  });
 });
 
 describe("ModelOrchestratorAgent", () => {
@@ -121,11 +52,15 @@ describe("ModelOrchestratorAgent", () => {
       text: "It's a repo-scoped chat session.",
     });
     const delegate = vi.fn(async () => workerResult());
+    const signal = new AbortController().signal;
     const agent = new ModelOrchestratorAgent({} as LanguageModel);
-    const decision = await agent.decide(baseInput({ delegate }));
+    const decision = await agent.decide(baseInput({ delegate, signal }));
     expect(delegate).not.toHaveBeenCalled();
     expect(decision.reply).toBe("It's a repo-scoped chat session.");
     expect(decision.delegations).toEqual([]);
+    expect(aiMocks.generateText).toHaveBeenCalledWith(
+      expect.objectContaining({ abortSignal: signal }),
+    );
   });
 
   it("collects every delegation actually executed by the tool in call order", async () => {

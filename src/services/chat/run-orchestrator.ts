@@ -11,17 +11,10 @@ import type {
   OrchestratorContext,
   WorkerResult,
 } from "../../types/harness.types";
-import type { OrchestratorAgent } from "./orchestrator-agent";
+import type { OrchestratorAgent } from "../agent/orchestrator-agent";
 import type { SessionContextBuilder } from "./session-context-builder";
-import type { SessionSummaryCompactor } from "./session-summary-compactor";
+import type { SessionSummaryCompactor } from "../agent/session-summary-compactor";
 
-/**
- * Delegates the routing decision (reply directly vs. dispatch to the
- * CodeWorker) to a single context-aware OrchestratorAgent call. The durable
- * session summary is compaction-only: it is rewritten only when the
- * context builder flags the ~10-message threshold, not on every turn.
- * Implements TaskRunner so it drops into RunService unchanged.
- */
 export class RunOrchestrator implements TaskRunner {
   constructor(
     private readonly prisma: Pick<PrismaClient, "chatSession">,
@@ -52,13 +45,14 @@ export class RunOrchestrator implements TaskRunner {
       recentToolActivity: orchestratorContext.recentToolActivity,
       workspace: orchestratorContext.workspace,
       message: context.instructions,
+      signal: context.signal,
       delegate,
     });
 
     const lastResult = decision.delegations.at(-1) ?? null;
 
     if (orchestratorContext.shouldCompact)
-      await this.compactSummary(sessionId, orchestratorContext);
+      await this.compactSummary(sessionId, orchestratorContext, context.signal);
 
     const workerReport = lastResult
       ? JSON.stringify(lastResult, null, 2)
@@ -81,12 +75,13 @@ export class RunOrchestrator implements TaskRunner {
   private async compactSummary(
     sessionId: string,
     orchestratorContext: OrchestratorContext,
+    signal: AbortSignal,
   ): Promise<void> {
     const summary = await this.compactor.compact({
       previousSummary: orchestratorContext.summary,
       recentMessages: orchestratorContext.recentMessages,
       recentToolActivity: orchestratorContext.recentToolActivity,
-      workspace: orchestratorContext.workspace,
+      signal,
     });
     await runQuery("compact_session_summary", { sessionId }, () =>
       this.prisma.chatSession.updateMany({

@@ -106,23 +106,22 @@ Lifecycle state changes and their events are persisted in one transaction. The
 loop. It hands the `RunOrchestrator`
 ([`src/services/chat/run-orchestrator.ts`](../../../src/services/chat/run-orchestrator.ts)),
 which implements the same `TaskRunner` interface so it drops into `RunService`
-unchanged:
+unchanged. `RunOrchestrator` owns chat context, worker delegation, summary
+persistence, and run-facing behavior; all model-backed collaborators are owned
+by the Agent Service:
 
 - `SessionContextBuilder` loads a bounded, explicitly-selected context: repo
   identity, the durable session summary, the last `RECENT_MESSAGE_LIMIT` chat
   messages, and a compact workspace snapshot (last run status + changed-file
   hints parsed from its diff). It never reads raw event/command history.
-- `classifyMessage` is a small heuristic that reads a message as a
-  `clarification` only when it is a plain question with no action verb;
-  everything else defaults to `code`.
-- On a clarification turn, the orchestrator answers directly
-  (`OrchestratorResponder`: `ModelResponder` in production, `StaticResponder`
-  in tests) and never invokes the worker — the orchestrator never edits code.
-  `ModelResponder`'s system prompt is loaded from
-  [`prompts/orchestrator.yaml`](../../../prompts/orchestrator.yaml) via
-  [`getPromptText`](../../../src/prompts/load-prompt.ts), the same versioned
-  YAML loading path used for the CodeWorker's system prompt — see
-  [Agent Service](../agent-service/README.md#system-prompt-loading).
+- `OrchestratorAgent` is injected by the Agent Service. Its production
+  implementation uses the versioned
+  [`prompts/orchestrator.yaml`](../../../prompts/orchestrator.yaml) prompt and
+  may answer directly or delegate through the CodeWorker callback. Harness
+  tests inject a collaborator directly instead of using a second production
+  policy.
+- On a clarification turn, the orchestrator answers directly and never invokes
+  the worker — the orchestrator never edits code.
 - On a code turn, `buildWorkerBrief` composes a focused brief (session
   summary + workspace hint + the instruction, not the chat transcript) and
   hands it to `CodeWorkerRunner`, which wraps the existing agent tool loop
@@ -137,11 +136,18 @@ unchanged:
   `completed` after the attempt budget, `blocked` becomes an actionable
   assistant message and `failed` becomes a thrown `ServiceError` so
   `RunService` marks the run failed instead of silently completing it.
-- After every turn the orchestrator rewrites (not appends to) the session's
-  bounded `ChatSession.summary` via `SessionSummaryService`: `Objective` is
-  set once and carried forward, `State`/`LastResult`/`Blockers` reflect only
-  the current turn, and `Files` is a capped union across turns. The rewrite
-  is trimmed under a 4 KB budget by dropping the oldest files first.
+- When the context builder reaches the compaction interval, the injected
+  `SessionSummaryCompactor` rewrites (not appends to) the session's bounded
+  `ChatSession.summary`: `Objective` is set once and carried forward,
+  `State`/`LastResult`/`Blockers` reflect the current context, and `Files` is a
+  capped union across turns. The rewrite is trimmed under a 4 KB budget by
+  dropping the oldest files first. The model-backed compactor and its prompt
+  are owned by the Agent Service; the chat service only persists its result.
+
+The chat service contains no AI SDK or provider call sites. Chat-triggered runs
+still execute the Agent Service's CodeWorker, but model resolution, prompts,
+agent decisions, and summary compaction all remain inside
+[`src/services/agent`](../../../src/services/agent/).
 
 ## Phase 6: artifact handling
 
@@ -199,7 +205,7 @@ Run the focused API tests and repository checks from the project root:
 
 ```bash
 npm test -- tests/chat-routes.test.ts tests/chat-session-service.test.ts tests/run-service.test.ts tests/sandbox-service.test.ts
-npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/code-worker-runner.test.ts tests/message-classifier.test.ts tests/harness-integration.test.ts
+npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/code-worker-runner.test.ts tests/harness-integration.test.ts
 npm test -- tests/artifact-store.test.ts tests/agent-tool-relay.test.ts
 npm run typecheck
 npm run lint
