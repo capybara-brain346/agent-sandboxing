@@ -6,9 +6,9 @@ import { sandboxService } from "../sandbox/sandbox";
 import type { TaskStatus } from "../../types/task.types";
 import type { PublicEvent } from "../../types/event.types";
 import { AgentRunner } from "../agent/agent-runner";
+import type { CodeWorker } from "../agent/code-worker";
 import { resolveAgentModel } from "../agent/model";
 import { ArtifactStore } from "../artifacts/artifact-store";
-import { PlaceholderTaskRunner, type TaskRunner } from "./task-runner";
 
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   created: ["provisioning", "failed", "cancelled"],
@@ -26,9 +26,20 @@ const taskServiceConfig = loadConfig();
 const taskServiceEvents = new EventStore(prisma);
 const publishTaskEvent = (event: PublicEvent): void => sseHub.publish(event);
 export const taskServiceArtifacts = new ArtifactStore(prisma);
-export const taskServiceRunner: TaskRunner =
+const placeholderWorker: CodeWorker = {
+  run: async () => ({
+    status: "completed",
+    summary: "",
+    changedFiles: [],
+    testsRun: [],
+    blockers: [],
+    suggestedNextStep: "",
+  }),
+};
+
+export const taskServiceWorker: CodeWorker =
   taskServiceConfig.NODE_ENV === "test"
-    ? new PlaceholderTaskRunner()
+    ? placeholderWorker
     : new AgentRunner({
         config: taskServiceConfig,
         sandbox: sandboxService,

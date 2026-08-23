@@ -12,8 +12,6 @@ export const MAX_DELEGATIONS_PER_TURN = 2;
 export const ORCHESTRATOR_MAX_STEPS = 6;
 
 export type OrchestratorAgentInput = {
-  sessionId: string;
-  repoRef: string;
   summary: string;
   recentMessages: OrchestratorChatMessage[];
   recentToolActivity: string[];
@@ -34,6 +32,11 @@ export type OrchestratorAgent = {
 
 type WorkerBriefContext = Pick<OrchestratorContext, "summary" | "workspace">;
 
+type DelegationToolInput = {
+  context: WorkerBriefContext;
+  delegate: OrchestratorAgentInput["delegate"];
+};
+
 const toWorkerBriefContext = (
   input: OrchestratorAgentInput,
 ): WorkerBriefContext => ({
@@ -42,6 +45,54 @@ const toWorkerBriefContext = (
 });
 
 const ORCHESTRATOR_SYSTEM_PROMPT = getPromptText("orchestrator");
+
+const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
+  const delegations: WorkerResult[] = [];
+  let lastCorrection: WorkerCorrection | undefined;
+
+  const delegateTool = tool({
+    description:
+      "Delegate a bounded, sandboxed coding attempt to the CodeWorker. " +
+      "Only call this for imperative, actionable requests — never for " +
+      "questions about past work or general conversation.",
+    inputSchema: z.object({
+      brief: z
+        .string()
+        .describe("A focused brief describing the coding work to do"),
+    }),
+    execute: async ({ brief }) => {
+      const previousResult = delegations.at(-1);
+      if (previousResult?.status === "failed") return previousResult;
+      if (delegations.length >= MAX_DELEGATIONS_PER_TURN) {
+        const blocked: WorkerResult = {
+          status: "blocked",
+          summary: "Delegation budget for this turn is exhausted.",
+          changedFiles: [],
+          testsRun: [],
+          blockers: ["max_delegations_reached"],
+          suggestedNextStep: "",
+        };
+        delegations.push(blocked);
+        return blocked;
+      }
+      const correction =
+        previousResult?.status === "blocked" ? lastCorrection : undefined;
+      const fullBrief = buildWorkerBrief(context, brief, correction);
+      const result = await delegate(fullBrief);
+      delegations.push(result);
+      lastCorrection =
+        result.status === "blocked"
+          ? {
+              blockers: result.blockers,
+              suggestedNextStep: result.suggestedNextStep,
+            }
+          : undefined;
+      return result;
+    },
+  });
+
+  return { delegateTool, delegations };
+};
 
 /**
  * Production agent: one context-aware generateText call that decides,
@@ -54,48 +105,9 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
   constructor(private readonly model: LanguageModel) {}
 
   async decide(input: OrchestratorAgentInput): Promise<OrchestratorDecision> {
-    const context = toWorkerBriefContext(input);
-    const delegations: WorkerResult[] = [];
-    let lastCorrection: WorkerCorrection | undefined;
-
-    const delegateTool = tool({
-      description:
-        "Delegate a bounded, sandboxed coding attempt to the CodeWorker. " +
-        "Only call this for imperative, actionable requests — never for " +
-        "questions about past work or general conversation.",
-      inputSchema: z.object({
-        brief: z
-          .string()
-          .describe("A focused brief describing the coding work to do"),
-      }),
-      execute: async ({ brief }) => {
-        if (delegations.length >= MAX_DELEGATIONS_PER_TURN) {
-          const blocked: WorkerResult = {
-            status: "blocked",
-            summary: "Delegation budget for this turn is exhausted.",
-            changedFiles: [],
-            testsRun: [],
-            blockers: ["max_delegations_reached"],
-            suggestedNextStep: "",
-          };
-          delegations.push(blocked);
-          return blocked;
-        }
-        const previousResult = delegations.at(-1);
-        const correction =
-          previousResult?.status === "blocked" ? lastCorrection : undefined;
-        const fullBrief = buildWorkerBrief(context, brief, correction);
-        const result = await input.delegate(fullBrief);
-        delegations.push(result);
-        lastCorrection =
-          result.status === "blocked"
-            ? {
-                blockers: result.blockers,
-                suggestedNextStep: result.suggestedNextStep,
-              }
-            : undefined;
-        return result;
-      },
+    const { delegateTool, delegations } = createDelegationTool({
+      context: toWorkerBriefContext(input),
+      delegate: input.delegate,
     });
 
     const summaryLine = input.summary

@@ -7,9 +7,8 @@ import { runQuery } from "../../shared/query-logging";
 import { EventStore } from "../events/event-store";
 import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
-import { taskServiceArtifacts, taskServiceRunner } from "../task/task";
+import { taskServiceArtifacts, taskServiceWorker } from "../task/task";
 import { resolveAgentModel } from "../agent/model";
-import { CodeWorkerRunner } from "../agent/code-worker-runner";
 import { RunService } from "../task/run-service";
 import { ArtifactStore } from "../artifacts/artifact-store";
 import type { ArtifactContent } from "../../types/artifact.types";
@@ -17,6 +16,7 @@ import { RunOrchestrator } from "./run-orchestrator";
 import { ModelOrchestratorAgent } from "../agent/orchestrator-agent";
 import { SessionContextBuilder } from "./session-context-builder";
 import { ModelSessionSummaryCompactor } from "../agent/session-summary-compactor";
+import { PlaceholderTaskRunner } from "../task/task-runner";
 import type { PublicEvent } from "../../types/event.types";
 import type {
   ChatMessage,
@@ -734,12 +734,12 @@ const publishChatEvent = (event: PublicEvent): void => sseHub.publish(event);
 const chatHarnessConfig = loadConfig();
 const chatRunner =
   chatHarnessConfig.NODE_ENV === "test"
-    ? taskServiceRunner
+    ? new PlaceholderTaskRunner()
     : new RunOrchestrator(
         prisma,
         new SessionContextBuilder(prisma, chatSessionEvents),
         new ModelSessionSummaryCompactor(resolveAgentModel(chatHarnessConfig)),
-        new CodeWorkerRunner(taskServiceRunner),
+        taskServiceWorker,
         new ModelOrchestratorAgent(resolveAgentModel(chatHarnessConfig)),
       );
 const chatRunService = new RunService(

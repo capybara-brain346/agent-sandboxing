@@ -9,10 +9,10 @@ persisted command API.
 
 `RunService` remains responsible for run lifecycle transitions, terminal
 results, cancellation, and diff capture; the sandbox is never stopped by a
-completed run. AgentRunner returns a final summary or throws; it does not
-mutate run state. `CodeWorkerRunner` wraps `AgentRunner` to parse its free
-text into the harness's schema-validated `WorkerResult` — see the
-[Chat Session Service](../chat-session/README.md#phase-5-orchestrator-worker-harness).
+completed run. AgentRunner returns a schema-validated `WorkerResult` or throws;
+it does not mutate run state. The retired generic `TaskRunner` runtime has a
+small composition adapter for compatibility, but the chat harness receives the
+typed worker result directly — see the [Chat Session Service](../chat-session/README.md#phase-5-orchestrator-worker-harness).
 
 ## Read first
 
@@ -25,9 +25,10 @@ text into the harness's schema-validated `WorkerResult` — see the
 ## Implementation map
 
 - [`AgentRunner`](../../../src/services/agent/agent-runner.ts) — model loop, tool registry, cancellation, and summary extraction
+- [`code-worker.ts`](../../../src/services/agent/code-worker.ts) — typed worker seam used by the chat harness
 - [`ToolEventRelay`](../../../src/services/agent/tool-event-relay.ts) — durable tool-call/result events and safe payloads
 - [`model.ts`](../../../src/services/agent/model.ts) — OpenRouter model resolution
-- [`orchestrator-agent.ts`](../../../src/services/agent/orchestrator-agent.ts) — direct-reply/delegation model
+- [`orchestrator-agent.ts`](../../../src/services/agent/orchestrator-agent.ts) — direct-reply/delegation model and bounded delegation controller
 - [`session-summary-compactor.ts`](../../../src/services/agent/session-summary-compactor.ts) — bounded summary-compaction model
 - [`load-prompt.ts`](../../../src/prompts/load-prompt.ts) — loads and validates the versioned system prompt YAML files
 - [`prompts/code-worker.yaml`](../../../prompts/code-worker.yaml) — CodeWorker's `generateText` system prompt
@@ -41,10 +42,11 @@ text into the harness's schema-validated `WorkerResult` — see the
 The production composition path selects the model-backed AgentRunner,
 OrchestratorAgent, and SessionSummaryCompactor. The default test composition
 uses the existing placeholder runner; harness tests inject small collaborators
-directly so they do not need provider credentials. These are in-process
-collaborators of `RunService` through `CodeWorkerRunner` and `RunOrchestrator`,
-not a separate HTTP service. The chat service wires production collaborators
-explicitly but does not contain their model calls.
+directly so they do not need provider credentials. `RunOrchestrator` depends on
+the narrow `CodeWorker` contract and receives the typed AgentRunner result
+directly. These are in-process collaborators of `RunService`, not a separate
+HTTP service. The chat service wires production collaborators explicitly but
+does not contain their model calls.
 
 ## Composition and model configuration
 
@@ -88,8 +90,8 @@ brief, the system prompt, all seven tools, the same `abortSignal`, and
 `stopWhen: isStepCount(config.AGENT_MAX_STEPS)`. Tool executions are serialized
 per run because the AI SDK may request multiple tools concurrently while the
 tools share one workspace. It then makes a second, tools-free structured-output
-call over the completed transcript. The final text is trimmed and returned as
-the nullable run summary.
+call over the completed transcript. The structured output is merged with the
+tool-derived changed-file list and returned as the typed `WorkerResult`.
 
 An `AbortError` is re-thrown so `RunService`'s existing cancellation path owns
 the terminal `cancelled` state. Other provider/model failures become the safe
@@ -98,9 +100,11 @@ run.
 
 `ModelOrchestratorAgent` and `ModelSessionSummaryCompactor` use the same
 configured model seam for chat orchestration and periodic summary compaction.
-Both receive the run `AbortSignal`. `RunOrchestrator` remains responsible for
-loading context and persisting the compaction result; it does not import the AI
-SDK or call a provider.
+Both receive the run `AbortSignal`. The model orchestrator delegates through a
+bounded controller that owns attempt results, blocked corrections, and the
+terminal failed-attempt rule. `RunOrchestrator` remains responsible for loading
+context and persisting the compaction result; it does not import the AI SDK or
+call a provider.
 
 ## System prompt loading
 

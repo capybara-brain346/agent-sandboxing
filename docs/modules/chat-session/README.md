@@ -124,18 +124,17 @@ by the Agent Service:
   the worker — the orchestrator never edits code.
 - On a code turn, `buildWorkerBrief` composes a focused brief (session
   summary + workspace hint + the instruction, not the chat transcript) and
-  hands it to `CodeWorkerRunner`, which wraps the existing agent tool loop
-  (`taskServiceRunner`) and parses its free text into a schema-validated
-  `WorkerResult` (`status`, `summary`, `changedFiles`, `testsRun`, `blockers`,
-  `suggestedNextStep`). A worker that skips the JSON fence still produces a
-  usable `completed` result from its free text; only an explicit
-  `blocked`/`failed` status changes the run outcome.
+  hands it through the narrow `CodeWorker` contract to `AgentRunner`, which
+  returns a schema-validated `WorkerResult` (`status`, `summary`,
+  `changedFiles`, `testsRun`, `blockers`, `suggestedNextStep`) directly. The
+  chat harness does not serialize and reparse the worker result.
 - If the worker reports `blocked`, the orchestrator retries once with a
   narrow correction brief built from the worker's blockers/suggested next
-  step (`DEFAULT_MAX_WORKER_ATTEMPTS`, currently 2). If it still isn't
-  `completed` after the attempt budget, `blocked` becomes an actionable
-  assistant message and `failed` becomes a thrown `ServiceError` so
-  `RunService` marks the run failed instead of silently completing it.
+  step (`DEFAULT_MAX_WORKER_ATTEMPTS`, currently 2). A `failed` result is
+  terminal and is never delegated again. If the worker is still blocked after
+  the attempt budget, `blocked` becomes an actionable assistant message and
+  `failed` becomes a thrown `ServiceError` so `RunService` marks the run failed
+  instead of silently completing it.
 - When the context builder reaches the compaction interval, the injected
   `SessionSummaryCompactor` rewrites (not appends to) the session's bounded
   `ChatSession.summary`: `Objective` is set once and carried forward,
@@ -194,7 +193,7 @@ terminology only. The historical `/tasks` contract is documented for
 reference in [`docs/modules/task-service/README.md`](../task-service/README.md#history).
 
 `src/services/task/task.ts` still exists as shared execution runtime
-(`canTransition`, `taskServiceRunner`, `taskServiceArtifacts`) consumed only
+(`canTransition`, `taskServiceWorker`, `taskServiceArtifacts`) consumed only
 by this module — see
 [`docs/modules/task-service/README.md`](../task-service/README.md) for what
 remains and why.
@@ -205,7 +204,7 @@ Run the focused API tests and repository checks from the project root:
 
 ```bash
 npm test -- tests/chat-routes.test.ts tests/chat-session-service.test.ts tests/run-service.test.ts tests/sandbox-service.test.ts
-npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/code-worker-runner.test.ts tests/harness-integration.test.ts
+npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/harness-integration.test.ts
 npm test -- tests/artifact-store.test.ts tests/agent-tool-relay.test.ts
 npm run typecheck
 npm run lint

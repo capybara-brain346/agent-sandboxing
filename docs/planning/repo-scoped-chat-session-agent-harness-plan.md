@@ -34,8 +34,8 @@ Frontend Chat Workspace
     -> ChatSessionService
       -> RunOrchestrator
         -> ContextBuilder
-        -> CodeWorkerRunner
-          -> SandboxService / AgentRunner / command tools
+         -> CodeWorker / AgentRunner
+           -> SandboxService / command tools
         -> SessionSummaryService
         -> future scoped GitHub PR tool
       -> EventStore / SseHub
@@ -355,7 +355,7 @@ Components:
 - `SessionContextBuilder`
 - `SessionSummaryService`
 - `RunOrchestrator`
-- `CodeWorkerRunner`
+- `CodeWorker` / `AgentRunner`
 - `WorkerResultSchema`
 - `ArtifactSelector` or artifact retrieval helpers
 

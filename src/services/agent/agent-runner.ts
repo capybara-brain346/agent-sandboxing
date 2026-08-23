@@ -8,16 +8,14 @@ import {
 import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
 import type { PublicEvent } from "../../types/event.types";
+import type { WorkerResult } from "../../types/harness.types";
 import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
 import { workerResultSchema } from "../../types/harness.types";
-import type {
-  TaskRunContext,
-  TaskRunResult,
-  TaskRunner,
-} from "../task/task-runner";
+import type { TaskRunContext } from "../task/task-runner";
 import { createAgentToolRegistry } from "./tools/registry";
 import type { AgentToolConfig } from "./tools/config";
+import type { CodeWorker } from "./code-worker";
 import {
   createAbortError,
   isAbortError,
@@ -87,10 +85,10 @@ export const serializeToolRegistry = <TOOLS extends ToolSet>(
   return Object.fromEntries(entries) as TOOLS;
 };
 
-export class AgentRunner implements TaskRunner {
+export class AgentRunner implements CodeWorker {
   constructor(private readonly dependencies: AgentRunnerDependencies) {}
 
-  async run(context: TaskRunContext): Promise<TaskRunResult> {
+  async run(context: TaskRunContext): Promise<WorkerResult> {
     throwIfAborted(context.signal);
     const target = await this.dependencies.sandbox.getAgentToolTarget(
       context.sessionId,
@@ -163,12 +161,10 @@ export class AgentRunner implements TaskRunner {
       ];
 
       return {
-        summary: JSON.stringify({
-          ...structured.output,
-          changedFiles: changedFiles.length
-            ? changedFiles
-            : structured.output.changedFiles,
-        }),
+        ...structured.output,
+        changedFiles: changedFiles.length
+          ? changedFiles
+          : structured.output.changedFiles,
       };
     } catch (error) {
       if (isAbortError(error)) throw error;

@@ -111,9 +111,9 @@ describe("AgentRunner", () => {
       .mockResolvedValueOnce({ output: workerOutput });
     const harness = makeRunner();
 
-    await expect(harness.runner.run(makeContext())).resolves.toEqual({
-      summary: JSON.stringify(workerOutput),
-    });
+    await expect(harness.runner.run(makeContext())).resolves.toEqual(
+      workerOutput,
+    );
 
     expect(harness.sandbox.getAgentToolTarget).toHaveBeenCalledWith(
       "chat_1",
@@ -165,9 +165,10 @@ describe("AgentRunner", () => {
     const harness = makeRunner();
 
     const result = await harness.runner.run(makeContext());
-    expect(JSON.parse(result.summary ?? "{}")).toMatchObject({
-      changedFiles: ["/workspace/repo/b.txt", "/workspace/repo/c.txt"],
-    });
+    expect(result.changedFiles).toEqual([
+      "/workspace/repo/b.txt",
+      "/workspace/repo/c.txt",
+    ]);
   });
 
   it("does not resolve the sandbox or call the model after cancellation", async () => {

@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { ServiceError } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
-import type { CodeWorkerRunner } from "../agent/code-worker-runner";
+import type { CodeWorker } from "../agent/code-worker";
 import type {
   TaskRunContext,
   TaskRunner,
@@ -20,7 +20,7 @@ export class RunOrchestrator implements TaskRunner {
     private readonly prisma: Pick<PrismaClient, "chatSession">,
     private readonly contextBuilder: SessionContextBuilder,
     private readonly compactor: SessionSummaryCompactor,
-    private readonly worker: CodeWorkerRunner,
+    private readonly worker: CodeWorker,
     private readonly agent: OrchestratorAgent,
   ) {}
 
@@ -38,8 +38,6 @@ export class RunOrchestrator implements TaskRunner {
       this.worker.run({ ...context, instructions: brief });
 
     const decision = await this.agent.decide({
-      sessionId,
-      repoRef: orchestratorContext.repoRef,
       summary: orchestratorContext.summary,
       recentMessages: orchestratorContext.recentMessages,
       recentToolActivity: orchestratorContext.recentToolActivity,

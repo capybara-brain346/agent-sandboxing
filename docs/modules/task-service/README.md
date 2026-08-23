@@ -15,16 +15,15 @@ execution runtime consumed only by the chat-session harness:
 
 - `canTransition(from, to)` — the `TaskStatus` transition guard used by
   `RunService` to validate run state changes.
-- `taskServiceRunner` — the process-wide `AgentRunner` instance (a
-  `PlaceholderTaskRunner` under `NODE_ENV=test`) that `CodeWorkerRunner` wraps
-  to execute a worker brief in the session-owned sandbox.
+- `taskServiceWorker` — the process-wide typed `AgentRunner` instance (a
+  placeholder worker under `NODE_ENV=test`) used directly by the chat harness.
 - `taskServiceArtifacts` — the process-wide `ArtifactStore` instance used to
   record diffs, worker reports, and truncated tool output.
 
 [`src/services/task/task-runner.ts`](../../../src/services/task/task-runner.ts)
-defines the shared `TaskRunner`/`TaskRunContext`/`TaskRunResult` contract that
-both `AgentRunner` and `RunOrchestrator` implement; `TaskRunContext` always
-carries `sessionId` and `messageId` now that every run is session-owned.
+defines the shared `TaskRunner`/`TaskRunContext`/`TaskRunResult` contract used
+by `RunService` and `RunOrchestrator`; `TaskRunContext` always carries
+`sessionId` and `messageId` now that every run is session-owned.
 
 The underlying Prisma `Task` table is the transitional storage
 representation of a `TaskRun` (see the

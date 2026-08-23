@@ -53,6 +53,8 @@ operations, or structure.
 3. Add or update tests for changed behavior.
 4. Run the narrowest relevant checks first, then broader checks.
 5. Review the final diff for unrelated changes.
+6. When removing behavior or an abstraction, remove its dead adapters, imports,
+   tests, and documentation references in the same change.
 
 For bug fixes, reproduce the failure with a test when practical, verify the
 expected failing reason, implement the fix, and run the regression checks.

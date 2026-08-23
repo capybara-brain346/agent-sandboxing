@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { RunService } from "../src/services/task/run-service";
 import { RunOrchestrator } from "../src/services/chat/run-orchestrator";
 import type { OrchestratorAgent } from "../src/services/agent/orchestrator-agent";
-import { CodeWorkerRunner } from "../src/services/agent/code-worker-runner";
+import type { CodeWorker } from "../src/services/agent/code-worker";
 import type { SessionContextBuilder } from "../src/services/chat/session-context-builder";
 import type { SessionSummaryCompactor } from "../src/services/agent/session-summary-compactor";
 import type { EventStore } from "../src/services/events/event-store";
@@ -11,10 +11,7 @@ import type { SessionSandboxCollaborator } from "../src/services/sandbox/sandbox
 import type { PublicEvent } from "../src/types/event.types";
 import type { TaskStatus } from "../src/types/task.types";
 import type { OrchestratorContext } from "../src/types/harness.types";
-import type {
-  TaskRunContext,
-  TaskRunner,
-} from "../src/services/task/task-runner";
+import type { TaskRunContext } from "../src/services/task/task-runner";
 
 const sessionId = "chat_1";
 const runId = "run_1";
@@ -151,19 +148,17 @@ describe("message -> run -> worker -> assistant message -> summary update", () =
       build: vi.fn(async () => orchestratorContext),
     } as unknown as SessionContextBuilder;
 
-    const underlyingWorker: TaskRunner = {
+    const underlyingWorker: CodeWorker = {
       run: vi.fn(async (context: TaskRunContext) => {
         expect(context.sessionId).toBe(sessionId);
         expect(context.instructions).toContain("Fix the bug");
         return {
-          summary: JSON.stringify({
-            status: "completed",
-            summary: "Fixed the bug in src/x.ts",
-            changedFiles: ["src/x.ts"],
-            testsRun: [],
-            blockers: [],
-            suggestedNextStep: "",
-          }),
+          status: "completed",
+          summary: "Fixed the bug in src/x.ts",
+          changedFiles: ["src/x.ts"],
+          testsRun: [],
+          blockers: [],
+          suggestedNextStep: "",
         };
       }),
     };
@@ -199,7 +194,7 @@ describe("message -> run -> worker -> assistant message -> summary update", () =
       orchestratorPrisma,
       contextBuilder,
       compactor,
-      new CodeWorkerRunner(underlyingWorker),
+      underlyingWorker,
       agent,
     );
 

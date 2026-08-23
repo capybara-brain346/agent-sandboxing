@@ -4,7 +4,7 @@ import { RunOrchestrator } from "../src/services/chat/run-orchestrator";
 import type { OrchestratorAgent } from "../src/services/agent/orchestrator-agent";
 import type { SessionContextBuilder } from "../src/services/chat/session-context-builder";
 import type { SessionSummaryCompactor } from "../src/services/agent/session-summary-compactor";
-import type { CodeWorkerRunner } from "../src/services/agent/code-worker-runner";
+import type { CodeWorker } from "../src/services/agent/code-worker";
 import type {
   OrchestratorContext,
   WorkerResult,
@@ -99,7 +99,7 @@ const makeHarness = (options: {
     },
   } as unknown as Pick<PrismaClient, "chatSession">;
 
-  const worker = { run: vi.fn() } as unknown as CodeWorkerRunner;
+  const worker: CodeWorker = { run: vi.fn(async () => workerResult()) };
 
   const orchestrator = new RunOrchestrator(
     prisma,
@@ -135,8 +135,6 @@ describe("RunOrchestrator", () => {
     });
     expect(agent.decide).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: "chat_1",
-        repoRef: "./repo",
         summary: "Objective: ship it",
         message: "what did you change last turn?",
         signal,

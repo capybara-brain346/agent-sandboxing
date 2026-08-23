@@ -29,8 +29,6 @@ const workerResult = (overrides: Partial<WorkerResult> = {}): WorkerResult => ({
 const baseInput = (
   overrides: Partial<OrchestratorAgentInput> = {},
 ): OrchestratorAgentInput => ({
-  sessionId: "chat_1",
-  repoRef: "./repo",
   summary: "Objective: do X",
   recentMessages: [],
   recentToolActivity: [],
@@ -95,5 +93,23 @@ describe("ModelOrchestratorAgent", () => {
     expect(decision.delegations.at(-1)?.blockers).toEqual([
       "max_delegations_reached",
     ]);
+  });
+
+  it("does not retry a failed delegation", async () => {
+    const failed = workerResult({
+      status: "failed",
+      blockers: ["the attempt failed"],
+    });
+    const delegate = vi.fn(async () => failed);
+    aiMocks.generateText.mockImplementationOnce(async (options) => {
+      const tool = options.tools.delegate_to_code_worker;
+      await tool.execute({ brief: "fix the bug" }, {} as never);
+      await tool.execute({ brief: "retry the bug" }, {} as never);
+      return { text: "The attempt failed." };
+    });
+    const agent = new ModelOrchestratorAgent({} as LanguageModel);
+    const decision = await agent.decide(baseInput({ delegate }));
+    expect(delegate).toHaveBeenCalledTimes(1);
+    expect(decision.delegations).toEqual([failed]);
   });
 });
