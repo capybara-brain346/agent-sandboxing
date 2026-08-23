@@ -66,13 +66,6 @@ verification. Use a precise Conventional Commit subject and a body when the
 change needs context; do not use generic messages such as “update docs” or
 “fix stuff.”
 
-When Codex, Claude, or OpenCode contributes to a commit, include the
-corresponding `Co-authored-by` trailer. When multiple contribute, include each:
-
-- `Co-authored-by: Codex <codex@openai.com>`
-- `Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>`
-- `Co-authored-by: OpenCode <opencode@opencode.ai>`
-
 ## Commands
 
 Run from the repository root:
