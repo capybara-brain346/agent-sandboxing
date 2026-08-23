@@ -200,4 +200,75 @@ describe("ToolEventRelay", () => {
     ).rejects.toBe(failure);
     expect(publish).toHaveBeenCalledTimes(1);
   });
+
+  it("stores the full tool result as an artifact when the snippet truncates it, session-scoped", async () => {
+    const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      makeEvent(input),
+    );
+    const create = vi.fn(async (input: { kind: string }) => ({
+      artifactId: "art_1",
+      kind: input.kind,
+      contentType: "application/json",
+      byteSize: 5000,
+      truncated: false,
+      redacted: false,
+      preview: "preview",
+    }));
+    const relay = new ToolEventRelay({
+      events: { append } as unknown as Pick<EventStore, "append">,
+      publish: vi.fn(),
+      artifacts: { create },
+    });
+    const callbacks = relay.callbacks({
+      taskId: "run_1",
+      sandboxId: "sbox_1",
+      sessionId: "chat_1",
+    });
+
+    await callbacks.onToolExecutionEnd(
+      endEvent({
+        type: "tool-result",
+        output: { stdout: "x".repeat(5000), exitCode: 0, truncated: false },
+      }),
+    );
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "chat_1",
+        runId: "run_1",
+        kind: "tool_output",
+      }),
+    );
+    expect(append.mock.calls[0]?.[0]).toMatchObject({
+      artifactId: "art_1",
+      payload: expect.objectContaining({ artifact_byte_size: 5000 }),
+    });
+  });
+
+  it("does not create an artifact when the tool result already fits the event snippet", async () => {
+    const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      makeEvent(input),
+    );
+    const create = vi.fn();
+    const relay = new ToolEventRelay({
+      events: { append } as unknown as Pick<EventStore, "append">,
+      publish: vi.fn(),
+      artifacts: { create },
+    });
+    const callbacks = relay.callbacks({
+      taskId: "run_1",
+      sandboxId: "sbox_1",
+      sessionId: "chat_1",
+    });
+
+    await callbacks.onToolExecutionEnd(
+      endEvent({
+        type: "tool-result",
+        output: { stdout: "ok", exitCode: 0, truncated: false },
+      }),
+    );
+
+    expect(create).not.toHaveBeenCalled();
+    expect(append.mock.calls[0]?.[0]).not.toHaveProperty("artifactId", "art_1");
+  });
 });

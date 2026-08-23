@@ -3,7 +3,10 @@ import type { Response } from "express";
 import { SseHub } from "../src/services/events/sse-hub";
 import type { PublicEvent } from "../src/types/event.types";
 
-const event = (sequence: number, type: PublicEvent["type"] = "sandbox_ready"): PublicEvent => ({
+const event = (
+  sequence: number,
+  type: PublicEvent["type"] = "sandbox_ready",
+): PublicEvent => ({
   id: `evt_${sequence}`,
   streamId: "task_1",
   taskId: "task_1",
@@ -16,6 +19,18 @@ const event = (sequence: number, type: PublicEvent["type"] = "sandbox_ready"): P
   correlationId: null,
   payload: {},
   createdAt: new Date().toISOString(),
+});
+
+const scopedEvent = (
+  streamScope: "session" | "run",
+  streamId: string,
+): PublicEvent => ({
+  ...event(1),
+  streamScope,
+  streamId,
+  sessionId: "session_1",
+  runId: streamScope === "run" ? streamId : null,
+  taskId: null,
 });
 
 const responseWith = (writes: string[]): Response => {
@@ -74,5 +89,33 @@ describe("SseHub", () => {
 
     hub.publish(event(4));
     expect(writes[0]).toContain("id: 4");
+  });
+
+  it("does not deliver events across stream scopes", () => {
+    const sessionWrites: string[] = [];
+    const runWrites: string[] = [];
+    const hub = new SseHub();
+    const sessionClient = hub.subscribe(
+      "session",
+      "same-id",
+      responseWith(sessionWrites),
+      0,
+    );
+    const runClient = hub.subscribe(
+      "run",
+      "same-id",
+      responseWith(runWrites),
+      0,
+    );
+
+    hub.finishReplay("session", "same-id", sessionClient, 0);
+    hub.finishReplay("run", "same-id", runClient, 0);
+    hub.publish(scopedEvent("session", "same-id"));
+    hub.publish(scopedEvent("run", "same-id"));
+
+    expect(sessionWrites).toHaveLength(1);
+    expect(runWrites).toHaveLength(1);
+    expect(sessionWrites[0]).toContain('"streamScope":"session"');
+    expect(runWrites[0]).toContain('"streamScope":"run"');
   });
 });

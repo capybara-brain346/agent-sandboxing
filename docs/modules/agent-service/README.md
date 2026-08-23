@@ -1,20 +1,24 @@
 # Agent Service — Agent Runner, Event Relay, and Live Acceptance
 
-The Agent Service owns the control-plane agent loop. It runs inside the task
-process, uses the AI SDK 7 `generateText` loop with the configured OpenRouter
-model, proxies seven tools through the task-owned sandbox runtime, and relays
-tool lifecycle events to the shared task event stream. It does not expose an
-HTTP route or call the persisted command API.
+The Agent Service owns all model-backed agent behavior. It runs inside the API
+process, uses the AI SDK 7 `generateText` calls with the configured OpenRouter
+model, owns orchestration and summary-compaction decisions, proxies seven tools
+through the session-owned sandbox runtime, and relays tool lifecycle events to
+the shared run event stream. It does not expose an HTTP route or call the
+persisted command API.
 
-TaskService remains responsible for task lifecycle transitions, terminal
-results, cancellation, diff capture, and cleanup. AgentRunner returns a final
-summary or throws; it does not mutate task state.
+`RunService` remains responsible for run lifecycle transitions, terminal
+results, cancellation, and diff capture; the sandbox is never stopped by a
+completed run. AgentRunner returns a final summary or throws; it does not
+mutate run state. `CodeWorkerRunner` wraps `AgentRunner` to parse its free
+text into the harness's schema-validated `WorkerResult` — see the
+[Chat Session Service](../chat-session/README.md#phase-5-orchestrator-worker-harness).
 
 ## Read first
 
 - [`docs/agent-sandboxing-project.md`](../../agent-sandboxing-project.md) — product direction and control-plane/execution-plane boundary
-- [`Task Service`](../task-service/README.md) — task lifecycle and runner seam
-- [`Sandbox Service`](../sandbox-service/README.md) — task-owned runtime target and execution boundary
+- [`Chat Session Service`](../chat-session/README.md) — run lifecycle, orchestrator-worker harness, and runner seam
+- [`Sandbox Service`](../sandbox-service/README.md) — session-owned runtime target and execution boundary
 - [`Event Service`](../event-service/README.md) — durable event and SSE contract
 - [`docs/planning/agent-service-atomic-mvp-plan.md`](../../planning/agent-service-atomic-mvp-plan.md) — MVP decisions and non-goals
 
@@ -23,15 +27,24 @@ summary or throws; it does not mutate task state.
 - [`AgentRunner`](../../../src/services/agent/agent-runner.ts) — model loop, tool registry, cancellation, and summary extraction
 - [`ToolEventRelay`](../../../src/services/agent/tool-event-relay.ts) — durable tool-call/result events and safe payloads
 - [`model.ts`](../../../src/services/agent/model.ts) — OpenRouter model resolution
+- [`orchestrator-agent.ts`](../../../src/services/agent/orchestrator-agent.ts) — direct-reply/delegation model
+- [`session-summary-compactor.ts`](../../../src/services/agent/session-summary-compactor.ts) — bounded summary-compaction model
+- [`load-prompt.ts`](../../../src/prompts/load-prompt.ts) — loads and validates the versioned system prompt YAML files
+- [`prompts/code-worker.yaml`](../../../prompts/code-worker.yaml) — CodeWorker's `generateText` system prompt
 - [`tools/`](../../../src/services/agent/tools/) — sandbox-proxied tool implementations and bash policy
 - [`tests/agent-runner.test.ts`](../../../tests/agent-runner.test.ts) — runner behavior and cancellation
+- [`tests/orchestrator-agent.test.ts`](../../../tests/orchestrator-agent.test.ts) — orchestration behavior and delegation bounds
+- [`tests/session-summary.test.ts`](../../../tests/session-summary.test.ts) — summary compaction and bounds
 - [`tests/agent-tool-relay.test.ts`](../../../tests/agent-tool-relay.test.ts) — event ordering and payload bounds
 - [`tests/agent-tools.test.ts`](../../../tests/agent-tools.test.ts) — tool validation and runtime behavior
 
-The production composition path selects `AgentRunner` outside test mode; test
-mode retains the placeholder runner so the DB-independent suite can run
-without provider credentials. The runner is an in-process collaborator of
-TaskService, not a separate HTTP service.
+The production composition path selects the model-backed AgentRunner,
+OrchestratorAgent, and SessionSummaryCompactor. The default test composition
+uses the existing placeholder runner; harness tests inject small collaborators
+directly so they do not need provider credentials. These are in-process
+collaborators of `RunService` through `CodeWorkerRunner` and `RunOrchestrator`,
+not a separate HTTP service. The chat service wires production collaborators
+explicitly but does not contain their model calls.
 
 ## Composition and model configuration
 
@@ -47,8 +60,8 @@ environment variables, tool inputs, events, provider error messages, or logs.
 
 ## Runtime boundary
 
-Each factory receives a `Pick<SandboxRuntime, "simpleExec">`, the task's
-container name, loaded `Config`, and the task `AbortSignal`. The factory returns
+Each factory receives a `Pick<SandboxRuntime, "simpleExec">`, the sandbox's
+container name, loaded `Config`, and the run `AbortSignal`. The factory returns
 an AI SDK 7 `tool({ inputSchema, execute })` object. The registry contains
 exactly these keys:
 
@@ -56,37 +69,58 @@ exactly these keys:
 
 The tools execute in `/workspace/repo` through `SandboxRuntime.simpleExec`.
 They do not access Prisma, `SandboxService`, Docker, the event store, or
-`process.env` directly. Every runtime call receives the task signal and either
+`process.env` directly. Every runtime call receives the run signal and either
 `AGENT_TOOL_TIMEOUT_MS` or `AGENT_BASH_TIMEOUT_MS`.
+Worker briefs expose `/workspace/repo` as the only workspace path; fixture and
+repository source references are not included as worker filesystem paths.
 
 Before creating the registry, AgentRunner asks
-`SandboxService.getAgentToolTarget(taskId, sandboxId)` for the task-owned,
-`ready` sandbox. That internal seam queries both identifiers and returns only
-the container name and `simpleExec`; no Prisma or Docker details enter the
-Agent Service.
+`SandboxService.getAgentToolTarget(sessionId, runId, sandboxId)` for the
+session-owned, `ready` sandbox. That internal seam queries session ownership
+and returns only the container name and `simpleExec`; no Prisma or Docker
+details enter the Agent Service.
 
 ## AgentRunner and cancellation
 
-AgentRunner checks the task signal before target lookup and before the model
-call. It calls `generateText` with one user message containing the task
-instructions, the system prompt, all seven tools, the same `abortSignal`, and
+AgentRunner checks the run signal before target lookup and before the model
+call. It calls `generateText` with one user message containing the worker
+brief, the system prompt, all seven tools, the same `abortSignal`, and
 `stopWhen: isStepCount(config.AGENT_MAX_STEPS)`. Tool executions are serialized
-per task because the AI SDK may request multiple tools concurrently while the
-tools share one workspace. The final text is trimmed and returned as the
-nullable task summary.
+per run because the AI SDK may request multiple tools concurrently while the
+tools share one workspace. It then makes a second, tools-free structured-output
+call over the completed transcript. The final text is trimmed and returned as
+the nullable run summary.
 
-An `AbortError` is re-thrown so TaskService's existing cancellation path owns
+An `AbortError` is re-thrown so `RunService`'s existing cancellation path owns
 the terminal `cancelled` state. Other provider/model failures become the safe
-`agent_run_failed` service error and are persisted by TaskService as a failed
-task.
+`agent_run_failed` service error and are persisted by `RunService` as a failed
+run.
+
+`ModelOrchestratorAgent` and `ModelSessionSummaryCompactor` use the same
+configured model seam for chat orchestration and periodic summary compaction.
+Both receive the run `AbortSignal`. `RunOrchestrator` remains responsible for
+loading context and persisting the compaction result; it does not import the AI
+SDK or call a provider.
+
+## System prompt loading
+
+`AGENT_SYSTEM_PROMPT` is loaded at module load via
+`getPromptText("code-worker")`, which reads and validates
+[`prompts/code-worker.yaml`](../../../prompts/code-worker.yaml) (versioned,
+with `id`, `version`, `updated_at`, `description`, and `prompt` fields) and
+caches the parsed result. Prompt YAML files live at the repo root, not under
+`src/`, so the same `process.cwd()`-relative path resolves identically in dev
+(`tsx`) and in the esbuild-bundled production build; the runtime Docker stage
+copies `prompts/` alongside `dist/` for this reason. A malformed or missing
+prompt file fails fast at process startup rather than at request time.
 
 ## Tool event relay
 
 `ToolEventRelay` handles AI SDK `onToolExecutionStart` and
 `onToolExecutionEnd` callbacks. It appends `agent_tool_call` before tool
 execution and `agent_tool_result` after it through `EventStore.append`, then
-publishes the returned event. Each event includes the task and sandbox IDs,
-`producerService: "agent"`, `producerId: taskId`, and a correlation ID shared
+publishes the returned event. Each event includes the run and sandbox IDs,
+`producerService: "agent"`, `producerId: runId`, and a correlation ID shared
 by the matching call/result pair. Repeated SDK call IDs are disambiguated.
 
 Call payloads use `tool_name` and `args`. Result payloads use
@@ -151,14 +185,14 @@ The public runtime configuration contract is defined only in
 The tools are intentionally DB-independent and Docker-independent in tests;
 tests mock only the `simpleExec` seam.
 
-## Live acceptance (Slice 4)
+## Live acceptance
 
-Live coverage extends the existing task-service harness; no second acceptance
-script is required. From the repository root, run:
+Live coverage extends the chat-session harness; no second acceptance script is
+required. From the repository root, run:
 
 ```bash
 NODE_ENV=development BASE_URL=http://localhost:3000 \
-  scripts/acceptance/task-service-atomic-mvp.sh
+  scripts/acceptance/chat-session-atomic-mvp.sh
 ```
 
 The command requires a non-test API running against the repository workspace,
@@ -187,10 +221,11 @@ The scenarios are:
    strict ordering and include the agent events.
 4. Cancellation and missing-fixture provisioning failure remain covered.
 
-For each live agent task, assertions validate the durable event envelope,
-task/sandbox ownership, matching tool-call correlation IDs and ordering,
-bounded result snippets, exit codes, truncation flags, durations, sanitized
-provider output, diff lifecycle events, and sandbox cleanup. They deliberately
-do not compare exact model prose. Agent edits happen only in copied sandbox
+For each live agent run, assertions validate the durable event envelope,
+session/run/sandbox ownership, matching tool-call correlation IDs and
+ordering, bounded result snippets, exit codes, truncation flags, durations,
+sanitized provider output, diff lifecycle events, and that the sandbox is
+reused (not stopped) across runs in the same session. They deliberately do
+not compare exact model prose. Agent edits happen only in copied sandbox
 workspaces; the host fixture is checked for changes and restored after the
 provisioning-failure scenario on every exit path.

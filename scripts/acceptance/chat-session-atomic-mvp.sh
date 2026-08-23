@@ -21,12 +21,12 @@ cleanup() {
 
   if [[ "${FAILURE_REPO_MOVED}" == "true" ]]; then
     if [[ -e "${FIXTURE_REPO_PATH}" && -e "${FAILURE_REPO_BACKUP}" ]]; then
-      printf '[task-acceptance] ERROR: fixture path reappeared before restore\n' >&2
+      printf '[chat-session-acceptance] ERROR: fixture path reappeared before restore\n' >&2
       exit_code=1
     elif [[ -e "${FAILURE_REPO_BACKUP}" ]]; then
       mv -- "${FAILURE_REPO_BACKUP}" "${FIXTURE_REPO_PATH}" || exit_code=1
     elif [[ ! -e "${FIXTURE_REPO_PATH}" ]]; then
-      printf '[task-acceptance] ERROR: fixture backup was lost before restore\n' >&2
+      printf '[chat-session-acceptance] ERROR: fixture backup was lost before restore\n' >&2
       exit_code=1
     fi
   fi
@@ -37,11 +37,11 @@ cleanup() {
 trap cleanup EXIT
 
 log() {
-  printf '[task-acceptance] %s\n' "$*"
+  printf '[chat-session-acceptance] %s\n' "$*"
 }
 
 fail() {
-  printf '[task-acceptance] ERROR: %s\n' "$*" >&2
+  printf '[chat-session-acceptance] ERROR: %s\n' "$*" >&2
   exit 1
 }
 
@@ -102,16 +102,6 @@ assert_json_arg() {
     printf '%s\n' "--- ${file} ---" >&2
     dump_file_safely "${file}"
     fail "JSON assertion failed: ${expression}"
-  fi
-}
-
-assert_jsonl() {
-  local expression="$1"
-  local file="$2"
-  if ! jq -s -e "${expression}" "${file}" >/dev/null; then
-    printf '%s\n' "--- ${file} ---" >&2
-    dump_file_safely "${file}"
-    fail "JSONL assertion failed: ${expression}"
   fi
 }
 
@@ -196,40 +186,43 @@ prepare_fixture_repo() {
   git -C "${FIXTURE_REPO_PATH}" commit -m fixture >/dev/null
 }
 
-fetch_task_snapshot() {
-  local task_id="$1"
-  local output="$2"
+fetch_run_snapshot() {
+  local session_id="$1"
+  local run_id="$2"
+  local output="$3"
   local status
 
   status="$(curl -sS -o "${output}" -w '%{http_code}' \
-    "${BASE_URL}/tasks/${task_id}")" || fail "could not fetch task ${task_id}"
+    "${BASE_URL}/chat-sessions/${session_id}/runs/${run_id}")" ||
+    fail "could not fetch run ${run_id}"
   if [[ "${status}" != "200" ]]; then
-    printf 'Expected HTTP 200 while polling task %s, got %s\n' \
-      "${task_id}" "${status}" >&2
+    printf 'Expected HTTP 200 while polling run %s, got %s\n' \
+      "${run_id}" "${status}" >&2
     dump_file_safely "${output}"
     exit 1
   fi
 }
 
-wait_for_task_status() {
-  local task_id="$1"
-  local expected="$2"
-  local snapshot="${TMP_DIR}/${task_id}.json"
+wait_for_run_status() {
+  local session_id="$1"
+  local run_id="$2"
+  local expected="$3"
+  local snapshot="${TMP_DIR}/${run_id}.json"
   local deadline=$((SECONDS + POLL_SECONDS))
   local status
 
   while (( SECONDS < deadline )); do
-    fetch_task_snapshot "${task_id}" "${snapshot}"
+    fetch_run_snapshot "${session_id}" "${run_id}" "${snapshot}"
     status="$(jq -r '.status // empty' "${snapshot}")"
     if [[ "${status}" == "${expected}" ]]; then
-      log "task ${task_id} reached ${expected}"
+      log "run ${run_id} reached ${expected}"
       return
     fi
     case "${status}" in
       completed|failed|cancelled)
         printf '%s\n' "--- ${snapshot} ---" >&2
         dump_file_safely "${snapshot}"
-        fail "task ${task_id} reached ${status}, expected ${expected}"
+        fail "run ${run_id} reached ${status}, expected ${expected}"
         ;;
     esac
     sleep 1
@@ -237,21 +230,22 @@ wait_for_task_status() {
 
   printf '%s\n' "--- ${snapshot} ---" >&2
   dump_file_safely "${snapshot}"
-  fail "task ${task_id} did not reach ${expected} within ${POLL_SECONDS}s"
+  fail "run ${run_id} did not reach ${expected} within ${POLL_SECONDS}s"
 }
 
-wait_for_terminal_task() {
-  local task_id="$1"
-  local snapshot="${TMP_DIR}/${task_id}-terminal.json"
+wait_for_terminal_run() {
+  local session_id="$1"
+  local run_id="$2"
+  local snapshot="${TMP_DIR}/${run_id}-terminal.json"
   local deadline=$((SECONDS + POLL_SECONDS))
   local status
 
   while (( SECONDS < deadline )); do
-    fetch_task_snapshot "${task_id}" "${snapshot}"
+    fetch_run_snapshot "${session_id}" "${run_id}" "${snapshot}"
     status="$(jq -r '.status // empty' "${snapshot}")"
     case "${status}" in
       completed|failed|cancelled)
-        log "task ${task_id} reached terminal state ${status}"
+        log "run ${run_id} reached terminal state ${status}"
         return
         ;;
     esac
@@ -260,7 +254,7 @@ wait_for_terminal_task() {
 
   printf '%s\n' "--- ${snapshot} ---" >&2
   dump_file_safely "${snapshot}"
-  fail "task ${task_id} did not reach a terminal state within ${POLL_SECONDS}s"
+  fail "run ${run_id} did not reach a terminal state within ${POLL_SECONDS}s"
 }
 
 capture_sse() {
@@ -305,11 +299,6 @@ assert_sse_ordered() {
   fi
 }
 
-extract_last_sse_id() {
-  local file="$1"
-  awk '/^id: / { id = $2 } END { if (id == "") exit 1; print id }' "${file}"
-}
-
 extract_sse_json() {
   local sse_file="$1"
   local json_file="$2"
@@ -335,18 +324,18 @@ assert_no_provider_output() {
 
 assert_agent_events() {
   local sse_file="$1"
-  local task_id="$2"
+  local run_id="$2"
   local sandbox_id="$3"
   local json_file="${sse_file}.jsonl"
   extract_sse_json "${sse_file}" "${json_file}"
   assert_no_provider_output "${sse_file}"
 
-  assert_jsonl_arg task_id "${task_id}" \
-    'all(.[]; .streamId == $task_id and .taskId == $task_id)' "${json_file}"
-  assert_jsonl_two_args task_id "${task_id}" sandbox_id "${sandbox_id}" \
-    '[.[] | select(.type == "agent_tool_call" or .type == "agent_tool_result")] | length > 0 and all(.[]; .producerService == "agent" and .producerId == $task_id and .sandboxId == $sandbox_id and (.correlationId | type) == "string" and (.correlationId | length) > 0)' \
+  assert_jsonl_arg run_id "${run_id}" \
+    'all(.[]; .streamId == $run_id and .runId == $run_id)' "${json_file}"
+  assert_jsonl_two_args run_id "${run_id}" sandbox_id "${sandbox_id}" \
+    '[.[] | select(.type == "agent_tool_call" or .type == "agent_tool_result")] | length > 0 and all(.[]; .producerService == "agent" and .producerId == $run_id and .sandboxId == $sandbox_id and (.correlationId | type) == "string" and (.correlationId | length) > 0)' \
     "${json_file}"
-  assert_jsonl_arg task_id "${task_id}" \
+  assert_jsonl_arg run_id "${run_id}" \
     '[.[] | select(.type == "agent_tool_call")] as $calls | [.[] | select(.type == "agent_tool_result")] as $results | ($calls | length) > 0 and ($calls | length) == ($results | length) and all($calls[]; (.payload.tool_name | type) == "string" and (.payload.tool_name | length) > 0 and (.payload.args | type) == "object") and all($calls[]; . as $call | ([ $results[] | select(.correlationId == $call.correlationId)] | if length == 1 then .[0] else null end) as $result | $result != null and $result.sequence > $call.sequence and $result.payload.tool_name == $call.payload.tool_name)' \
     "${json_file}"
   assert_jsonl \
@@ -354,22 +343,13 @@ assert_agent_events() {
     "${json_file}"
 }
 
-assert_sandbox_cleanup() {
-  local sse_file="$1"
-  local sandbox_id="$2"
-  local json_file="${sse_file}.jsonl"
-  local container_name
-
-  assert_sse_event_type "${sse_file}" git_diff_requested
-  assert_sse_event_type "${sse_file}" git_diff_completed
-  assert_sse_event_type "${sse_file}" sandbox_stopped
-  extract_sse_json "${sse_file}" "${json_file}"
-  container_name="$(jq -s -r --arg sandbox_id "${sandbox_id}" \
-    '[.[] | select(.sandboxId == $sandbox_id and .type == "sandbox_created")][0].payload.container_name // empty' \
-    "${json_file}")"
-  [[ -n "${container_name}" ]] || fail "sandbox_created did not contain a container name"
-  if docker ps -a --format '{{.Names}}' | grep -Fxq -- "${container_name}"; then
-    fail "sandbox container ${container_name} remained after task cleanup"
+assert_jsonl() {
+  local expression="$1"
+  local file="$2"
+  if ! jq -s -e "${expression}" "${file}" >/dev/null; then
+    printf '%s\n' "--- ${file} ---" >&2
+    dump_file_safely "${file}"
+    fail "JSONL assertion failed: ${expression}"
   fi
 }
 
@@ -381,11 +361,11 @@ assert_fixture_unchanged() {
   git -C "${FIXTURE_REPO_PATH}" diff --binary > "${current_diff}"
   git -C "${FIXTURE_REPO_PATH}" diff --cached --binary > "${current_cached_diff}"
   cmp -s "${TMP_DIR}/fixture-status.before" "${current_status}" ||
-    fail "agent task changed the host fixture status"
+    fail "agent run changed the host fixture status"
   cmp -s "${TMP_DIR}/fixture-diff.before" "${current_diff}" ||
-    fail "agent task changed the host fixture worktree"
+    fail "agent run changed the host fixture worktree"
   cmp -s "${TMP_DIR}/fixture-cached-diff.before" "${current_cached_diff}" ||
-    fail "agent task changed the host fixture index"
+    fail "agent run changed the host fixture index"
 }
 
 preflight() {
@@ -410,6 +390,24 @@ restore_fixture_repo() {
   FAILURE_REPO_MOVED=false
 }
 
+create_session() {
+  local output="$1"
+  local body
+  body="$(jq -cn --arg ref "${REPO_REF}" '{repo: {source: "fixture", ref: $ref}}')"
+  curl_json POST /chat-sessions "${body}" 201 "${output}"
+  assert_json '(.chatSessionId | startswith("chat_")) and .status == "active" and .latestRun == null and (.sandboxId | not)' "${output}"
+}
+
+send_message() {
+  local session_id="$1"
+  local content="$2"
+  local output="$3"
+  local body
+  body="$(jq -cn --arg content "${content}" '{content: $content}')"
+  curl_json POST "/chat-sessions/${session_id}/messages" "${body}" 202 "${output}"
+  assert_json '.run != null and (.run.taskRunId | startswith("run_")) and .run.status == "created"' "${output}"
+}
+
 require_command curl
 require_command docker
 require_command git
@@ -429,106 +427,124 @@ if [[ -s "${TMP_DIR}/fixture-status.before" ||
   fail "fixture repo must have a clean worktree and index"
 fi
 
-READ_INSTRUCTIONS='Use the read tool to read exactly /workspace/repo/hello.txt. This is a read-only task: do not call write or edit, do not call bash, and do not modify any file. Then give a concise summary that includes what you read.'
-log "creating read-only live agent task"
-create_body="$(jq -cn --arg repo "${REPO_REF}" --arg instructions "${READ_INSTRUCTIONS}" \
-  '{repoRef: $repo, instructions: $instructions}')"
-curl_json POST /tasks "${create_body}" 202 "${TMP_DIR}/read-create.json"
-assert_json '(.taskId | startswith("task_")) and .status == "created"' "${TMP_DIR}/read-create.json"
-READ_TASK_ID="$(jq -r '.taskId' "${TMP_DIR}/read-create.json")"
-assert_json_arg task_id "${READ_TASK_ID}" \
-  '.eventsUrl == ("/tasks/" + $task_id + "/events") and (has("sandboxId") | not)' \
-  "${TMP_DIR}/read-create.json"
-wait_for_task_status "${READ_TASK_ID}" completed
-curl_json GET "/tasks/${READ_TASK_ID}" '' 200 "${TMP_DIR}/read-snapshot.json"
-assert_json '.status == "completed" and (has("sandboxId") | not) and (has("containerName") | not) and (has("workspacePath") | not)' "${TMP_DIR}/read-snapshot.json"
-curl_json GET "/tasks/${READ_TASK_ID}/result" '' 200 "${TMP_DIR}/read-result.json"
-assert_json '.status == "completed" and .exitReason == "completed" and (.agentSummary | type == "string") and (.agentSummary | length > 0) and .diff == "" and (has("sandboxId") | not)' "${TMP_DIR}/read-result.json"
+log "creating chat session"
+create_session "${TMP_DIR}/session-create.json"
+SESSION_ID="$(jq -r '.chatSessionId' "${TMP_DIR}/session-create.json")"
 
-log "checking read-only agent events and cleanup"
-capture_sse "/tasks/${READ_TASK_ID}/events?after=0" "${TMP_DIR}/read-events.sse"
-for event_type in task_created sandbox_created task_provisioning_started sandbox_ready \
-  task_running agent_tool_call agent_tool_result task_completed task_result_ready; do
+READ_INSTRUCTIONS='Use the read tool to read exactly /workspace/repo/hello.txt. This is a read-only task: do not call write or edit, do not call bash, and do not modify any file. Then give a concise summary that includes what you read.'
+log "sending read-only message to session ${SESSION_ID}"
+send_message "${SESSION_ID}" "${READ_INSTRUCTIONS}" "${TMP_DIR}/read-create.json"
+READ_RUN_ID="$(jq -r '.run.taskRunId' "${TMP_DIR}/read-create.json")"
+READ_RUN_EVENTS_URL="/chat-sessions/${SESSION_ID}/runs/${READ_RUN_ID}/events"
+assert_json_arg events_url "${READ_RUN_EVENTS_URL}" \
+  '.run.eventsUrl == $events_url' "${TMP_DIR}/read-create.json"
+wait_for_run_status "${SESSION_ID}" "${READ_RUN_ID}" completed
+curl_json GET "/chat-sessions/${SESSION_ID}/runs/${READ_RUN_ID}" '' 200 "${TMP_DIR}/read-snapshot.json"
+assert_json '.status == "completed"' "${TMP_DIR}/read-snapshot.json"
+curl_json GET "/chat-sessions/${SESSION_ID}/runs/${READ_RUN_ID}/result" '' 200 "${TMP_DIR}/read-result.json"
+assert_json '.status == "completed" and .exitReason == "completed" and (.agentSummary | type == "string") and (.agentSummary | length > 0) and .diff == ""' "${TMP_DIR}/read-result.json"
+
+log "checking read-only run events, session provisioning, and cleanup"
+capture_sse "/chat-sessions/${SESSION_ID}/runs/${READ_RUN_ID}/events?after=0" "${TMP_DIR}/read-events.sse"
+for event_type in sandbox_created sandbox_provisioning_started sandbox_ready \
+  agent_tool_call agent_tool_result run_completed run_result_ready; do
   assert_sse_event_type "${TMP_DIR}/read-events.sse" "${event_type}"
 done
-assert_not_contains "${TMP_DIR}/read-events.sse" 'containerName'
 assert_sse_ordered "${TMP_DIR}/read-events.sse"
 READ_SANDBOX_ID="$(awk '/^data: / { sub(/^data: /, ""); print }' "${TMP_DIR}/read-events.sse" | jq -s -r '[.[] | select(.type == "sandbox_created")][0].sandboxId // empty')"
-[[ -n "${READ_SANDBOX_ID}" ]] || fail "read task did not expose a sandbox ID in its events"
-assert_agent_events "${TMP_DIR}/read-events.sse" "${READ_TASK_ID}" "${READ_SANDBOX_ID}"
+[[ -n "${READ_SANDBOX_ID}" ]] || fail "first run did not expose a sandbox ID in its events"
+assert_agent_events "${TMP_DIR}/read-events.sse" "${READ_RUN_ID}" "${READ_SANDBOX_ID}"
 assert_jsonl_arg path /workspace/repo/hello.txt \
   '[.[] | select(.type == "agent_tool_call")] | any(.[]; .payload.tool_name == "read" and .payload.args.path == $path) and all(.[]; .payload.tool_name != "write" and .payload.tool_name != "edit")' \
   "${TMP_DIR}/read-events.sse.jsonl"
-assert_sandbox_cleanup "${TMP_DIR}/read-events.sse" "${READ_SANDBOX_ID}"
+if docker ps -a --format '{{.Names}}' | grep -Fxq -- "sandbox-${READ_SANDBOX_ID}"; then
+  log "session sandbox sandbox-${READ_SANDBOX_ID} remains running (expected: sandbox is session-owned and reused)"
+else
+  fail "session sandbox sandbox-${READ_SANDBOX_ID} was unexpectedly removed after the run completed"
+fi
 assert_fixture_unchanged
 
-log "checking SSE replay from an explicit cursor and Last-Event-ID"
-capture_sse "/tasks/${READ_TASK_ID}/events?after=2" "${TMP_DIR}/read-events-after-2.sse"
+log "checking session SSE and run SSE cursor replay"
+capture_sse "/chat-sessions/${SESSION_ID}/events?after=0" "${TMP_DIR}/session-events.sse"
+for event_type in session_created message_created run_requested run_created run_completed run_result_ready; do
+  assert_sse_event_type "${TMP_DIR}/session-events.sse" "${event_type}"
+done
+assert_sse_ordered "${TMP_DIR}/session-events.sse"
+
+capture_sse "/chat-sessions/${SESSION_ID}/runs/${READ_RUN_ID}/events?after=2" "${TMP_DIR}/read-events-after-2.sse"
 FIRST_REPLAYED_ID="$(awk '/^id: / { print $2; exit }' "${TMP_DIR}/read-events-after-2.sse")"
 [[ "${FIRST_REPLAYED_ID}" =~ ^[0-9]+$ && "${FIRST_REPLAYED_ID}" -gt 2 ]] ||
   fail "after=2 replay started at invalid sequence: ${FIRST_REPLAYED_ID}"
-assert_sse_event_type "${TMP_DIR}/read-events-after-2.sse" agent_tool_call
-assert_sse_event_type "${TMP_DIR}/read-events-after-2.sse" agent_tool_result
-assert_sse_event_type "${TMP_DIR}/read-events-after-2.sse" task_result_ready
 assert_sse_ordered "${TMP_DIR}/read-events-after-2.sse"
-capture_sse "/tasks/${READ_TASK_ID}/events" "${TMP_DIR}/read-events-last-id.sse" 2
+capture_sse "/chat-sessions/${SESSION_ID}/runs/${READ_RUN_ID}/events" "${TMP_DIR}/read-events-last-id.sse" 2
 FIRST_RESUMED_ID="$(awk '/^id: / { print $2; exit }' "${TMP_DIR}/read-events-last-id.sse")"
 [[ "${FIRST_RESUMED_ID}" =~ ^[0-9]+$ && "${FIRST_RESUMED_ID}" -gt 2 ]] ||
   fail "Last-Event-ID replay started at invalid sequence: ${FIRST_RESUMED_ID}"
-assert_sse_event_type "${TMP_DIR}/read-events-last-id.sse" agent_tool_call
-assert_sse_event_type "${TMP_DIR}/read-events-last-id.sse" agent_tool_result
-assert_sse_event_type "${TMP_DIR}/read-events-last-id.sse" task_result_ready
 assert_sse_ordered "${TMP_DIR}/read-events-last-id.sse"
 
 WRITE_LINE='agent acceptance edit'
 WRITE_INSTRUCTIONS="Use the edit or write tool to make exactly this change in /workspace/repo/hello.txt: append one new final line containing exactly '${WRITE_LINE}'. Preserve every existing line and do not modify any other file. Verify the change with a read, then give a concise summary."
-log "creating exact-edit live agent task"
-create_body="$(jq -cn --arg repo "${REPO_REF}" --arg instructions "${WRITE_INSTRUCTIONS}" \
-  '{repoRef: $repo, instructions: $instructions}')"
-curl_json POST /tasks "${create_body}" 202 "${TMP_DIR}/write-create.json"
-WRITE_TASK_ID="$(jq -r '.taskId' "${TMP_DIR}/write-create.json")"
-wait_for_task_status "${WRITE_TASK_ID}" completed
-curl_json GET "/tasks/${WRITE_TASK_ID}" '' 200 "${TMP_DIR}/write-snapshot.json"
-assert_json '.status == "completed" and (has("sandboxId") | not)' "${TMP_DIR}/write-snapshot.json"
-curl_json GET "/tasks/${WRITE_TASK_ID}/result" '' 200 "${TMP_DIR}/write-result.json"
-assert_json '.status == "completed" and .exitReason == "completed" and (.agentSummary | type == "string") and (.agentSummary | length > 0) and (.diff | type == "string") and (.diff | length > 0) and (has("sandboxId") | not)' "${TMP_DIR}/write-result.json"
+log "sending exact-edit message to the same session"
+send_message "${SESSION_ID}" "${WRITE_INSTRUCTIONS}" "${TMP_DIR}/write-create.json"
+WRITE_RUN_ID="$(jq -r '.run.taskRunId' "${TMP_DIR}/write-create.json")"
+wait_for_run_status "${SESSION_ID}" "${WRITE_RUN_ID}" completed
+curl_json GET "/chat-sessions/${SESSION_ID}/runs/${WRITE_RUN_ID}/result" '' 200 "${TMP_DIR}/write-result.json"
+assert_json '.status == "completed" and .exitReason == "completed" and (.agentSummary | type == "string") and (.agentSummary | length > 0) and (.diff | type == "string") and (.diff | length > 0)' "${TMP_DIR}/write-result.json"
 assert_contains "${TMP_DIR}/write-result.json" "+${WRITE_LINE}"
-capture_sse "/tasks/${WRITE_TASK_ID}/events?after=0" "${TMP_DIR}/write-events.sse"
-for event_type in agent_tool_call agent_tool_result task_completed task_result_ready; do
+capture_sse "/chat-sessions/${SESSION_ID}/runs/${WRITE_RUN_ID}/events?after=0" "${TMP_DIR}/write-events.sse"
+for event_type in agent_tool_call agent_tool_result run_completed run_result_ready; do
   assert_sse_event_type "${TMP_DIR}/write-events.sse" "${event_type}"
 done
 assert_sse_ordered "${TMP_DIR}/write-events.sse"
 WRITE_SANDBOX_ID="$(awk '/^data: / { sub(/^data: /, ""); print }' "${TMP_DIR}/write-events.sse" | jq -s -r '[.[] | select(.type == "sandbox_created")][0].sandboxId // empty')"
-[[ -n "${WRITE_SANDBOX_ID}" ]] || fail "write task did not expose a sandbox ID in its events"
-assert_agent_events "${TMP_DIR}/write-events.sse" "${WRITE_TASK_ID}" "${WRITE_SANDBOX_ID}"
+[[ -z "${WRITE_SANDBOX_ID}" ]] ||
+  fail "second run in the same session re-provisioned a sandbox instead of reusing it"
+assert_agent_events "${TMP_DIR}/write-events.sse" "${WRITE_RUN_ID}" "${READ_SANDBOX_ID}"
 assert_jsonl_arg path /workspace/repo/hello.txt \
   '[.[] | select(.type == "agent_tool_call")] | any(.[]; (.payload.tool_name == "edit" or .payload.tool_name == "write") and .payload.args.path == $path)' \
   "${TMP_DIR}/write-events.sse.jsonl"
-assert_sandbox_cleanup "${TMP_DIR}/write-events.sse" "${WRITE_SANDBOX_ID}"
 assert_fixture_unchanged
 
+log "checking one-active-run-per-session enforcement"
+CONFLICT_BODY="$(jq -cn '{content: "Fix something else while a run might still be active"}')"
+CONFLICT_STATUS="$(curl -sS -o "${TMP_DIR}/conflict.json" -w '%{http_code}' \
+  -X POST -H 'content-type: application/json' -d "${CONFLICT_BODY}" \
+  "${BASE_URL}/chat-sessions/${SESSION_ID}/messages")"
+case "${CONFLICT_STATUS}" in
+  409)
+    assert_json '.error.code == "session_run_in_progress"' "${TMP_DIR}/conflict.json"
+    ;;
+  202)
+    log "no run was active at send time; skipping conflict assertion for this timing window"
+    CONFLICT_RUN_ID="$(jq -r '.run.taskRunId' "${TMP_DIR}/conflict.json")"
+    wait_for_terminal_run "${SESSION_ID}" "${CONFLICT_RUN_ID}"
+    ;;
+  *)
+    printf 'Unexpected concurrent-message HTTP status: %s\n' "${CONFLICT_STATUS}" >&2
+    dump_file_safely "${TMP_DIR}/conflict.json"
+    exit 1
+    ;;
+esac
+
 log "checking cancellation smoke path"
-cancel_body="$(jq -cn --arg repo "${REPO_REF}" \
-  --arg instructions 'Cancel this live agent task immediately; no file changes are required.' \
-  '{repoRef: $repo, instructions: $instructions}')"
-curl_json POST /tasks "${cancel_body}" 202 "${TMP_DIR}/cancel-create.json"
-CANCEL_TASK_ID="$(jq -r '.taskId' "${TMP_DIR}/cancel-create.json")"
+send_message "${SESSION_ID}" "Cancel this live agent run immediately; no file changes are required." "${TMP_DIR}/cancel-create.json"
+CANCEL_RUN_ID="$(jq -r '.run.taskRunId' "${TMP_DIR}/cancel-create.json")"
 CANCEL_STATUS="$(curl -sS -o "${TMP_DIR}/cancel.json" -w '%{http_code}' \
-  -X DELETE "${BASE_URL}/tasks/${CANCEL_TASK_ID}")"
+  -X DELETE "${BASE_URL}/chat-sessions/${SESSION_ID}/runs/${CANCEL_RUN_ID}")"
 case "${CANCEL_STATUS}" in
   202)
-    assert_json_arg task_id "${CANCEL_TASK_ID}" \
-      '.taskId == $task_id and .status == "cancelling" and (has("sandboxId") | not)' \
+    assert_json_arg run_id "${CANCEL_RUN_ID}" \
+      '.taskRunId == $run_id and .status == "cancelling"' \
       "${TMP_DIR}/cancel.json"
-    wait_for_terminal_task "${CANCEL_TASK_ID}"
+    wait_for_terminal_run "${SESSION_ID}" "${CANCEL_RUN_ID}"
     ;;
   200)
-    assert_json_arg task_id "${CANCEL_TASK_ID}" \
-      '.taskId == $task_id and .status == "cancelled" and (has("sandboxId") | not)' \
+    assert_json_arg run_id "${CANCEL_RUN_ID}" \
+      '.taskRunId == $run_id and .status == "cancelled"' \
       "${TMP_DIR}/cancel.json"
     ;;
   409)
-    assert_json '.error.code == "task_already_terminal"' "${TMP_DIR}/cancel.json"
+    assert_json '.error.code == "run_already_terminal"' "${TMP_DIR}/cancel.json"
     ;;
   *)
     printf 'Unexpected cancellation HTTP status: %s\n' "${CANCEL_STATUS}" >&2
@@ -538,22 +554,26 @@ case "${CANCEL_STATUS}" in
 esac
 assert_fixture_unchanged
 
-log "checking provisioning failure path"
+log "checking provisioning failure path in a fresh session"
 [[ ! -e "${FAILURE_REPO_BACKUP}" ]] || fail "temporary failure fixture path already exists"
 FAILURE_REPO_MOVED=true
 mv -- "${FIXTURE_REPO_PATH}" "${FAILURE_REPO_BACKUP}"
-failure_body="$(jq -cn --arg repo "${REPO_REF}" \
-  --arg instructions 'Should fail provisioning' \
-  '{repoRef: $repo, instructions: $instructions}')"
-curl_json POST /tasks "${failure_body}" 202 "${TMP_DIR}/failure-create.json"
-FAILED_TASK_ID="$(jq -r '.taskId' "${TMP_DIR}/failure-create.json")"
-wait_for_task_status "${FAILED_TASK_ID}" failed
-capture_sse "/tasks/${FAILED_TASK_ID}/events?after=0" "${TMP_DIR}/failure-events.sse"
-assert_sse_event_type "${TMP_DIR}/failure-events.sse" task_failed
-assert_sse_event_type "${TMP_DIR}/failure-events.sse" task_result_ready
-curl_json GET "/tasks/${FAILED_TASK_ID}/result" '' 200 "${TMP_DIR}/failure-result.json"
-assert_json '.status == "failed" and .exitReason == "failed" and (has("sandboxId") | not)' "${TMP_DIR}/failure-result.json"
+create_session "${TMP_DIR}/failure-session-create.json"
+FAILURE_SESSION_ID="$(jq -r '.chatSessionId' "${TMP_DIR}/failure-session-create.json")"
+send_message "${FAILURE_SESSION_ID}" "Should fail provisioning" "${TMP_DIR}/failure-create.json"
+FAILED_RUN_ID="$(jq -r '.run.taskRunId' "${TMP_DIR}/failure-create.json")"
+wait_for_run_status "${FAILURE_SESSION_ID}" "${FAILED_RUN_ID}" failed
+capture_sse "/chat-sessions/${FAILURE_SESSION_ID}/runs/${FAILED_RUN_ID}/events?after=0" "${TMP_DIR}/failure-events.sse"
+assert_sse_event_type "${TMP_DIR}/failure-events.sse" run_failed
+assert_sse_event_type "${TMP_DIR}/failure-events.sse" run_result_ready
+curl_json GET "/chat-sessions/${FAILURE_SESSION_ID}/runs/${FAILED_RUN_ID}/result" '' 200 "${TMP_DIR}/failure-result.json"
+assert_json '.status == "failed" and .exitReason == "failed"' "${TMP_DIR}/failure-result.json"
 restore_fixture_repo
 assert_fixture_unchanged
 
-printf 'PASS task service atomic MVP + live agent acceptance\n'
+log "checking retired /tasks and /sandboxes routes"
+RETIRED_STATUS="$(curl -sS -o "${TMP_DIR}/retired.json" -w '%{http_code}' "${BASE_URL}/tasks/nonexistent")"
+[[ "${RETIRED_STATUS}" == "404" ]] || fail "expected /tasks/* to return 404, got ${RETIRED_STATUS}"
+assert_json '.error.code == "not_found"' "${TMP_DIR}/retired.json"
+
+printf 'PASS chat session atomic MVP + live agent acceptance\n'

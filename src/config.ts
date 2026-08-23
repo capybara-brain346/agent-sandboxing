@@ -10,7 +10,7 @@ const schema = z
     DATABASE_URL: z.string().min(1),
     SHUTDOWN_TIMEOUT_MS: z.coerce.number().default(10_000),
     SANDBOX_IMAGE: z.string().default("node:22-bookworm"),
-    FIXTURE_REPO_PATH: z.string().default("./repo"),
+    FIXTURE_REPO_PATH: z.string().default("/workspace/fixture-repo"),
     SANDBOX_PROVISION_TIMEOUT_MS: z.coerce
       .number()
       .int()

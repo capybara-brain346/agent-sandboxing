@@ -2,59 +2,58 @@
 
 ## Purpose
 
-The Sandbox Service is the task product's internal execution plane. It owns
-the task-scoped Docker workspace, runs commands inside that workspace, captures
-the Git diff, and publishes sandbox and command lifecycle events to the owning
-task stream.
+The Sandbox Service is the chat-session product's internal execution plane. It
+owns the session-owned Docker workspace, captures the Git diff, and publishes
+sandbox lifecycle events to the owning run stream.
 
-The service does not own task orchestration or the public HTTP API. Those
-responsibilities belong to [`TaskService`](../task-service/README.md).
+The service does not own run orchestration or the public HTTP API. Those
+responsibilities belong to the [Chat Session Service](../chat-session/README.md)
+and [`RunService`](../../../src/services/task/run-service.ts).
 
 ## Read first
 
 - [`docs/agent-sandboxing-project.md`](../../agent-sandboxing-project.md) — product and architecture context
-- [`Task Service`](../task-service/README.md) — current product boundary and orchestration
-- [`docs/planning/task-service-atomic-mvp-plan.md`](../../planning/task-service-atomic-mvp-plan.md) — task-owned lifecycle decisions
+- [`Chat Session Service`](../chat-session/README.md) — current product boundary and orchestration
+- [`Task Run Runtime`](../task-service/README.md) — shared execution runtime and removed `/tasks` history
 - [`docs/planning/sandbox-service-atomic-mvp-plan.md`](../../planning/sandbox-service-atomic-mvp-plan.md) — historical standalone execution-plane design
 
 ## Boundary and status
 
-Sandboxes are created only through the task flow in the public application.
-There are no registered `/sandboxes/*` routes. `TaskService` creates the task
-and its linked sandbox in one database transaction, then calls the sandbox
-service in-process after that transaction commits.
+Sandboxes are created only through the chat-session run flow. There are no
+registered `/sandboxes/*` routes. `RunService` provisions the session-owned
+sandbox on the first run of a session and reuses it, unstopped, on later runs.
 
 The service currently uses a local fixture repository and Docker. GitHub
 integration, authentication, queues, and a second runtime provider are out of
 scope. The Agent Service owns the control-plane agent loop and uses this
-service only through the narrow task-owned runtime seam.
+service only through the narrow session-owned runtime seam.
 
-The public task response does not expose sandbox or container handles. The
-task event envelope currently includes `sandboxId` and `commandId` fields for
-MVP observability; callers should consume these as event metadata rather than
-use them as a separate API surface.
+The public run response does not expose sandbox or container handles. The run
+event envelope includes `sandboxId` and `commandId` fields for observability;
+callers should consume these as event metadata rather than use them as a
+separate API surface.
 
 ## Internal service contract
 
-`SandboxService` is constructor-injected into `TaskService`. Its task-scoped
+`SandboxService` is constructor-injected into `RunService`. Its session-scoped
 operations are:
 
-- `createForTaskInTransaction(tx, input, { taskId })` — inserts a `creating`
-  sandbox row and returns its sandbox ID, container name, and workspace path. It
-  does not invoke Docker.
-- `provisionForTask(sandboxId)` — validates the task-owned row, creates and
-  starts the container, copies the fixture into the workspace, and returns
-  `ready` or a structured provisioning failure.
-- `getAgentToolTarget(taskId, sandboxId)` — validates both ownership
-  identifiers and `ready` status, then returns only the container name and a
+- `createForSessionInTransaction(tx, input, { sessionId })` — inserts a
+  `creating` sandbox row owned by the session and returns its sandbox ID,
+  container name, and workspace path. It does not invoke Docker.
+- `ensureReadyForSession(sessionId, runId, sandboxId)` — returns immediately
+  for an already-ready sandbox, otherwise provisions it: creates and starts
+  the container, copies the fixture into the workspace, and returns `ready` or
+  a structured provisioning failure.
+- `getAgentToolTarget(sessionId, runId, sandboxId)` — validates session
+  ownership and `ready` status, then returns only the container name and a
   `simpleExec` runtime seam to the Agent Service. It never exposes Docker,
   Prisma, or unrelated runtime methods.
-- `runCommand(taskId, input)` — delegates to `CommandExecutionService`; only
-  the task's ready sandbox can run a command.
-- `getCommand(taskId, commandId)` — returns the persisted command snapshot.
-- `diff(sandboxId)` — reads `git diff --binary` from the task workspace.
-- `stop(sandboxId)` — stops and removes the Docker container and persists the
-  stopping/stopped lifecycle.
+- `diffForSession(sessionId, runId, sandboxId)` — reads `git diff --binary`
+  from the session workspace.
+
+The sandbox is never stopped by a completed run; it is reused by later runs in
+the same session for as long as the session lives.
 
 The Agent Service uses an in-process runtime seam and never receives raw Docker
 access. `SandboxRuntime.simpleExec(containerName, command, cwd, options)` runs a
@@ -67,16 +66,20 @@ responsible for workspace path validation and command allowlisting.
 ## Sandbox lifecycle
 
 The persisted sandbox states are `creating`, `ready`, `stopping`, `stopped`,
-`failed`, and `deleted`. The normal task path is:
+`failed`, and `deleted`. The normal session path is:
 
 ```text
-task transaction
+session transaction (first run)
     |
     v
-creating --provision--> ready --stop--> stopping --runtime cleanup--> stopped
+creating --provision--> ready
     |
     +-- provisioning/runtime failure --> failed
 ```
+
+A completed run never transitions the sandbox to `stopping`/`stopped`; the
+`stopping`/`stopped` states remain defined for a future explicit
+session/sandbox teardown path.
 
 `SandboxService` is the only place that defines the legal status transition
 map. State changes and their lifecycle events are written in the same Prisma
@@ -107,6 +110,14 @@ confirms that they remain under this path.
 
 ## Command execution
 
+`CommandExecutionService`
+([`src/services/sandbox/command-execution.ts`](../../../src/services/sandbox/command-execution.ts))
+implements a persisted, one-command-at-a-time execution model, but it is not
+currently wired into `SandboxService` or reachable from any route — agent
+tools use the `simpleExec` runtime seam instead (below). It is retained and
+unit-tested as a seam for a future durable/streamed command API. Where wired,
+its contract is:
+
 Commands run sequentially per sandbox. A database constraint allows at most one
 `running` command for a sandbox. Each command is persisted before execution is
 started and receives an ordered task-stream event sequence.
@@ -134,25 +145,23 @@ exceeds the limit.
 
 The sandbox target seam never forwards the OpenRouter API key or any other
 control-plane secret into a container. Agent tool calls receive only the
-task-owned runtime target and the task cancellation signal.
+session-owned runtime target and the run cancellation signal.
 
 ## Event stream
 
-There is no sandbox-specific event stream. Every event has an owning `taskId`
-and is appended to that task's ordered `Event` log. Sandbox and command events
-that can appear in the stream include:
+There is no sandbox-specific event stream. Every sandbox lifecycle event
+carries the owning `sessionId`/`runId` and is appended to that run's ordered
+`Event` log. Sandbox events that can appear in the stream include:
 
 - sandbox: `sandbox_created`, `sandbox_provisioning_started`,
-  `fixture_repo_copy_started`, `fixture_repo_copied`, `sandbox_ready`,
-  `sandbox_failed`, `sandbox_stopping`, and `sandbox_stopped`
-- commands: `command_started`, `command_output`, `command_completed`,
-  `command_failed`, and `command_timed_out`
+  `fixture_repo_copy_started`, `fixture_repo_copied`, `sandbox_ready`, and
+  `sandbox_failed`
 - agent tools: `agent_tool_call` and `agent_tool_result`, appended by the
-  Agent Service to the same owning task stream
+  Agent Service to the same owning run stream
 - diff capture: `git_diff_requested` and `git_diff_completed`
 
 The durable `EventStore` is canonical. `SseHub` provides live fanout and
-buffers events during replay; reconnects use the task event sequence via the
+buffers events during replay; reconnects use the run event sequence via the
 `after` query parameter or `Last-Event-ID` header.
 See the [Event Service documentation](../event-service/README.md) for the
 shared event contract and append/publish invariants.
@@ -180,23 +189,28 @@ docker compose up db-migrate
 docker compose up app
 ```
 
-Create a Git fixture and start a task through the public product boundary:
+Create a Git fixture, start a session, and send a message through the public
+product boundary:
 
 ```bash
 mkdir -p repo && git -C repo init
 git -C repo config user.email acceptance@example.test
 git -C repo config user.name acceptance
 printf 'hello\n' > repo/hello.txt && git -C repo add hello.txt && git -C repo commit -m fixture
-curl -sS -X POST http://localhost:3000/tasks \
+curl -sS -X POST http://localhost:3000/chat-sessions \
   -H 'content-type: application/json' \
-  -d '{"repoRef":"./repo","instructions":"No-op"}'
-curl -sS http://localhost:3000/tasks/<taskId>
-curl -N 'http://localhost:3000/tasks/<taskId>/events?after=0'
-curl -sS http://localhost:3000/tasks/<taskId>/result
+  -d '{"repo":{"source":"fixture","ref":"./repo"}}'
+curl -sS -X POST http://localhost:3000/chat-sessions/<sessionId>/messages \
+  -H 'content-type: application/json' \
+  -d '{"content":"No-op"}'
+curl -sS http://localhost:3000/chat-sessions/<sessionId>/runs/<runId>
+curl -N 'http://localhost:3000/chat-sessions/<sessionId>/runs/<runId>/events?after=0'
+curl -sS http://localhost:3000/chat-sessions/<sessionId>/runs/<runId>/result
 ```
 
-Use task events, task results, and direct service tests for diagnostics. The
-retired sandbox HTTP routes are intentionally not available.
+Use run events, run results, and direct service tests for diagnostics. The
+retired `/sandboxes/*` and `/tasks/*` HTTP routes are intentionally not
+available.
 
 ## Configuration
 

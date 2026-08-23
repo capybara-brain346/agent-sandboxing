@@ -33,82 +33,163 @@ enum TaskStatus {
   cancelled
 }
 
+enum ChatMessageRole {
+  user
+  assistant
+  system
+}
+
+model ChatSession {
+  title              String?
+  id                 String        @id
+  repoRef            String        @map("repo_ref")
+  repoSource         String        @default("local") @map("repo_source")
+  repoProvider       String?       @map("repo_provider")
+  repoOwner          String?       @map("repo_owner")
+  repoName           String?       @map("repo_name")
+  repoId             String?       @map("repo_id")
+  repoDefaultBranch  String?       @map("repo_default_branch")
+  repoInstallationId String?       @map("repo_installation_id")
+  image              String?
+  summary            String?       @db.Text
+  summaryCompactedThroughMessageCount Int @default(0) @map("summary_compacted_through_message_count")
+  nextEventSequence  Int           @default(1) @map("next_event_sequence")
+  activeRunId        String?       @unique @map("active_run_id")
+  lockedAt           DateTime?     @map("locked_at")
+  lockVersion        Int           @default(0) @map("lock_version")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  messages           ChatMessage[]
+  runs               Task[]        @relation("SessionRuns")
+  sandbox            Sandbox?      @relation("SessionSandbox")
+  artifacts          Artifact[]    @relation("SessionArtifacts")
+  events             Event[]       @relation("SessionEvents")
+
+  @@index([createdAt])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String          @id @default(cuid())
+  sessionId String          @map("session_id")
+  runId     String?         @map("run_id")
+  role      ChatMessageRole
+  content   String          @db.Text
+  createdAt DateTime        @default(now()) @map("created_at")
+  session   ChatSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  run       Task?           @relation("RunMessages", fields: [runId], references: [id], onDelete: SetNull)
+  events    Event[]         @relation("MessageEvents")
+
+  @@index([sessionId, createdAt])
+  @@index([runId, createdAt])
+  @@map("chat_messages")
+}
+
 model Sandbox {
-  id                String         @id @default(cuid())
-  taskId            String?        @unique @map("task_id")
-  task              Task?          @relation("SandboxTask", fields: [taskId], references: [id], onDelete: SetNull)
-  taskForSandbox    Task?          @relation("TaskSandbox")
-  status            SandboxStatus
-  containerId       String?        @map("container_id")
-  containerName     String         @unique @map("container_name")
-  image             String
-  workspacePath     String         @map("workspace_path")
-  fixtureRepoPath   String         @map("fixture_repo_path")
-  failureCode       String?        @map("failure_code")
-  failureMessage    String?        @map("failure_message")
-  createdAt         DateTime       @default(now()) @map("created_at")
-  updatedAt         DateTime       @updatedAt @map("updated_at")
-  readyAt           DateTime?      @map("ready_at")
-  stoppingAt        DateTime?      @map("stopping_at")
-  stoppedAt         DateTime?      @map("stopped_at")
-  failedAt          DateTime?      @map("failed_at")
-  deletedAt         DateTime?      @map("deleted_at")
-  commands          Command[]
-  streamEvents      Event[]        @relation("SandboxEvents")
+  id              String        @id @default(cuid())
+  taskId          String?       @unique @map("task_id")
+  sessionId       String?       @unique @map("session_id")
+  task            Task?         @relation("SandboxTask", fields: [taskId], references: [id], onDelete: SetNull)
+  taskForSandbox  Task?         @relation("TaskSandbox")
+  session         ChatSession?  @relation("SessionSandbox", fields: [sessionId], references: [id], onDelete: SetNull)
+  status          SandboxStatus
+  containerId     String?       @map("container_id")
+  containerName   String        @unique @map("container_name")
+  image           String
+  workspacePath   String        @map("workspace_path")
+  fixtureRepoPath String        @map("fixture_repo_path")
+  failureCode     String?       @map("failure_code")
+  failureMessage  String?       @map("failure_message")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  readyAt         DateTime?     @map("ready_at")
+  stoppingAt      DateTime?     @map("stopping_at")
+  stoppedAt       DateTime?     @map("stopped_at")
+  failedAt        DateTime?     @map("failed_at")
+  deletedAt       DateTime?     @map("deleted_at")
+  commands        Command[]
+  streamEvents    Event[]       @relation("SandboxEvents")
 
   @@index([status, createdAt])
   @@map("sandboxes")
 }
 
 model Task {
-  id                String     @id
-  status            TaskStatus
-  repoRef           String     @map("repo_ref")
-  instructions      String
-  image             String?
-  sandboxId         String?    @unique @map("sandbox_id")
-  sandbox           Sandbox?   @relation("TaskSandbox", fields: [sandboxId], references: [id], onDelete: SetNull)
-  sandboxForTask    Sandbox?   @relation("SandboxTask")
-  nextEventSequence Int        @default(1) @map("next_event_sequence")
-  diff              String?
-  agentSummary      String?    @map("agent_summary")
-  exitReason        String?    @map("exit_reason")
-  failureCode       String?    @map("failure_code")
-  failureMessage    String?    @map("failure_message")
-  createdAt         DateTime   @default(now()) @map("created_at")
-  updatedAt         DateTime   @updatedAt @map("updated_at")
-  provisioningAt    DateTime?  @map("provisioning_at")
-  runningAt         DateTime?  @map("running_at")
-  completedAt       DateTime?  @map("completed_at")
-  failedAt          DateTime?  @map("failed_at")
-  cancelledAt       DateTime?  @map("cancelled_at")
+  id                   String       @id
+  status               TaskStatus
+  sessionId            String?      @map("session_id")
+  session              ChatSession? @relation("SessionRuns", fields: [sessionId], references: [id], onDelete: SetNull)
+  repoRef              String       @map("repo_ref")
+  instructions         String
+  image                String?
+  sandboxId            String?      @unique @map("sandbox_id")
+  sandbox              Sandbox?     @relation("TaskSandbox", fields: [sandboxId], references: [id], onDelete: SetNull)
+  sandboxForTask       Sandbox?     @relation("SandboxTask")
+  nextEventSequence    Int          @default(1) @map("next_event_sequence")
+  diff                 String?
+  agentSummary         String?      @map("agent_summary")
+  exitReason           String?      @map("exit_reason")
+  failureCode          String?      @map("failure_code")
+  failureMessage       String?      @map("failure_message")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+  provisioningAt       DateTime?    @map("provisioning_at")
+  runningAt            DateTime?    @map("running_at")
+  completedAt          DateTime?    @map("completed_at")
+  failedAt             DateTime?    @map("failed_at")
+  cancelledAt          DateTime?    @map("cancelled_at")
+  verificationMetadata Json?        @map("verification_metadata")
 
-  events Event[] @relation("TaskEvents")
+  events    Event[]       @relation("TaskEvents")
+  runEvents Event[]       @relation("RunEvents")
+  messages  ChatMessage[] @relation("RunMessages")
+  artifacts Artifact[]    @relation("RunArtifacts")
 
   @@index([status, createdAt])
   @@index([createdAt])
+  @@index([sessionId, createdAt])
   @@map("tasks")
 }
 
+model Artifact {
+  id          String      @id @default(cuid())
+  sessionId   String      @map("session_id")
+  runId       String?     @map("run_id")
+  kind        String
+  contentType String      @map("content_type")
+  content     String      @db.Text
+  byteSize    Int         @map("byte_size")
+  truncated   Boolean     @default(false)
+  redacted    Boolean     @default(false)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  session     ChatSession @relation("SessionArtifacts", fields: [sessionId], references: [id], onDelete: Cascade)
+  run         Task?       @relation("RunArtifacts", fields: [runId], references: [id], onDelete: SetNull)
+  events      Event[]     @relation("ArtifactEvents")
+
+  @@index([sessionId, createdAt])
+  @@index([runId, createdAt])
+  @@map("artifacts")
+}
+
 model Command {
-  id              String         @id @default(cuid())
-  sandboxId       String         @map("sandbox_id")
-  sandbox         Sandbox        @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  id              String        @id @default(cuid())
+  sandboxId       String        @map("sandbox_id")
+  sandbox         Sandbox       @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
   status          CommandStatus
   command         String
   cwd             String
   env             Json?
-  timeoutMs       Int            @map("timeout_ms")
-  exitCode        Int?           @map("exit_code")
-  outputBytes     Int            @default(0) @map("output_bytes")
-  outputTruncated Boolean        @default(false) @map("output_truncated")
-  failureCode     String?        @map("failure_code")
-  failureMessage  String?        @map("failure_message")
-  startedAt       DateTime       @default(now()) @map("started_at")
-  completedAt     DateTime?      @map("completed_at")
-  createdAt       DateTime       @default(now()) @map("created_at")
-  updatedAt       DateTime       @updatedAt @map("updated_at")
-  streamEvents    Event[]        @relation("CommandEvents")
+  timeoutMs       Int           @map("timeout_ms")
+  exitCode        Int?          @map("exit_code")
+  outputBytes     Int           @default(0) @map("output_bytes")
+  outputTruncated Boolean       @default(false) @map("output_truncated")
+  failureCode     String?       @map("failure_code")
+  failureMessage  String?       @map("failure_message")
+  startedAt       DateTime      @default(now()) @map("started_at")
+  completedAt     DateTime?     @map("completed_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  streamEvents    Event[]       @relation("CommandEvents")
 
   @@index([sandboxId, createdAt])
   @@index([sandboxId, status])
@@ -118,25 +199,40 @@ model Command {
 model Event {
   id              String   @id
   streamId        String   @map("stream_id")
+  streamScope     String   @default("task") @map("stream_scope")
+  domain          String   @default("task")
   sequence        Int
   type            String
   producerService String   @map("producer_service")
   producerId      String   @map("producer_id")
-  taskId          String   @map("task_id")
+  taskId          String?  @map("task_id")
+  sessionId       String?  @map("session_id")
+  runId           String?  @map("run_id")
+  messageId       String?  @map("message_id")
+  artifactId      String?  @map("artifact_id")
   sandboxId       String?  @map("sandbox_id")
   commandId       String?  @map("command_id")
   correlationId   String?  @map("correlation_id")
   payload         Json
   createdAt       DateTime @default(now()) @map("created_at")
 
-  task    Task     @relation("TaskEvents", fields: [taskId], references: [id], onDelete: Cascade)
-  sandbox Sandbox? @relation("SandboxEvents", fields: [sandboxId], references: [id], onDelete: SetNull)
-  command Command? @relation("CommandEvents", fields: [commandId], references: [id], onDelete: SetNull)
+  task     Task?        @relation("TaskEvents", fields: [taskId], references: [id], onDelete: Cascade)
+  session  ChatSession? @relation("SessionEvents", fields: [sessionId], references: [id], onDelete: Cascade)
+  run      Task?        @relation("RunEvents", fields: [runId], references: [id], onDelete: Cascade)
+  message  ChatMessage? @relation("MessageEvents", fields: [messageId], references: [id], onDelete: SetNull)
+  artifact Artifact?    @relation("ArtifactEvents", fields: [artifactId], references: [id], onDelete: SetNull)
+  sandbox  Sandbox?     @relation("SandboxEvents", fields: [sandboxId], references: [id], onDelete: SetNull)
+  command  Command?     @relation("CommandEvents", fields: [commandId], references: [id], onDelete: SetNull)
 
-  @@unique([streamId, sequence])
+  @@unique([streamScope, streamId, sequence])
   @@index([streamId, sequence])
+  @@index([streamScope, streamId, sequence])
   @@index([producerService, producerId])
   @@index([taskId, sequence])
+  @@index([sessionId, sequence])
+  @@index([runId, sequence])
+  @@index([messageId])
+  @@index([artifactId])
   @@index([sandboxId, sequence])
   @@index([commandId, sequence])
   @@map("events")

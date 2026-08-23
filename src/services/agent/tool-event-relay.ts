@@ -7,6 +7,7 @@ import type {
 } from "ai";
 import type { EventStore } from "../events/event-store";
 import type { PublicEvent } from "../../types/event.types";
+import type { ArtifactRecorder } from "../artifacts/artifact-store";
 import { boundUtf8 } from "./tools/helpers";
 
 const RESULT_SNIPPET_MAX_BYTES = 500;
@@ -16,11 +17,14 @@ type PublishEvent = (event: PublicEvent) => void;
 export type ToolEventContext = {
   taskId: string;
   sandboxId: string;
+  sessionId?: string | undefined;
 };
 
 export type ToolEventRelayDependencies = {
   events: Pick<EventStore, "append">;
   publish: PublishEvent;
+  /** When set, session-scoped tool results too large for the event snippet are stored here for on-demand fetch. */
+  artifacts?: ArtifactRecorder;
 };
 
 export type ToolEventRelayCallbacks<TOOLS extends ToolSet> = {
@@ -72,18 +76,12 @@ export class ToolEventRelay {
     event: ToolExecutionStartEvent,
   ): Promise<void> {
     const correlationId = this.startCorrelation(event.callId);
-    await this.appendAndPublish({
-      taskId: context.taskId,
-      sandboxId: context.sandboxId,
-      type: "agent_tool_call",
-      producerService: "agent",
-      producerId: context.taskId,
-      correlationId,
-      payload: {
+    await this.appendAndPublish(
+      this.eventInput(context, correlationId, "agent_tool_call", {
         tool_name: event.toolCall.toolName,
         args: safeArgs(event.toolCall.input),
-      },
-    });
+      }),
+    );
   }
 
   async onToolExecutionEnd(
@@ -101,26 +99,76 @@ export class ToolEventRelay {
     const bounded = boundUtf8(serialized, RESULT_SNIPPET_MAX_BYTES);
     const outputRecord = isRecord(output) ? output : {};
 
-    await this.appendAndPublish({
+    const artifact =
+      context.sessionId && bounded.truncated && this.dependencies.artifacts
+        ? await this.dependencies.artifacts.create({
+            sessionId: context.sessionId,
+            runId: context.taskId,
+            kind: "tool_output",
+            contentType: "application/json",
+            content: serialized,
+          })
+        : undefined;
+
+    await this.appendAndPublish(
+      this.eventInput(
+        context,
+        correlationId,
+        "agent_tool_result",
+        {
+          tool_name: event.toolCall.toolName,
+          result_snippet: bounded.value,
+          truncated:
+            event.toolOutput.type === "tool-result" &&
+            (outputRecord.truncated === true || bounded.truncated),
+          exit_code:
+            event.toolOutput.type === "tool-result"
+              ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)
+              : null,
+          duration_ms: duration(event.toolExecutionMs),
+          ...(artifact
+            ? {
+                artifact_byte_size: artifact.byteSize,
+                artifact_redacted: artifact.redacted,
+              }
+            : {}),
+        },
+        artifact?.artifactId,
+      ),
+    );
+  }
+
+  private eventInput(
+    context: ToolEventContext,
+    correlationId: string,
+    type: "agent_tool_call" | "agent_tool_result",
+    payload: Record<string, unknown>,
+    artifactId?: string,
+  ): Parameters<EventStore["append"]>[0] {
+    if (context.sessionId)
+      return {
+        streamScope: "run",
+        streamId: context.taskId,
+        sessionId: context.sessionId,
+        runId: context.taskId,
+        sandboxId: context.sandboxId,
+        artifactId: artifactId ?? null,
+        domain: "agent",
+        type,
+        producerService: "agent",
+        producerId: context.taskId,
+        correlationId,
+        payload,
+      };
+    return {
       taskId: context.taskId,
       sandboxId: context.sandboxId,
-      type: "agent_tool_result",
+      type,
       producerService: "agent",
       producerId: context.taskId,
       correlationId,
-      payload: {
-        tool_name: event.toolCall.toolName,
-        result_snippet: bounded.value,
-        truncated:
-          event.toolOutput.type === "tool-result" &&
-          (outputRecord.truncated === true || bounded.truncated),
-        exit_code:
-          event.toolOutput.type === "tool-result"
-            ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)
-            : null,
-        duration_ms: duration(event.toolExecutionMs),
-      },
-    });
+      payload,
+    };
   }
 
   private appendAndPublish(

@@ -1,22 +1,23 @@
 # Frontend
 
-Minimal dashboard for the Task Service: create a sandboxed coding task, watch
-it run via the live SSE event stream, and view terminal task metadata/results. See
+Repo-scoped chat workspace for the Chat Session Service: pick a repo, send a
+message, watch the resulting run execute via the live SSE event stream, and
+view the terminal result/diff. See
 [`docs/modules/frontend/README.md`](../docs/modules/frontend/README.md) for
-the module overview and [`docs/modules/task-service/README.md`](../docs/modules/task-service/README.md)
+the module overview and [`docs/modules/chat-session/README.md`](../docs/modules/chat-session/README.md)
 for the API contract this app consumes.
 
 ## Development
 
 Requires the backend running locally (Postgres, Docker, and
-`npm run dev` from the repo root — see the task-service README for setup).
+`npm run dev` from the repo root — see the chat-session README for setup).
 
 ```bash
 npm install
 npm run dev
 ```
 
-The Vite dev server proxies `/tasks` and `/health` to
+The Vite dev server proxies `/chat-sessions` and `/health` to
 `http://localhost:3000` (see `vite.config.ts`), so no backend CORS
 configuration is needed in dev.
 
