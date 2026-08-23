@@ -32,15 +32,11 @@ export type OrchestratorAgent = {
   decide(input: OrchestratorAgentInput): Promise<OrchestratorDecision>;
 };
 
-type WorkerBriefContext = Pick<
-  OrchestratorContext,
-  "repoRef" | "summary" | "workspace"
->;
+type WorkerBriefContext = Pick<OrchestratorContext, "summary" | "workspace">;
 
 const toWorkerBriefContext = (
   input: OrchestratorAgentInput,
 ): WorkerBriefContext => ({
-  repoRef: input.repoRef,
   summary: input.summary,
   workspace: input.workspace,
 });

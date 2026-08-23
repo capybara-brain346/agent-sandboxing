@@ -71,6 +71,8 @@ The tools execute in `/workspace/repo` through `SandboxRuntime.simpleExec`.
 They do not access Prisma, `SandboxService`, Docker, the event store, or
 `process.env` directly. Every runtime call receives the run signal and either
 `AGENT_TOOL_TIMEOUT_MS` or `AGENT_BASH_TIMEOUT_MS`.
+Worker briefs expose `/workspace/repo` as the only workspace path; fixture and
+repository source references are not included as worker filesystem paths.
 
 Before creating the registry, AgentRunner asks
 `SandboxService.getAgentToolTarget(sessionId, runId, sandboxId)` for the

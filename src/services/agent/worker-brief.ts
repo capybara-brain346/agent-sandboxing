@@ -11,7 +11,7 @@ export type WorkerCorrection = {
  * carried over, plus the current delegation brief and any narrow correction.
  */
 export const buildWorkerBrief = (
-  context: Pick<OrchestratorContext, "repoRef" | "summary" | "workspace">,
+  context: Pick<OrchestratorContext, "summary" | "workspace">,
   brief: string,
   correction?: WorkerCorrection,
 ): string =>
@@ -19,7 +19,6 @@ export const buildWorkerBrief = (
     "You are the CodeWorker. Inspect and edit files under /workspace/repo to satisfy the brief below.",
     "Work only within that scope, run narrow checks where useful, and fix obvious failures within your attempt budget.",
     "",
-    `Repository: ${context.repoRef}`,
     context.summary ? `Session summary:\n${context.summary}` : null,
     context.workspace.hasPriorRun
       ? `Last run status: ${context.workspace.lastRunStatus}. Previously touched files: ${
