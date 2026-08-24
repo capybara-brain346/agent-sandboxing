@@ -86,12 +86,21 @@ details enter the Agent Service.
 
 AgentRunner checks the run signal before target lookup and before the model
 call. It calls `generateText` with one user message containing the worker
-brief, the system prompt, all seven tools, the same `abortSignal`, and
-`stopWhen: isStepCount(config.AGENT_MAX_STEPS)`. Tool executions are serialized
-per run because the AI SDK may request multiple tools concurrently while the
-tools share one workspace. It then makes a second, tools-free structured-output
-call over the completed transcript. The structured output is merged with the
-tool-derived changed-file list and returned as the typed `WorkerResult`.
+brief, the system prompt, all seven workspace tools, and an internal `finish`
+tool. The same `abortSignal` is passed through, with a stop condition that
+requires a validated finish result and
+`isStepCount(config.AGENT_MAX_STEPS + 1)`.
+The extra step reserves room for the terminal `finish` call without reducing
+the existing work budget. Tool executions are serialized per run because the
+AI SDK may request multiple tools concurrently while the tools share one
+workspace. The `finish` input is validated with `workerResultSchema` during
+that same tool loop; invalid finish input does not satisfy the stop condition,
+so the worker can retry with a valid result. The accepted result is merged with
+the tool-derived changed-file list and returned as the typed `WorkerResult`.
+`finish` is an internal control tool and is not persisted as a user-visible
+tool event. If the worker reaches the step limit without submitting a valid
+result, AgentRunner returns a blocked result instead of making a second model
+call.
 
 An `AbortError` is re-thrown so `RunService`'s existing cancellation path owns
 the terminal `cancelled` state. Other provider/model failures become the safe

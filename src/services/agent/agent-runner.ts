@@ -1,7 +1,7 @@
 import {
   generateText,
   isStepCount,
-  Output,
+  tool,
   type LanguageModel,
   type ToolSet,
 } from "ai";
@@ -105,6 +105,18 @@ export class AgentRunner implements CodeWorker {
         context.signal,
       ),
     );
+    let finalResult: WorkerResult | undefined;
+    const allTools = {
+      ...tools,
+      finish: tool({
+        description: "Submit the structured result for this worker attempt.",
+        inputSchema: workerResultSchema,
+        execute: async (input) => {
+          finalResult = workerResultSchema.parse(input);
+          return { accepted: true };
+        },
+      }),
+    };
     const relay = new ToolEventRelay({
       events: this.dependencies.events,
       publish: this.dependencies.publish,
@@ -112,7 +124,7 @@ export class AgentRunner implements CodeWorker {
         ? { artifacts: this.dependencies.artifacts }
         : {}),
     } satisfies ToolEventRelayDependencies);
-    const callbacks = relay.callbacks<typeof tools>({
+    const callbacks = relay.callbacks<ToolSet>({
       taskId: context.taskId,
       sandboxId: context.sandboxId,
       sessionId: context.sessionId,
@@ -123,31 +135,20 @@ export class AgentRunner implements CodeWorker {
         model: this.dependencies.model,
         system: AGENT_SYSTEM_PROMPT,
         messages: [{ role: "user", content: context.instructions }],
-        tools,
+        tools: allTools,
         abortSignal: context.signal,
-        stopWhen: isStepCount(this.dependencies.config.AGENT_MAX_STEPS),
-        onToolExecutionStart: callbacks.onToolExecutionStart,
-        onToolExecutionEnd: callbacks.onToolExecutionEnd,
-      });
-
-      // A single generateText call that offers both `tools` and a
-      // structured `output` schema unreliably skips tool-calling for some
-      // models/providers (observed: the model settles for schema-shaped
-      // prose instead of ever calling a tool). Structuring the result is
-      // therefore a second, tools-free call over the completed transcript.
-      const structured = await generateText({
-        model: this.dependencies.model,
-        system: AGENT_SYSTEM_PROMPT,
-        messages: [
-          { role: "user", content: context.instructions },
-          ...result.response.messages,
-          {
-            role: "user",
-            content: "Produce the structured result for this attempt now.",
-          },
+        stopWhen: [
+          () => finalResult !== undefined,
+          isStepCount(this.dependencies.config.AGENT_MAX_STEPS + 1),
         ],
-        abortSignal: context.signal,
-        output: Output.object({ schema: workerResultSchema }),
+        onToolExecutionStart: async (event) => {
+          if (event.toolCall.toolName !== "finish")
+            await callbacks.onToolExecutionStart(event);
+        },
+        onToolExecutionEnd: async (event) => {
+          if (event.toolCall.toolName !== "finish")
+            await callbacks.onToolExecutionEnd(event);
+        },
       });
 
       const changedFiles = [
@@ -159,12 +160,22 @@ export class AgentRunner implements CodeWorker {
             .map((call) => (call.input as { path: string }).path),
         ),
       ];
+      const structured =
+        finalResult ??
+        ({
+          status: "blocked",
+          summary: "Worker did not submit a structured result.",
+          changedFiles: [],
+          testsRun: [],
+          blockers: ["worker_result_not_submitted"],
+          suggestedNextStep: "Retry the worker attempt with a smaller scope.",
+        } satisfies WorkerResult);
 
       return {
-        ...structured.output,
+        ...structured,
         changedFiles: changedFiles.length
           ? changedFiles
-          : structured.output.changedFiles,
+          : structured.changedFiles,
       };
     } catch (error) {
       if (isAbortError(error)) throw error;
