@@ -7,6 +7,12 @@
       "skillPath": "skills/productivity/handoff/SKILL.md",
       "computedHash": "ad03e8d4ea3cbbff66420eb7ba3cc375b5cbe1821a2449b53e863256cf5b5cde"
     },
+    "langfuse": {
+      "source": "langfuse/skills",
+      "sourceType": "github",
+      "skillPath": "skills/langfuse/SKILL.md",
+      "computedHash": "7f77556876c26d91a276735cc78652e587ca92e02091b72c1afcb32bf67cdc66"
+    },
     "tdd": {
       "source": "mattpocock/skills",
       "sourceType": "github",

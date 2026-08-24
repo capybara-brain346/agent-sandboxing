@@ -9,6 +9,298 @@ This plan covers evals for an agent system with two execution layers:
 
 The eval target is the behavior of this two-layer system. The goal is not to evaluate repository-specific rules, skill files, shared worktree safety, commit hygiene, frontend craft, dependency minimality, or arbitrary project test policy. Those are out of scope unless the product later makes them first-class requirements.
 
+## Current Codebase Trace Capture Plan
+
+This milestone implements trace capture and observability for the current
+repo-scoped chat session harness. It does not assume a generic multi-agent
+architecture beyond what exists today.
+
+Current production facts:
+
+- `RunService` owns run lifecycle, sandbox provisioning, diff capture,
+  assistant message persistence, run/session events, and artifacts.
+- `RunOrchestrator` builds bounded session context, calls
+  `OrchestratorAgent.decide`, and passes a delegate callback to the worker.
+- `ModelOrchestratorAgent` either replies directly or calls one delegation
+  tool: `delegate_to_code_worker`.
+- There is currently one worker path: `CodeWorker.run(context)`, implemented by
+  `AgentRunner`.
+- `AgentRunner` uses one tool-enabled `generateText` call, then one tools-free
+  `generateText` call for the structured `WorkerResult`.
+- `WorkerResult` is schema-validated and contains `status`, `summary`,
+  `changedFiles`, `testsRun`, `blockers`, and `suggestedNextStep`.
+- `ToolEventRelay` already persists `agent_tool_call` and `agent_tool_result`
+  events.
+- `RunService` already stores `worker_report` and `diff` artifacts.
+
+### Recommended Architecture
+
+Use Langfuse as the primary persisted trace backend. Keep a small local
+normalization layer so repository-specific run facts are captured at the seams
+that already own them.
+
+```text
+RunService + RunOrchestrator + AgentRunner + ToolEventRelay events
+  -> EvalTraceRecorder
+  -> LangfuseTraceSink
+```
+
+One chat run maps to one Langfuse trace.
+
+Trace identity:
+
+- Langfuse trace id: `runId`.
+- Langfuse session id: `sessionId`.
+- Trace name: `chat_run`.
+- Trace input: bounded user prompt.
+- Trace output: bounded final assistant message.
+- Trace metadata: run facts, bounded orchestrator context summary, delegation
+  facts, diff/artifact facts, normalized worker result, and safe tool metadata.
+- Trace tags: environment, run status, and safe repo/source descriptors.
+
+Langfuse observations:
+
+- `orchestrator.generate`: the orchestrator `generateText` call in
+  `ModelOrchestratorAgent.decide`.
+- `code_worker`: a span for delegated worker execution when delegation occurs.
+- `worker.generate`: the tool-enabled `generateText` call in `AgentRunner`.
+- `worker_structured_result.generate`: the tools-free structured-result
+  `generateText` call in `AgentRunner`.
+- `summary_compaction.generate`: the summary compaction model call, captured as
+  model cost but kept separate from the main behavioral evidence.
+- `tool.<name>`: normalized tool observations derived from persisted
+  `agent_tool_call` and `agent_tool_result` events.
+- `run.finalize`: terminal run facts from `RunService`.
+
+The local trace layer should contain facts only. It must not add judgments such
+as `handoff_quality`, `investigation_score`, `intent`, or `subagentType` unless
+those are produced by the running system.
+
+### Configuration
+
+Add Langfuse configuration to `src/config.ts`:
+
+- `LANGFUSE_ENABLED`, default `false`.
+- `LANGFUSE_PUBLIC_KEY`, optional unless Langfuse is enabled.
+- `LANGFUSE_SECRET_KEY`, optional unless Langfuse is enabled.
+- `LANGFUSE_BASE_URL`, optional.
+- `LANGFUSE_FLUSH_TIMEOUT_MS`, default around 2000 ms.
+
+Validation rules:
+
+- When `LANGFUSE_ENABLED=true`, public and secret keys are required.
+- In `NODE_ENV=test`, Langfuse remains disabled by default and tests never
+  require real Langfuse credentials.
+
+Use the official Langfuse Node SDK as an intentional production dependency.
+
+### New Types And Interfaces
+
+Introduce local normalized types, likely in `src/types/eval-trace.types.ts`:
+
+```ts
+export type ModelUsage = {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  estimatedUsd?: number;
+  latencyMs?: number;
+};
+
+export type EvalTraceToolEvent = {
+  toolName: string;
+  kind: "call" | "result";
+  args?: Record<string, unknown>;
+  exitCode?: number | null;
+  truncated?: boolean;
+  correlationId: string;
+};
+
+export type EvalTraceSink = {
+  startRun(input: {
+    sessionId: string;
+    runId: string;
+    userPrompt: string;
+  }): void | Promise<void>;
+  recordOrchestratorContext(input: {
+    runId: string;
+    contextSummary: EvalTrace["orchestrator"]["contextSummary"];
+    contextSnapshot?: EvalTrace["contextSnapshot"];
+  }): void | Promise<void>;
+  recordWorkerBrief(input: {
+    runId: string;
+    brief: string;
+  }): void | Promise<void>;
+  recordWorkerResult(input: {
+    runId: string;
+    result: WorkerResult;
+  }): void | Promise<void>;
+  recordOrchestratorReply(input: {
+    runId: string;
+    reply: string;
+    delegated: boolean;
+  }): void | Promise<void>;
+  recordUsage(input: {
+    runId: string;
+    stage:
+      | "orchestrator"
+      | "worker"
+      | "workerStructuredResult"
+      | "summaryCompaction";
+    usage: ModelUsage;
+  }): void | Promise<void>;
+  finishRun(trace: EvalTrace): void | Promise<void>;
+};
+```
+
+The production sink sends to Langfuse. Tests use fake or in-memory sinks.
+
+### Field Sources
+
+- `userPrompt`: `RunService.createRunForMessage(...instructions)`.
+- `run.sessionId`: `RunService` execution state.
+- `run.runId`: `RunService` execution state.
+- `run.status`: terminal transition in `completeRun`, `failRun`, or
+  `cancelRunRow`.
+- `run.exitReason`: terminal transition payload/data.
+- `run.diffBytes`: `Buffer.byteLength(diff)` in `RunService`.
+- `run.diffPresent`: `diff.trim().length > 0`.
+- `orchestrator.contextSummary.summaryPresent`: whether
+  `orchestratorContext.summary` is non-empty.
+- `orchestrator.contextSummary.summaryChars`: length of
+  `orchestratorContext.summary`.
+- `orchestrator.contextSummary.recentMessageCount`:
+  `orchestratorContext.recentMessages.length`.
+- `orchestrator.contextSummary.recentToolActivityCount`:
+  `orchestratorContext.recentToolActivity.length`.
+- `orchestrator.contextSummary.workspaceHasPriorRun`:
+  `orchestratorContext.workspace.hasPriorRun`.
+- `orchestrator.delegated`: whether a worker brief was captured or
+  `decision.delegations.length > 0`.
+- `orchestrator.workerBriefs`: wrap the delegate callback in
+  `RunOrchestrator` and capture the exact brief passed to `worker.run`.
+- `orchestrator.reply`: `decision.reply`.
+- `worker`: the last actual `WorkerResult`; keep all worker results internally
+  if retry analysis becomes necessary.
+- `tools`: normalized from `EventStore.listRunEvents(runId, 0)`, filtered to
+  `agent_tool_call` and `agent_tool_result`.
+- `finalMessage`: assistant message content persisted by `RunService` on
+  completed runs.
+- `usage`: captured at each current `generateText` call site.
+- `contextSnapshot`: disabled by default; only sent in explicit eval/debug mode.
+
+### Tool Normalization
+
+Do not change `ToolEventRelay` event semantics.
+
+Normalize persisted events during trace finalization:
+
+- `agent_tool_call` becomes a tool observation with `input` from payload `args`.
+- `agent_tool_result` becomes the matching tool observation output from payload
+  `result_snippet`.
+- Pair call/result by `correlationId`.
+- Preserve event order for deterministic evals.
+- Include `exit_code`, `truncated`, `duration_ms`, and artifact pointer metadata
+  when present.
+
+The normalized trace should list factual tool events and let later deterministic
+checks pair or classify them.
+
+### Usage, Cost, And Latency
+
+Instrumentation is required around every current `generateText` call:
+
+- `ModelOrchestratorAgent.decide` records `orchestrator` usage.
+- `AgentRunner` records `worker` usage for the tool-enabled call.
+- `AgentRunner` records `workerStructuredResult` usage for the structured
+  result call.
+- `ModelSessionSummaryCompactor.compact` records `summaryCompaction` usage.
+
+Always capture latency locally. Extract token and cost fields defensively from
+the AI SDK result when available. If provider cost is absent, send tokens and
+latency to Langfuse and let Langfuse derive cost when model pricing is
+configured.
+
+### Persistence
+
+Langfuse is the persisted trace system for this milestone.
+
+Do not duplicate the full trace into the application database by default. If a
+local pointer is useful, store a small `eval_trace_pointer` artifact containing
+the Langfuse trace id or URL plus bounded summary facts. Because the trace id is
+`runId`, this pointer is optional for the first implementation.
+
+### Files Likely To Change
+
+- `package.json` and `package-lock.json`: add the official Langfuse SDK.
+- `src/config.ts`: add Langfuse configuration.
+- `src/types/eval-trace.types.ts`: define normalized trace, tool, usage, and
+  sink types.
+- `src/services/eval/eval-trace-recorder.ts`: accumulate per-run facts.
+- `src/services/eval/langfuse-trace-sink.ts`: map normalized facts to Langfuse.
+- `src/services/chat/run-orchestrator.ts`: capture bounded context summary,
+  worker briefs, reply, and `WorkerResult`.
+- `src/services/agent/orchestrator-agent.ts`: capture orchestrator model
+  usage/latency.
+- `src/services/agent/agent-runner.ts`: capture worker model usage/latency for
+  both `generateText` calls.
+- `src/services/agent/session-summary-compactor.ts`: capture summary compaction
+  model usage/latency.
+- `src/services/task/run-service.ts`: start/finalize traces with terminal facts
+  and normalized tool events.
+- `src/services/chat/chat-session.ts` and `src/services/task/task.ts`: wire the
+  recorder and Langfuse sink through composition.
+- `docs/modules/chat-session/README.md`: document trace lifecycle.
+- `docs/modules/agent-service/README.md`: document Langfuse model observations
+  and usage capture.
+- `.env.example`: document public Langfuse configuration names.
+
+### Testing Strategy
+
+Normal tests must not call Langfuse or OpenRouter.
+
+Add deterministic tests for:
+
+- Langfuse config validation: keys required only when Langfuse is enabled.
+- `RunOrchestrator` trace capture for direct replies and delegated runs.
+- Exact worker brief capture through the delegate callback.
+- `AgentRunner` usage capture around both mocked `generateText` calls.
+- `ModelOrchestratorAgent` usage capture for direct replies and delegation.
+- `RunService` finalization with completed, failed, and cancelled facts.
+- Tool normalization from persisted `agent_tool_call` and `agent_tool_result`
+  events.
+- Langfuse adapter mapping using a fake client.
+
+Focused checks:
+
+```bash
+npm test -- tests/run-orchestrator.test.ts tests/run-service.test.ts tests/agent-runner.test.ts tests/orchestrator-agent.test.ts tests/agent-tool-relay.test.ts
+npm run typecheck
+npm run lint
+```
+
+### Risks And Tradeoffs
+
+- Langfuse network failures must not fail user runs. Flush best-effort with a
+  short timeout and log failures safely.
+- Prompt, brief, and tool metadata sent to Langfuse must remain bounded and
+  redacted.
+- Provider cost may not be available from the AI SDK result; tokens and latency
+  are required, cost may be Langfuse-derived.
+- Langfuse does not replace local domain normalization because `RunService` and
+  the event stream own facts Langfuse cannot infer.
+
+### Non-Goals For The First Trace Milestone
+
+- No scoring.
+- No LLM judge integration.
+- No invented intent fields.
+- No invented `subagentType`.
+- No prompt or full context snapshot by default.
+- No changes to existing run/session/tool event semantics.
+- No custom tracing backend beyond the minimal Langfuse adapter.
+
 ## Non-Goals
 
 The eval suite should not try to test:
