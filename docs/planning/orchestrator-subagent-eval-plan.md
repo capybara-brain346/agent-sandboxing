@@ -64,8 +64,6 @@ Langfuse observations:
   `ModelOrchestratorAgent.decide`.
 - `code_worker`: a span for delegated worker execution when delegation occurs.
 - `worker.generate`: the tool-enabled `generateText` call in `AgentRunner`.
-- `worker_structured_result.generate`: the tools-free structured-result
-  `generateText` call in `AgentRunner`.
 - `summary_compaction.generate`: the summary compaction model call, captured as
   model cost but kept separate from the main behavioral evidence.
 - `tool.<name>`: normalized tool observations derived from persisted
@@ -143,11 +141,7 @@ export type EvalTraceSink = {
   }): void | Promise<void>;
   recordUsage(input: {
     runId: string;
-    stage:
-      | "orchestrator"
-      | "worker"
-      | "workerStructuredResult"
-      | "summaryCompaction";
+    stage: "orchestrator" | "worker" | "summaryCompaction";
     usage: ModelUsage;
   }): void | Promise<void>;
   finishRun(trace: EvalTrace): void | Promise<void>;
@@ -213,8 +207,6 @@ Instrumentation is required around every current `generateText` call:
 
 - `ModelOrchestratorAgent.decide` records `orchestrator` usage.
 - `AgentRunner` records `worker` usage for the tool-enabled call.
-- `AgentRunner` records `workerStructuredResult` usage for the structured
-  result call.
 - `ModelSessionSummaryCompactor.compact` records `summaryCompaction` usage.
 
 Always capture latency locally. Extract token and cost fields defensively from

@@ -3,9 +3,9 @@
 The Agent Service owns all model-backed agent behavior. It runs inside the API
 process, uses the AI SDK 7 `generateText` calls with the configured OpenRouter
 model, owns orchestration and summary-compaction decisions, proxies seven tools
-through the session-owned sandbox runtime, and relays tool lifecycle events to
-the shared run event stream. It does not expose an HTTP route or call the
-persisted command API.
+through the session-owned sandbox runtime, relays tool lifecycle events to the
+shared run event stream, and records model usage for the eval trace layer. It
+does not expose an HTTP route or call the persisted command API.
 
 `RunService` remains responsible for run lifecycle transitions, terminal
 results, cancellation, and diff capture; the sandbox is never stopped by a
@@ -89,7 +89,9 @@ call. It calls `generateText` with one user message containing the worker
 brief, the system prompt, all seven workspace tools, and an internal `finish`
 tool. The same `abortSignal` is passed through, with a stop condition that
 requires a validated finish result and
-`isStepCount(config.AGENT_MAX_STEPS + 1)`.
+`isStepCount(config.AGENT_MAX_STEPS + 1)`. The `finish` input is validated with
+`workerResultSchema` during that same tool loop, so the accepted result is the
+authoritative worker result.
 The extra step reserves room for the terminal `finish` call without reducing
 the existing work budget. Tool executions are serialized per run because the
 AI SDK may request multiple tools concurrently while the tools share one
@@ -194,6 +196,13 @@ The public runtime configuration contract is defined only in
 - `AGENT_BASH_OUTPUT_MAX_BYTES`: bash response budget, default 50 KiB.
 - `AGENT_READ_MAX_BYTES`: read/edit source budget, default 256 KiB.
 - `AGENT_WRITE_MAX_BYTES`: write/edit result budget, default 1 MiB.
+- `LANGFUSE_ENABLED`: enables remote Langfuse trace export, default `false`.
+- `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`: required when Langfuse is enabled.
+- `LANGFUSE_BASE_URL`: optional Langfuse endpoint override.
+- `LANGFUSE_FLUSH_TIMEOUT_MS`: best-effort flush timeout, default 2 seconds.
+- `LOCAL_TRACE_EXPORT_ENABLED`: enables JSONL trace export, default `false`.
+- `LOCAL_TRACE_EXPORT_PATH`: JSONL destination, default `.data/eval-traces.jsonl`.
+- `EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED`: includes context snapshots, default `false`.
 
 The tools are intentionally DB-independent and Docker-independent in tests;
 tests mock only the `simpleExec` seam.

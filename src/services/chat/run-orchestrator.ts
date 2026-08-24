@@ -14,6 +14,7 @@ import type {
 import type { OrchestratorAgent } from "../agent/orchestrator-agent";
 import type { SessionContextBuilder } from "./session-context-builder";
 import type { SessionSummaryCompactor } from "../agent/session-summary-compactor";
+import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 
 export class RunOrchestrator implements TaskRunner {
   constructor(
@@ -22,6 +23,7 @@ export class RunOrchestrator implements TaskRunner {
     private readonly compactor: SessionSummaryCompactor,
     private readonly worker: CodeWorker,
     private readonly agent: OrchestratorAgent,
+    private readonly traceRecorder?: EvalTraceRecorderLike,
   ) {}
 
   async run(context: TaskRunContext): Promise<TaskRunResult> {
@@ -34,8 +36,38 @@ export class RunOrchestrator implements TaskRunner {
     const sessionId = context.sessionId;
 
     const orchestratorContext = await this.contextBuilder.build(sessionId);
-    const delegate = (brief: string): Promise<WorkerResult> =>
-      this.worker.run({ ...context, instructions: brief });
+    this.traceRecorder?.recordOrchestratorContext({
+      runId: context.taskId,
+      contextSummary: {
+        summaryPresent: Boolean(orchestratorContext.summary),
+        summaryChars: orchestratorContext.summary.length,
+        recentMessageCount: orchestratorContext.recentMessages.length,
+        recentToolActivityCount: orchestratorContext.recentToolActivity.length,
+        workspaceHasPriorRun: orchestratorContext.workspace.hasPriorRun,
+      },
+      contextSnapshot: {
+        summary: orchestratorContext.summary,
+        recentMessages: orchestratorContext.recentMessages,
+        recentToolActivity: orchestratorContext.recentToolActivity,
+        workspace: {
+          hasPriorRun: orchestratorContext.workspace.hasPriorRun,
+          lastRunStatus: orchestratorContext.workspace.lastRunStatus,
+          changedFilesHint: orchestratorContext.workspace.changedFilesHint,
+        },
+      },
+    });
+    const delegate = async (brief: string): Promise<WorkerResult> => {
+      this.traceRecorder?.recordWorkerBrief({
+        runId: context.taskId,
+        brief,
+      });
+      const result = await this.worker.run({ ...context, instructions: brief });
+      this.traceRecorder?.recordWorkerResult({
+        runId: context.taskId,
+        result,
+      });
+      return result;
+    };
 
     const decision = await this.agent.decide({
       summary: orchestratorContext.summary,
@@ -43,14 +75,25 @@ export class RunOrchestrator implements TaskRunner {
       recentToolActivity: orchestratorContext.recentToolActivity,
       workspace: orchestratorContext.workspace,
       message: context.instructions,
+      runId: context.taskId,
       signal: context.signal,
       delegate,
     });
 
     const lastResult = decision.delegations.at(-1) ?? null;
+    this.traceRecorder?.recordOrchestratorReply({
+      runId: context.taskId,
+      reply: decision.reply,
+      delegated: decision.delegations.length > 0,
+    });
 
     if (orchestratorContext.shouldCompact)
-      await this.compactSummary(sessionId, orchestratorContext, context.signal);
+      await this.compactSummary(
+        sessionId,
+        orchestratorContext,
+        context.taskId,
+        context.signal,
+      );
 
     const workerReport = lastResult
       ? JSON.stringify(lastResult, null, 2)
@@ -73,12 +116,14 @@ export class RunOrchestrator implements TaskRunner {
   private async compactSummary(
     sessionId: string,
     orchestratorContext: OrchestratorContext,
+    runId: string,
     signal: AbortSignal,
   ): Promise<void> {
     const summary = await this.compactor.compact({
       previousSummary: orchestratorContext.summary,
       recentMessages: orchestratorContext.recentMessages,
       recentToolActivity: orchestratorContext.recentToolActivity,
+      runId,
       signal,
     });
     await runQuery("compact_session_summary", { sessionId }, () =>

@@ -7,7 +7,11 @@ import { runQuery } from "../../shared/query-logging";
 import { EventStore } from "../events/event-store";
 import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
-import { taskServiceArtifacts, taskServiceWorker } from "../task/task";
+import {
+  taskServiceArtifacts,
+  taskServiceTraceRecorder,
+  taskServiceWorker,
+} from "../task/task";
 import { resolveAgentModel } from "../agent/model";
 import { RunService } from "../task/run-service";
 import { ArtifactStore } from "../artifacts/artifact-store";
@@ -738,9 +742,16 @@ const chatRunner =
     : new RunOrchestrator(
         prisma,
         new SessionContextBuilder(prisma, chatSessionEvents),
-        new ModelSessionSummaryCompactor(resolveAgentModel(chatHarnessConfig)),
+        new ModelSessionSummaryCompactor(
+          resolveAgentModel(chatHarnessConfig),
+          taskServiceTraceRecorder,
+        ),
         taskServiceWorker,
-        new ModelOrchestratorAgent(resolveAgentModel(chatHarnessConfig)),
+        new ModelOrchestratorAgent(
+          resolveAgentModel(chatHarnessConfig),
+          taskServiceTraceRecorder,
+        ),
+        taskServiceTraceRecorder,
       );
 const chatRunService = new RunService(
   prisma,
@@ -749,6 +760,7 @@ const chatRunService = new RunService(
   chatRunner,
   publishChatEvent,
   taskServiceArtifacts,
+  taskServiceTraceRecorder,
 );
 export const chatSessionService = new ChatSessionService(
   prisma,

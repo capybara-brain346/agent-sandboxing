@@ -7,6 +7,8 @@ import type {
 } from "../../types/harness.types";
 import { buildWorkerBrief, type WorkerCorrection } from "./worker-brief";
 import { getPromptText } from "../../prompts/load-prompt";
+import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import { recordModelUsage } from "../eval/model-usage";
 
 export const MAX_DELEGATIONS_PER_TURN = 2;
 export const ORCHESTRATOR_MAX_STEPS = 6;
@@ -17,6 +19,7 @@ export type OrchestratorAgentInput = {
   recentToolActivity: string[];
   workspace: OrchestratorContext["workspace"];
   message: string;
+  runId?: string;
   signal: AbortSignal;
   delegate: (brief: string) => Promise<WorkerResult>;
 };
@@ -102,7 +105,10 @@ const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
  * model's own prose.
  */
 export class ModelOrchestratorAgent implements OrchestratorAgent {
-  constructor(private readonly model: LanguageModel) {}
+  constructor(
+    private readonly model: LanguageModel,
+    private readonly recorder?: EvalTraceRecorderLike,
+  ) {}
 
   async decide(input: OrchestratorAgentInput): Promise<OrchestratorDecision> {
     const { delegateTool, delegations } = createDelegationTool({
@@ -117,25 +123,43 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
       ? `Recent tool activity:\n${input.recentToolActivity.join("\n")}`
       : "Recent tool activity: none.";
 
-    // Deliberately no `output` schema here: combined with `tools`, some
-    // models/providers unreliably skip tool-calling entirely in favor of
-    // schema-shaped prose (see agent-runner.ts for the same finding). The
-    // reply is a single free-text field, so plain result.text is enough.
-    const result = await generateText({
+    const startedAt = Date.now();
+    let result;
+    try {
+      result = await generateText({
+        model: this.model,
+        system: ORCHESTRATOR_SYSTEM_PROMPT,
+        messages: [
+          { role: "user", content: summaryLine },
+          { role: "user", content: toolActivityLine },
+          ...input.recentMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+          { role: "user", content: input.message },
+        ],
+        tools: { delegate_to_code_worker: delegateTool },
+        abortSignal: input.signal,
+        stopWhen: stepCountIs(ORCHESTRATOR_MAX_STEPS),
+      });
+    } catch (error) {
+      recordModelUsage({
+        recorder: this.recorder,
+        runId: input.runId,
+        stage: "orchestrator",
+        model: this.model,
+        startedAt,
+        result: {},
+      });
+      throw error;
+    }
+    recordModelUsage({
+      recorder: this.recorder,
+      runId: input.runId,
+      stage: "orchestrator",
       model: this.model,
-      system: ORCHESTRATOR_SYSTEM_PROMPT,
-      messages: [
-        { role: "user", content: summaryLine },
-        { role: "user", content: toolActivityLine },
-        ...input.recentMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-        { role: "user", content: input.message },
-      ],
-      tools: { delegate_to_code_worker: delegateTool },
-      abortSignal: input.signal,
-      stopWhen: stepCountIs(ORCHESTRATOR_MAX_STEPS),
+      startedAt,
+      result,
     });
 
     return {

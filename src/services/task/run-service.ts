@@ -14,6 +14,8 @@ import type { TaskFailure } from "../../types/task.types";
 import type { ArtifactPreview } from "../../types/artifact.types";
 import { canTransition } from "./task";
 import type { TaskRunner, TaskRunResult } from "./task-runner";
+import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import type { EvalTraceRunFacts } from "../../types/eval-trace.types";
 
 type PublishEvent = (event: PublicEvent) => void;
 
@@ -61,6 +63,7 @@ export class RunService {
     private readonly runner: TaskRunner,
     private readonly publish: PublishEvent = () => undefined,
     private readonly artifacts: ArtifactRecorder = noopArtifactRecorder,
+    private readonly traceRecorder?: EvalTraceRecorderLike,
   ) {}
 
   createRunForMessage(
@@ -69,6 +72,11 @@ export class RunService {
     messageId: string,
     instructions: string,
   ): void {
+    this.traceRecorder?.startRun({
+      sessionId,
+      runId,
+      userPrompt: instructions,
+    });
     const execution: RunExecution = {
       sessionId,
       runId,
@@ -537,6 +545,21 @@ export class RunService {
         }),
     );
     for (const event of events) this.publish(event);
+    if (events.length > 0)
+      await this.finalizeTrace(runId, {
+        status: "completed",
+        exitReason: "completed",
+        diffBytes: Buffer.byteLength(diff),
+        diffPresent: diff.trim().length > 0,
+        artifacts: artifacts.map((artifact) => ({
+          artifactId: artifact.artifactId,
+          kind: artifact.kind,
+          byteSize: artifact.byteSize,
+          truncated: artifact.truncated,
+          redacted: artifact.redacted,
+        })),
+        finalMessage: summary ?? "Run completed with no summary.",
+      });
     return events.length > 0;
   }
 
@@ -651,6 +674,20 @@ export class RunService {
         }),
     );
     for (const event of events) this.publish(event);
+    if (events.length > 0)
+      await this.finalizeTrace(runId, {
+        status: "failed",
+        exitReason: "failed",
+        diffBytes: 0,
+        diffPresent: false,
+        artifacts: artifacts.map((artifact) => ({
+          artifactId: artifact.artifactId,
+          kind: artifact.kind,
+          byteSize: artifact.byteSize,
+          truncated: artifact.truncated,
+          redacted: artifact.redacted,
+        })),
+      });
     return events.length > 0;
   }
 
@@ -731,6 +768,30 @@ export class RunService {
       }),
     );
     for (const event of events) this.publish(event);
+    if (events.length > 0)
+      await this.finalizeTrace(runId, {
+        status: "cancelled",
+        exitReason: "cancelled",
+        diffBytes: Buffer.byteLength(diff),
+        diffPresent: diff.trim().length > 0,
+        artifacts: [],
+      });
     return events.length > 0;
+  }
+
+  private async finalizeTrace(
+    runId: string,
+    terminal: EvalTraceRunFacts,
+  ): Promise<void> {
+    if (!this.traceRecorder) return;
+    try {
+      const events = await this.events.listRunEvents(runId, 0);
+      await this.traceRecorder.finishRun({ runId, terminal, events });
+    } catch (error) {
+      logger.warn("eval_trace_finalize_failed", {
+        runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

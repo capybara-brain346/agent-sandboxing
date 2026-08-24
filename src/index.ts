@@ -3,6 +3,7 @@ import { logger } from "./logger";
 import { createApp } from "./server";
 import { prisma } from "./db/prisma";
 import { sseHub } from "./services/events/sse-hub";
+import { shutdownTaskServiceTracing } from "./services/task/task";
 
 const config = loadConfig();
 const app = createApp();
@@ -43,6 +44,7 @@ const shutdown = async (signal: string): Promise<void> => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+    await shutdownTaskServiceTracing();
     await prisma.$disconnect();
     clearTimeout(forceExit);
     logger.info("server_stopped", { signal });

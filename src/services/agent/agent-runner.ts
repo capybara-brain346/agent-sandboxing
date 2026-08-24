@@ -27,6 +27,8 @@ import {
 } from "./tool-event-relay";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
 import { getPromptText } from "../../prompts/load-prompt";
+import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import { recordModelUsage } from "../eval/model-usage";
 
 export const AGENT_SYSTEM_PROMPT = getPromptText("code-worker");
 
@@ -49,6 +51,7 @@ export type AgentRunnerDependencies = {
   model: LanguageModel;
   publish: PublishEvent;
   artifacts?: ArtifactRecorder;
+  traceRecorder?: EvalTraceRecorderLike;
 };
 
 class SerialExecutor {
@@ -130,6 +133,8 @@ export class AgentRunner implements CodeWorker {
       sessionId: context.sessionId,
     });
 
+    const startedAt = Date.now();
+    let usageRecorded = false;
     try {
       const result = await generateText({
         model: this.dependencies.model,
@@ -150,6 +155,15 @@ export class AgentRunner implements CodeWorker {
             await callbacks.onToolExecutionEnd(event);
         },
       });
+      recordModelUsage({
+        recorder: this.dependencies.traceRecorder,
+        runId: context.taskId,
+        stage: "worker",
+        model: this.dependencies.model,
+        startedAt,
+        result,
+      });
+      usageRecorded = true;
 
       const changedFiles = [
         ...new Set(
@@ -160,7 +174,7 @@ export class AgentRunner implements CodeWorker {
             .map((call) => (call.input as { path: string }).path),
         ),
       ];
-      const structured =
+      const workerResult =
         finalResult ??
         ({
           status: "blocked",
@@ -172,12 +186,21 @@ export class AgentRunner implements CodeWorker {
         } satisfies WorkerResult);
 
       return {
-        ...structured,
+        ...workerResult,
         changedFiles: changedFiles.length
           ? changedFiles
-          : structured.changedFiles,
+          : workerResult.changedFiles,
       };
     } catch (error) {
+      if (!usageRecorded)
+        recordModelUsage({
+          recorder: this.dependencies.traceRecorder,
+          runId: context.taskId,
+          stage: "worker",
+          model: this.dependencies.model,
+          startedAt,
+          result: {},
+        });
       if (isAbortError(error)) throw error;
       if (context.signal.aborted) throw createAbortError();
       if (error instanceof ServiceError) throw error;

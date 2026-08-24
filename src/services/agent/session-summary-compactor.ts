@@ -2,6 +2,8 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { OrchestratorChatMessage } from "../../types/harness.types";
 import { getPromptText } from "../../prompts/load-prompt";
+import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import { recordModelUsage } from "../eval/model-usage";
 
 const compactedSummarySchema = z
   .object({
@@ -13,6 +15,7 @@ const compactedSummarySchema = z
   })
   .strict();
 export type CompactionInput = {
+  runId?: string;
   previousSummary: string;
   recentMessages: OrchestratorChatMessage[];
   recentToolActivity: string[];
@@ -32,32 +35,57 @@ const MAX_FILES = 15;
 const MAX_BLOCKERS = 5;
 
 export class ModelSessionSummaryCompactor implements SessionSummaryCompactor {
-  constructor(private readonly model: LanguageModel) {}
+  constructor(
+    private readonly model: LanguageModel,
+    private readonly recorder?: EvalTraceRecorderLike,
+  ) {}
 
   async compact(input: CompactionInput): Promise<string> {
-    const result = await generateText({
+    const startedAt = Date.now();
+    let result;
+    try {
+      result = await generateText({
+        model: this.model,
+        system: SESSION_SUMMARY_COMPACTOR_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: input.previousSummary
+              ? `Previous summary:\n${input.previousSummary}`
+              : "Previous summary: none yet.",
+          },
+          ...input.recentMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+          {
+            role: "user",
+            content: `Recent tool activity:\n${
+              input.recentToolActivity.join("\n") || "none"
+            }`,
+          },
+        ],
+        abortSignal: input.signal,
+        output: Output.object({ schema: compactedSummarySchema }),
+      });
+    } catch (error) {
+      recordModelUsage({
+        recorder: this.recorder,
+        runId: input.runId,
+        stage: "summaryCompaction",
+        model: this.model,
+        startedAt,
+        result: {},
+      });
+      throw error;
+    }
+    recordModelUsage({
+      recorder: this.recorder,
+      runId: input.runId,
+      stage: "summaryCompaction",
       model: this.model,
-      system: SESSION_SUMMARY_COMPACTOR_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: input.previousSummary
-            ? `Previous summary:\n${input.previousSummary}`
-            : "Previous summary: none yet.",
-        },
-        ...input.recentMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-        {
-          role: "user",
-          content: `Recent tool activity:\n${
-            input.recentToolActivity.join("\n") || "none"
-          }`,
-        },
-      ],
-      abortSignal: input.signal,
-      output: Output.object({ schema: compactedSummarySchema }),
+      startedAt,
+      result,
     });
     const files = [...new Set(result.output.files)].slice(-MAX_FILES);
     const blockers = result.output.blockers.slice(0, MAX_BLOCKERS);

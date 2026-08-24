@@ -1,6 +1,15 @@
 import "dotenv/config";
 import { z } from "zod";
 
+const booleanEnv = z.preprocess(
+  (value) => value === true || value === "true",
+  z.boolean(),
+);
+const optionalStringEnv = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 const schema = z
   .object({
     NODE_ENV: z
@@ -46,6 +55,20 @@ const schema = z
     AGENT_READ_MAX_BYTES: z.coerce.number().int().min(1024).default(262144),
     AGENT_WRITE_MAX_BYTES: z.coerce.number().int().min(1024).default(1048576),
     AGENT_TOOL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),
+    LANGFUSE_ENABLED: booleanEnv.default(false),
+    LANGFUSE_PUBLIC_KEY: optionalStringEnv,
+    LANGFUSE_SECRET_KEY: optionalStringEnv,
+    LANGFUSE_BASE_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().url().optional(),
+    ),
+    LANGFUSE_FLUSH_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+    LOCAL_TRACE_EXPORT_ENABLED: booleanEnv.default(false),
+    LOCAL_TRACE_EXPORT_PATH: z
+      .string()
+      .min(1)
+      .default(".data/eval-traces.jsonl"),
+    EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED: booleanEnv.default(false),
   })
   .superRefine((config, context) => {
     if (config.NODE_ENV !== "test" && config.OPENROUTER_API_KEY === undefined)
@@ -54,6 +77,20 @@ const schema = z
         path: ["OPENROUTER_API_KEY"],
         message: "OPENROUTER_API_KEY is required outside test mode",
       });
+    if (config.LANGFUSE_ENABLED) {
+      if (config.LANGFUSE_PUBLIC_KEY === undefined)
+        context.addIssue({
+          code: "custom",
+          path: ["LANGFUSE_PUBLIC_KEY"],
+          message: "LANGFUSE_PUBLIC_KEY is required when Langfuse is enabled",
+        });
+      if (config.LANGFUSE_SECRET_KEY === undefined)
+        context.addIssue({
+          code: "custom",
+          path: ["LANGFUSE_SECRET_KEY"],
+          message: "LANGFUSE_SECRET_KEY is required when Langfuse is enabled",
+        });
+    }
   });
 
 export type Config = z.infer<typeof schema>;

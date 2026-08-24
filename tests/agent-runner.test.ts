@@ -5,6 +5,7 @@ import { AgentRunner } from "../src/services/agent/agent-runner";
 import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
 import type { TaskRunContext } from "../src/services/task/task-runner";
+import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -75,14 +76,18 @@ const makeRunner = (overrides: Partial<Config> = {}) => {
     ),
   };
   const publish = vi.fn();
+  const traceRecorder = {
+    recordUsage: vi.fn(),
+  } as unknown as EvalTraceRecorderLike;
   const runner = new AgentRunner({
     config: { ...config, ...overrides },
     sandbox,
     events: events as unknown as Pick<EventStore, "append">,
     model: {} as LanguageModel,
     publish,
+    traceRecorder,
   });
-  return { runner, sandbox, events, publish, target };
+  return { runner, sandbox, events, publish, target, traceRecorder };
 };
 
 describe("AgentRunner", () => {
@@ -158,6 +163,9 @@ describe("AgentRunner", () => {
       "finish",
     ]);
     expect(harness.events.append).not.toHaveBeenCalled();
+    expect(harness.traceRecorder.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "worker" }),
+    );
   });
 
   it("does not stop on an invalid finish call before accepting a valid result", async () => {

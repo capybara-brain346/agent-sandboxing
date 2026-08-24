@@ -6,6 +6,7 @@ import {
   type OrchestratorAgentInput,
 } from "../src/services/agent/orchestrator-agent";
 import type { WorkerResult } from "../src/types/harness.types";
+import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -39,6 +40,7 @@ const baseInput = (
     changedFilesHint: [],
   },
   message: "fix the bug",
+  runId: "run_1",
   signal: new AbortController().signal,
   delegate: vi.fn(async () => workerResult()),
   ...overrides,
@@ -58,6 +60,31 @@ describe("ModelOrchestratorAgent", () => {
     expect(decision.delegations).toEqual([]);
     expect(aiMocks.generateText).toHaveBeenCalledWith(
       expect.objectContaining({ abortSignal: signal }),
+    );
+  });
+
+  it("records model usage for a direct orchestrator reply", async () => {
+    aiMocks.generateText.mockResolvedValueOnce({
+      text: "direct reply",
+      usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+    });
+    const recorder = {
+      recordUsage: vi.fn(),
+    } as unknown as EvalTraceRecorderLike;
+    const agent = new ModelOrchestratorAgent({} as LanguageModel, recorder);
+
+    await agent.decide(baseInput());
+
+    expect(recorder.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run_1",
+        stage: "orchestrator",
+        usage: expect.objectContaining({
+          inputTokens: 4,
+          outputTokens: 2,
+          totalTokens: 6,
+        }),
+      }),
     );
   });
 

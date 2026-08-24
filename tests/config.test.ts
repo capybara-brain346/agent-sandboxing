@@ -16,6 +16,9 @@ describe("configuration", () => {
     expect(config.AGENT_READ_MAX_BYTES).toBe(262144);
     expect(config.AGENT_WRITE_MAX_BYTES).toBe(1048576);
     expect(config.AGENT_TOOL_TIMEOUT_MS).toBe(30000);
+    expect(config.LANGFUSE_ENABLED).toBe(false);
+    expect(config.LANGFUSE_FLUSH_TIMEOUT_MS).toBe(2000);
+    expect(config.LOCAL_TRACE_EXPORT_ENABLED).toBe(false);
   });
 
   it("coerces and accepts configured agent settings", () => {
@@ -81,5 +84,43 @@ describe("configuration", () => {
 
   it("rejects missing database configuration", () => {
     expect(() => loadConfig({})).toThrow();
+  });
+
+  it("requires both Langfuse keys only when enabled", () => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: "test",
+        DATABASE_URL: "postgresql://test",
+        LANGFUSE_ENABLED: "true",
+      }),
+    ).toThrow(/LANGFUSE_PUBLIC_KEY/);
+
+    expect(
+      loadConfig({
+        NODE_ENV: "test",
+        DATABASE_URL: "postgresql://test",
+        LANGFUSE_ENABLED: "true",
+        LANGFUSE_PUBLIC_KEY: "pk-test",
+        LANGFUSE_SECRET_KEY: "sk-test",
+      }),
+    ).toMatchObject({
+      LANGFUSE_ENABLED: true,
+      LANGFUSE_PUBLIC_KEY: "pk-test",
+      LANGFUSE_SECRET_KEY: "sk-test",
+    });
+  });
+
+  it("treats blank optional Langfuse values as unset", () => {
+    const config = loadConfig({
+      NODE_ENV: "test",
+      DATABASE_URL: "postgresql://test",
+      LANGFUSE_PUBLIC_KEY: "",
+      LANGFUSE_SECRET_KEY: "",
+      LANGFUSE_BASE_URL: "",
+    });
+
+    expect(config.LANGFUSE_PUBLIC_KEY).toBeUndefined();
+    expect(config.LANGFUSE_SECRET_KEY).toBeUndefined();
+    expect(config.LANGFUSE_BASE_URL).toBeUndefined();
   });
 });
