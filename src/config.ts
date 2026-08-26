@@ -11,6 +11,7 @@ const optionalStringEnv = z.preprocess(
 );
 const logLevel = z.enum(["debug", "info", "warn", "error"]);
 const logColor = z.enum(["auto", "true", "false"]);
+const defaultAgentModel = "openrouter:deepseek/deepseek-v4-flash";
 
 const schema = z
   .object({
@@ -48,7 +49,7 @@ const schema = z
       .positive()
       .default(10485760),
     OPENROUTER_API_KEY: z.string().min(1).optional(),
-    AGENT_MODEL: z.string().default("openrouter:deepseek/deepseek-v4-flash"),
+    AGENT_MODEL: z.string().default(defaultAgentModel),
     AGENT_MAX_STEPS: z.coerce.number().int().min(1).max(100).default(25),
     AGENT_BASH_TIMEOUT_MS: z.coerce.number().int().min(1000).default(120000),
     AGENT_BASH_OUTPUT_MAX_BYTES: z.coerce
@@ -98,6 +99,20 @@ const schema = z
   });
 
 export type Config = z.infer<typeof schema>;
+export type AgentModelConfig = Pick<
+  Config,
+  "AGENT_MODEL" | "OPENROUTER_API_KEY"
+>;
+
+const agentModelSchema = z.object({
+  AGENT_MODEL: z.string().default(defaultAgentModel),
+  OPENROUTER_API_KEY: z.string().min(1).optional(),
+});
+
+export const loadAgentModelConfig = (
+  env: NodeJS.ProcessEnv = process.env,
+): AgentModelConfig => agentModelSchema.parse(env);
+
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config =>
   schema.parse({
     ...env,

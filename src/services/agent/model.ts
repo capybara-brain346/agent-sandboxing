@@ -1,11 +1,11 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
-import type { Config } from "../../config";
+import type { AgentModelConfig } from "../../config";
 import { ServiceError } from "../../shared/errors";
 
 const OPENROUTER_MODEL_PREFIX = "openrouter:";
 
-export const resolveAgentModel = (config: Config): LanguageModel => {
+export const resolveAgentModel = (config: AgentModelConfig): LanguageModel => {
   if (!config.AGENT_MODEL.startsWith(OPENROUTER_MODEL_PREFIX))
     throw new ServiceError(
       "invalid_agent_model",

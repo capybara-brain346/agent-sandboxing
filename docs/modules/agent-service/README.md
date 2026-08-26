@@ -38,6 +38,9 @@ typed worker result directly — see the [Chat Session Service](../chat-session/
 - [`tests/session-summary.test.ts`](../../../tests/session-summary.test.ts) — summary compaction and bounds
 - [`tests/agent-tool-relay.test.ts`](../../../tests/agent-tool-relay.test.ts) — event ordering and payload bounds
 - [`tests/agent-tools.test.ts`](../../../tests/agent-tools.test.ts) — tool validation and runtime behavior
+- [`tests/evals/run-dataset-evals.ts`](../../../tests/evals/run-dataset-evals.ts) — local orchestrator routing eval runner
+- [`tests/evals/run-repo-evals.ts`](../../../tests/evals/run-repo-evals.ts) — local repository behavior eval runner
+- [`tests/evals/subjective-judge.ts`](../../../tests/evals/subjective-judge.ts) — report-only subjective score judge
 
 The production composition path selects the model-backed AgentRunner,
 OrchestratorAgent, and SessionSummaryCompactor. The default test composition
@@ -47,6 +50,57 @@ the narrow `CodeWorker` contract and receives the typed AgentRunner result
 directly. These are in-process collaborators of `RunService`, not a separate
 HTTP service. The chat service wires production collaborators explicitly but
 does not contain their model calls.
+
+## Dataset eval smoke suite
+
+`npm run eval:dataset` runs the ten-case local orchestrator suite in
+[`tests/evals/cases/dataset.jsonl`](../../../tests/evals/cases/dataset.jsonl).
+It calls `ModelOrchestratorAgent` directly with a fake worker delegate, so it
+does not provision Docker, access the database, or require Langfuse. The
+runner writes one JSON object per case to
+`tests/evals/results/dataset-<timestamp>.jsonl`, prints routing and delegation
+scores, and exits nonzero when the 95% deterministic case threshold fails.
+The command still requires the configured `OPENROUTER_API_KEY` and
+`AGENT_MODEL`.
+
+`npm run eval:dataset:judge` enables the optional report-only subjective judge.
+It uses the configured `AGENT_MODEL`, adds five 1-to-5 scores to each JSONL
+record, and includes the scores in the terminal report. The judge receives the
+case task, bounded context, and observed outcome, but not case expectations.
+Judge errors are recorded in the case result and never change deterministic
+case status or suite exit status. `npm run eval:repo:judge` does the same for
+repository cases; `npm run eval:judge` runs both suites with judging enabled.
+
+Both runners accept a `resultsPath` and `resume` option when called as library
+functions. Resuming reads the existing JSONL, keeps passing case records, and
+retries failed or incomplete cases. A truncated final JSONL line is ignored so
+an interrupted run can be resumed safely; completed records include the
+observed model, worker, tool, diff, response, and command facts needed to debug
+failures locally.
+
+## Repo eval suite
+
+`npm run eval:repo` runs the ten repository cases in
+[`tests/evals/cases/repo.jsonl`](../../../tests/evals/cases/repo.jsonl) through
+the real chat-session service seam. Each case is copied to a temporary Git
+repository, executed in its own chat session, and removed after the terminal
+run is collected. The runner records run results, worker-report artifacts,
+assistant messages, changed files, verification commands, and agent tool events
+in `tests/evals/results/repo-<timestamp>.jsonl`.
+
+Cases can declare `postRunCommands`. The runner applies the captured diff to the
+temporary host copy for local test seams; the live service runs each command in
+the provisioned sandbox. It stores exit code, timing, output, and truncation
+facts in `observed.postRunChecks`. These checks are independent of worker-
+reported test claims and are included in the verification score. Case
+expectations also support exact or allowlisted changed files, forbidden diff
+snippets, required response text, test mentions, and blocker mentions.
+
+The suite requires the same database, Docker, model, and provider settings as a
+live agent run. It passes when at least nine of ten cases pass all deterministic
+scores and no case changes a forbidden file or diff snippet. The runner uses
+`SANDBOX_IMAGE` for the fixture container, so the configured image must provide
+the fixture's Python and Git tooling.
 
 ## Composition and model configuration
 

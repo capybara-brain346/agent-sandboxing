@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config";
+import { loadAgentModelConfig, loadConfig } from "../src/config";
 
 describe("configuration", () => {
+  it("loads model settings without requiring database configuration", () => {
+    expect(loadAgentModelConfig({ OPENROUTER_API_KEY: "test-key" })).toEqual({
+      AGENT_MODEL: "openrouter:deepseek/deepseek-v4-flash",
+      OPENROUTER_API_KEY: "test-key",
+    });
+  });
+
   it("loads safe defaults with a required database URL", () => {
     const config = loadConfig({
       NODE_ENV: "test",
