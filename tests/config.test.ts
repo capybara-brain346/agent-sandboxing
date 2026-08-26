@@ -19,6 +19,58 @@ describe("configuration", () => {
     expect(config.LANGFUSE_ENABLED).toBe(false);
     expect(config.LANGFUSE_FLUSH_TIMEOUT_MS).toBe(2000);
     expect(config.LOCAL_TRACE_EXPORT_ENABLED).toBe(false);
+    expect(config.LOG_LEVEL).toBe("error");
+    expect(config.LOG_COLOR).toBe("auto");
+  });
+
+  it.each([
+    ["development", "info"],
+    ["test", "error"],
+    ["production", "info"],
+  ])("defaults LOG_LEVEL to %s in %s mode", (nodeEnv, logLevel) => {
+    const config = loadConfig({
+      NODE_ENV: nodeEnv,
+      DATABASE_URL: "postgresql://test",
+      OPENROUTER_API_KEY: "test-key",
+    });
+
+    expect(config.LOG_LEVEL).toBe(logLevel);
+  });
+
+  it.each(["debug", "info", "warn", "error"])(
+    "accepts LOG_LEVEL=%s",
+    (logLevel) => {
+      const config = loadConfig({
+        NODE_ENV: "test",
+        DATABASE_URL: "postgresql://test",
+        LOG_LEVEL: logLevel,
+      });
+
+      expect(config.LOG_LEVEL).toBe(logLevel);
+    },
+  );
+
+  it.each(["auto", "true", "false"])("accepts LOG_COLOR=%s", (logColor) => {
+    const config = loadConfig({
+      NODE_ENV: "test",
+      DATABASE_URL: "postgresql://test",
+      LOG_COLOR: logColor,
+    });
+
+    expect(config.LOG_COLOR).toBe(logColor);
+  });
+
+  it.each([
+    ["LOG_LEVEL", "verbose"],
+    ["LOG_COLOR", "sometimes"],
+  ])("rejects an invalid %s value", (key, value) => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: "test",
+        DATABASE_URL: "postgresql://test",
+        [key]: value,
+      }),
+    ).toThrow();
   });
 
   it("coerces and accepts configured agent settings", () => {

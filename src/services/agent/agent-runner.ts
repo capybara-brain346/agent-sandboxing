@@ -7,6 +7,7 @@ import {
 } from "ai";
 import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
+import { logger } from "../../logger";
 import type { PublicEvent } from "../../types/event.types";
 import type { WorkerResult } from "../../types/harness.types";
 import type { SandboxService } from "../sandbox/sandbox";
@@ -93,6 +94,12 @@ export class AgentRunner implements CodeWorker {
 
   async run(context: TaskRunContext): Promise<WorkerResult> {
     throwIfAborted(context.signal);
+    const executionStartedAt = Date.now();
+    logger.debug("agent_worker_started", {
+      sessionId: context.sessionId,
+      runId: context.taskId,
+      sandboxId: context.sandboxId,
+    });
     const target = await this.dependencies.sandbox.getAgentToolTarget(
       context.sessionId,
       context.taskId,
@@ -185,6 +192,16 @@ export class AgentRunner implements CodeWorker {
           suggestedNextStep: "Retry the worker attempt with a smaller scope.",
         } satisfies WorkerResult);
 
+      logger.debug("agent_worker_completed", {
+        sessionId: context.sessionId,
+        runId: context.taskId,
+        sandboxId: context.sandboxId,
+        durationMs: Date.now() - executionStartedAt,
+        status: workerResult.status,
+        finishSubmitted: finalResult !== undefined,
+        toolCallCount: result.toolCalls.length,
+        changedFileCount: changedFiles.length,
+      });
       return {
         ...workerResult,
         changedFiles: changedFiles.length
@@ -192,6 +209,16 @@ export class AgentRunner implements CodeWorker {
           : workerResult.changedFiles,
       };
     } catch (error) {
+      const cancelled = isAbortError(error) || context.signal.aborted;
+      logger.debug("agent_worker_failed", {
+        sessionId: context.sessionId,
+        runId: context.taskId,
+        sandboxId: context.sandboxId,
+        durationMs: Date.now() - executionStartedAt,
+        outcome: cancelled ? "cancelled" : "failed",
+        failureCode: error instanceof ServiceError ? error.code : null,
+        usageRecorded,
+      });
       if (!usageRecorded)
         recordModelUsage({
           recorder: this.dependencies.traceRecorder,

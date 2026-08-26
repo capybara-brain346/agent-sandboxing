@@ -144,6 +144,15 @@ Call payloads use `tool_name` and `args`. Result payloads use
 use a safe generic result snippet and a null exit code; raw runtime/provider
 errors are never persisted.
 
+## Debug logging
+
+Agent debug logs report worker and model lifecycle outcomes, durations, tool-call
+counts, delegation counts, summary sizes, and safe failure codes. They do not
+log prompts, worker briefs, tool arguments or results, provider responses,
+secrets, or model-generated text. Backend logs are JSON-only. `LOG_LEVEL`
+controls emission, and `LOG_COLOR` can color JSON lines for TTY readability;
+non-TTY output remains clean JSON by default.
+
 ## Tool contracts
 
 - `read({ path })` returns `{ content, truncated }`. The content is capped at
@@ -203,6 +212,21 @@ The public runtime configuration contract is defined only in
 - `LOCAL_TRACE_EXPORT_ENABLED`: enables JSONL trace export, default `false`.
 - `LOCAL_TRACE_EXPORT_PATH`: JSONL destination, default `.data/eval-traces.jsonl`.
 - `EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED`: includes context snapshots, default `false`.
+
+When running with Docker Compose, `.env` values are interpolated into the
+container only when they are listed in `docker-compose.yml`. Set the Langfuse
+variables in `.env` before recreating the app container:
+
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+```
+
+```bash
+docker compose up --build -d
+```
 
 The tools are intentionally DB-independent and Docker-independent in tests;
 tests mock only the `simpleExec` seam.

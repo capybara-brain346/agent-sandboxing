@@ -6,6 +6,7 @@ import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
 import type { TaskRunContext } from "../src/services/task/task-runner";
 import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
+import { logger } from "../src/logger";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -130,6 +131,7 @@ describe("AgentRunner", () => {
       };
     });
     const harness = makeRunner();
+    const debug = vi.spyOn(logger, "debug");
 
     await expect(harness.runner.run(makeContext())).resolves.toEqual(
       workerOutput,
@@ -166,6 +168,24 @@ describe("AgentRunner", () => {
     expect(harness.traceRecorder.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ stage: "worker" }),
     );
+    expect(debug).toHaveBeenCalledWith(
+      "agent_worker_completed",
+      expect.objectContaining({
+        sessionId: "chat_1",
+        runId: "task_1",
+        sandboxId: "sbox_1",
+        durationMs: expect.any(Number),
+        status: "completed",
+        finishSubmitted: true,
+        toolCallCount: 1,
+        changedFileCount: 0,
+      }),
+    );
+    expect(debug).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ instructions: "Update the greeting" }),
+    );
+    debug.mockRestore();
   });
 
   it("does not stop on an invalid finish call before accepting a valid result", async () => {

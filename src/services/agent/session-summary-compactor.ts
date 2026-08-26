@@ -4,6 +4,7 @@ import type { OrchestratorChatMessage } from "../../types/harness.types";
 import { getPromptText } from "../../prompts/load-prompt";
 import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 import { recordModelUsage } from "../eval/model-usage";
+import { logger } from "../../logger";
 
 const compactedSummarySchema = z
   .object({
@@ -69,6 +70,11 @@ export class ModelSessionSummaryCompactor implements SessionSummaryCompactor {
         output: Output.object({ schema: compactedSummarySchema }),
       });
     } catch (error) {
+      logger.debug("session_summary_compaction_failed", {
+        runId: input.runId ?? null,
+        durationMs: Date.now() - startedAt,
+        outcome: input.signal.aborted ? "cancelled" : "failed",
+      });
       recordModelUsage({
         recorder: this.recorder,
         runId: input.runId,
@@ -124,8 +130,16 @@ export class ModelSessionSummaryCompactor implements SessionSummaryCompactor {
       summary = summary.slice(0, -1);
     }
     if (truncated) {
-      return `${summary.trimEnd()}…`;
+      summary = `${summary.trimEnd()}…`;
     }
+    logger.debug("session_summary_compaction_completed", {
+      runId: input.runId ?? null,
+      durationMs: Date.now() - startedAt,
+      summaryBytes: Buffer.byteLength(summary),
+      fileCount: currentFiles.length,
+      blockerCount: blockers.length,
+      truncated,
+    });
     return summary;
   }
 }

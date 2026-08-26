@@ -5,6 +5,7 @@ import type { EventStore } from "../src/services/events/event-store";
 import { SandboxService, canTransition } from "../src/services/sandbox/sandbox";
 import type { SandboxRuntime } from "../src/services/sandbox/runtime";
 import type { PublicEvent } from "../src/types/event.types";
+import { logger } from "../src/logger";
 
 const config = {
   FIXTURE_REPO_PATH: "./repo",
@@ -86,6 +87,7 @@ describe("SandboxService", () => {
   });
 
   it("provisions a creating session sandbox and publishes run-scoped events", async () => {
+    const debug = vi.spyOn(logger, "debug");
     const publish = vi.fn();
     const runtime = {
       provision: vi.fn(async () => ({ containerId: "container-1" })),
@@ -129,6 +131,17 @@ describe("SandboxService", () => {
       "./repo",
     );
     expect(publish).toHaveBeenCalledTimes(4);
+    expect(debug).toHaveBeenCalledWith(
+      "sandbox_provision_completed",
+      expect.objectContaining({
+        sessionId: "chat_1",
+        runId: "run_1",
+        sandboxId: "s1",
+        durationMs: expect.any(Number),
+        outcome: "ready",
+      }),
+    );
+    debug.mockRestore();
   });
 
   it("requires session ownership and readiness for a session agent target", async () => {

@@ -225,6 +225,13 @@ the hub sorts the buffer, drops sequences already covered by the replay, and
 starts live delivery. This subscribe-first ordering closes the race between
 replay and live publication.
 
+The SSE adapter emits structured debug logs for subscription, replay
+completion, and connection close. These logs contain request and stream IDs,
+cursors, replay counts, last sequence numbers, and durations. Event payloads are
+not copied into debug logs. Backend logs are JSON-only. `LOG_LEVEL` controls
+emission, and `LOG_COLOR` can color JSON lines for TTY readability; non-TTY
+output remains clean JSON by default.
+
 `SseHub` is process-local memory. It is deliberately not a queue or a source
 of truth: a process restart drops open connections and buffered events, while
 clients reconnect using their last sequence and the database replay. A future

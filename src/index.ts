@@ -1,11 +1,12 @@
 import { loadConfig } from "./config";
-import { logger } from "./logger";
+import { configureLogger, logger } from "./logger";
 import { createApp } from "./server";
 import { prisma } from "./db/prisma";
 import { sseHub } from "./services/events/sse-hub";
 import { shutdownTaskServiceTracing } from "./services/task/task";
 
 const config = loadConfig();
+configureLogger({ level: config.LOG_LEVEL, color: config.LOG_COLOR });
 const app = createApp();
 
 const server = app.listen(config.PORT, () => {

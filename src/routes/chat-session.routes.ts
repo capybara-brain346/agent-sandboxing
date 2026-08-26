@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { ServiceError } from "../shared/errors";
+import { logger } from "../logger";
 import { chatSessionService } from "../services/chat/chat-session";
 import { sseHub, type SseHub } from "../services/events/sse-hub";
 import {
@@ -30,16 +31,33 @@ const sse = async (
     Awaited<ReturnType<typeof chatSessionService.sessionEventsAfter>>
   >,
 ): Promise<void> => {
+  const startedAt = process.hrtime.bigint();
   let client: ReturnType<SseHub["subscribe"]> | undefined;
   let keepalive: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  let subscribed = false;
+  let replayCompleted = false;
+  let replayEventCount = 0;
+  let after = 0;
+  let lastSequence = 0;
   const clearKeepalive = (): void => {
     if (keepalive !== undefined) clearInterval(keepalive);
   };
   const onClose = (): void => {
+    if (closed || !subscribed) return;
     closed = true;
     clearKeepalive();
     if (client !== undefined) sseHub.unsubscribe(scope, streamId, client);
+    logger.debug("sse_connection_closed", {
+      requestId: request.id,
+      scope,
+      streamId,
+      after,
+      replayCompleted,
+      replayEventCount,
+      lastSequence: Math.max(lastSequence, client?.lastSent ?? after),
+      durationMs: Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6),
+    });
   };
 
   try {
@@ -50,10 +68,20 @@ const sse = async (
         : typeof queryAfter === "string"
           ? queryAfter
           : "invalid";
-    const after = parseSseCursor(rawAfter);
+    after = parseSseCursor(rawAfter);
+    lastSequence = after;
     client = sseHub.subscribe(scope, streamId, response, after);
+    subscribed = true;
+    logger.debug("sse_subscribed", {
+      requestId: request.id,
+      scope,
+      streamId,
+      after,
+    });
     response.on("close", onClose);
     const events = await eventsAfter(after);
+    replayEventCount = events.length;
+    lastSequence = events.at(-1)?.sequence ?? after;
     if (closed || response.writableEnded || response.destroyed) {
       sseHub.unsubscribe(scope, streamId, client);
       return;
@@ -72,6 +100,16 @@ const sse = async (
       client,
       events.at(-1)?.sequence ?? after,
     );
+    replayCompleted = true;
+    logger.debug("sse_replay_completed", {
+      requestId: request.id,
+      scope,
+      streamId,
+      after,
+      eventCount: events.length,
+      lastSequence,
+      durationMs: Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6),
+    });
     if (closed || response.writableEnded || response.destroyed) return;
     keepalive = startSseKeepalive(response);
   } catch (error) {

@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { ServiceError } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
+import { logger } from "../../logger";
 import type { CodeWorker } from "../agent/code-worker";
 import type {
   TaskRunContext,
@@ -36,6 +37,16 @@ export class RunOrchestrator implements TaskRunner {
     const sessionId = context.sessionId;
 
     const orchestratorContext = await this.contextBuilder.build(sessionId);
+    logger.debug("orchestrator_context_built", {
+      sessionId,
+      runId: context.taskId,
+      messageCount: orchestratorContext.messageCount,
+      recentMessageCount: orchestratorContext.recentMessages.length,
+      recentToolActivityCount: orchestratorContext.recentToolActivity.length,
+      summaryPresent: Boolean(orchestratorContext.summary),
+      hasPriorRun: orchestratorContext.workspace.hasPriorRun,
+      shouldCompact: orchestratorContext.shouldCompact,
+    });
     this.traceRecorder?.recordOrchestratorContext({
       runId: context.taskId,
       contextSummary: {
@@ -86,6 +97,14 @@ export class RunOrchestrator implements TaskRunner {
       reply: decision.reply,
       delegated: decision.delegations.length > 0,
     });
+    logger.debug("orchestrator_decision_completed", {
+      sessionId,
+      runId: context.taskId,
+      delegated: decision.delegations.length > 0,
+      delegationCount: decision.delegations.length,
+      lastDelegationStatus: lastResult?.status ?? null,
+      replyPresent: decision.reply.trim().length > 0,
+    });
 
     if (orchestratorContext.shouldCompact)
       await this.compactSummary(
@@ -135,5 +154,11 @@ export class RunOrchestrator implements TaskRunner {
         },
       }),
     );
+    logger.debug("session_summary_compacted", {
+      sessionId,
+      runId,
+      messageCount: orchestratorContext.messageCount,
+      summaryBytes: Buffer.byteLength(summary),
+    });
   }
 }

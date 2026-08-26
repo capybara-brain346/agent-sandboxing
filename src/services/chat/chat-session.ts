@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { loadConfig } from "../../config";
 import { ServiceError, notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
+import { logger } from "../../logger";
 import { EventStore } from "../events/event-store";
 import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
@@ -286,6 +287,7 @@ export class ChatSessionService {
       }),
     );
     this.publish(result.event);
+    logger.debug("chat_session_created", { sessionId });
     return sessionView({ ...result.session, sandbox: null, runs: [] });
   }
 
@@ -557,6 +559,13 @@ export class ChatSessionService {
         }),
     );
     for (const event of result.events) this.publish(event);
+    logger.debug("chat_message_appended", {
+      sessionId,
+      messageId,
+      runId,
+      startRun: result.run !== null,
+      eventCount: result.events.length,
+    });
     if (result.run)
       this.runService.createRunForMessage(
         sessionId,
@@ -658,8 +667,14 @@ export class ChatSessionService {
         409,
       );
 
-    if (!this.runService.requestCancellation(sessionId, runId))
-      await this.runService.cancelDirectly(sessionId, runId);
+    const tracked = this.runService.requestCancellation(sessionId, runId);
+    logger.debug("run_cancellation_requested", {
+      sessionId,
+      runId,
+      previousStatus: current.status,
+      mode: tracked ? "tracked" : "direct",
+    });
+    if (!tracked) await this.runService.cancelDirectly(sessionId, runId);
 
     return {
       taskRunId: runId,

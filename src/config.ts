@@ -9,12 +9,16 @@ const optionalStringEnv = z.preprocess(
   (value) => (value === "" ? undefined : value),
   z.string().min(1).optional(),
 );
+const logLevel = z.enum(["debug", "info", "warn", "error"]);
+const logColor = z.enum(["auto", "true", "false"]);
 
 const schema = z
   .object({
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
+    LOG_LEVEL: logLevel.default("info"),
+    LOG_COLOR: logColor.default("auto"),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     DATABASE_URL: z.string().min(1),
     SHUTDOWN_TIMEOUT_MS: z.coerce.number().default(10_000),
@@ -95,4 +99,7 @@ const schema = z
 
 export type Config = z.infer<typeof schema>;
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config =>
-  schema.parse(env);
+  schema.parse({
+    ...env,
+    LOG_LEVEL: env.LOG_LEVEL ?? (env.NODE_ENV === "test" ? "error" : "info"),
+  });

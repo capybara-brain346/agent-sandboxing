@@ -166,6 +166,16 @@ buffers events during replay; reconnects use the run event sequence via the
 See the [Event Service documentation](../event-service/README.md) for the
 shared event contract and append/publish invariants.
 
+## Debug logging
+
+Sandbox debug logs cover provisioning start and outcome, sandbox reuse through
+`RunService`, and diff capture outcome. They include session, run, and sandbox
+IDs with durations, byte counts, and safe failure codes. Fixture paths, image
+values, command output, and runtime error details are not added to debug logs.
+Backend logs are JSON-only. `LOG_LEVEL` controls emission, and `LOG_COLOR` can
+color JSON lines for TTY readability; non-TTY output remains clean JSON by
+default.
+
 ## Development and smoke test
 
 From the repository root:

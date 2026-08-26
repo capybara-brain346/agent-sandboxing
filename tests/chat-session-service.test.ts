@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import { ChatSessionService } from "../src/services/chat/chat-session";
 import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
+import { logger } from "../src/logger";
 
 const event = (
   streamId: string,
@@ -120,6 +121,7 @@ describe("ChatSessionService", () => {
   });
 
   it("persists a message, run, lock, and both scoped event streams together", async () => {
+    const debug = vi.spyOn(logger, "debug");
     let committed = false;
     const tx = {
       chatSession: {
@@ -178,6 +180,21 @@ describe("ChatSessionService", () => {
     expect(events.appendSessionEventInTransaction).toHaveBeenCalledTimes(3);
     expect(events.appendRunEventInTransaction).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledTimes(4);
+    expect(debug).toHaveBeenCalledWith(
+      "chat_message_appended",
+      expect.objectContaining({
+        sessionId: "chat_1",
+        runId: expect.any(String),
+        messageId: expect.any(String),
+        startRun: true,
+        eventCount: 4,
+      }),
+    );
+    expect(debug).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ content: "Fix the tests" }),
+    );
+    debug.mockRestore();
   });
 
   it("rejects a second active run from the durable session lock", async () => {

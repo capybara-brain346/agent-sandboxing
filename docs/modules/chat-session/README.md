@@ -90,6 +90,16 @@ Cancellation marks the transitional run `cancelled`, clears the session lock,
 and writes session and run cancellation/result events after the transaction
 commits.
 
+## Debug logging
+
+The chat boundary emits structured debug logs for session creation, message and
+run scheduling, and cancellation mode selection. Logs carry session, message,
+and run IDs plus event counts; message content and run instructions are not
+logged. Run execution, sandbox, agent, and SSE logs provide the lower-level
+diagnostic details described in their module guides. Backend logs are JSON-only.
+`LOG_LEVEL` controls emission, and `LOG_COLOR` can color JSON lines for TTY
+readability; non-TTY output remains clean JSON by default.
+
 ## Event streams
 
 The session SSE route replays the ordered `session` stream. The nested run SSE

@@ -91,6 +91,7 @@ export class RunService {
       cancellationCompleted: false,
     };
     this.executions.set(runId, execution);
+    logger.debug("run_scheduled", { sessionId, runId, messageId });
     setImmediate(() => {
       const runPromise = this.runRun(execution);
       execution.runPromise = runPromise;
@@ -115,6 +116,8 @@ export class RunService {
 
   private async runRun(execution: RunExecution): Promise<void> {
     const { sessionId, runId, messageId, instructions } = execution;
+    const startedAt = process.hrtime.bigint();
+    logger.debug("run_execution_started", { sessionId, runId, messageId });
     try {
       if (await this.waitForCancellation(execution)) return;
 
@@ -153,6 +156,13 @@ export class RunService {
         sessionId,
         messageId,
       });
+      logger.debug("run_worker_finished", {
+        sessionId,
+        runId,
+        sandboxId,
+        summaryPresent: runResult.summary !== null,
+        workerReportPresent: Boolean(runResult.workerReport),
+      });
       if (await this.waitForCancellation(execution)) return;
 
       const diffResult = await this.sandbox.diffForSession(
@@ -174,6 +184,17 @@ export class RunService {
       ).catch(() => undefined);
     } finally {
       execution.runFinished = true;
+      logger.debug("run_execution_finished", {
+        sessionId,
+        runId,
+        messageId,
+        durationMs: Math.round(
+          Number(process.hrtime.bigint() - startedAt) / 1e6,
+        ),
+        outcome: execution.cancellationCompleted ? "cancelled" : "finished",
+        cancellationRequested: execution.cancellationRequested,
+        cancellationCompleted: execution.cancellationCompleted,
+      });
       if (
         this.executions.get(runId) === execution &&
         (!execution.cancellationRequested || execution.cancellationCompleted)
@@ -259,7 +280,14 @@ export class RunService {
     );
     if (!session)
       throw notFound("chat_session_not_found", "Chat session was not found");
-    if (session.sandbox) return session.sandbox.id;
+    if (session.sandbox) {
+      logger.debug("run_sandbox_reused", {
+        sessionId,
+        runId,
+        sandboxId: session.sandbox.id,
+      });
+      return session.sandbox.id;
+    }
 
     const created = await runQuery(
       "create_session_sandbox",
@@ -292,6 +320,11 @@ export class RunService {
         }),
     );
     this.publish(created.event);
+    logger.debug("run_sandbox_created", {
+      sessionId,
+      runId,
+      sandboxId: created.sandbox.sandboxId,
+    });
     return created.sandbox.sandboxId;
   }
 
@@ -317,7 +350,9 @@ export class RunService {
           });
         }),
     );
-    return updated.count > 0;
+    const changed = updated.count > 0;
+    logger.debug("run_status_transitioned", { runId, status, changed });
+    return changed;
   }
 
   private async recordArtifacts(
@@ -545,6 +580,15 @@ export class RunService {
         }),
     );
     for (const event of events) this.publish(event);
+    logger.debug("run_completion_recorded", {
+      sessionId,
+      runId,
+      terminalRecorded: events.length > 0,
+      eventCount: events.length,
+      artifactCount: artifacts.length,
+      diffBytes: Buffer.byteLength(diff),
+      summaryPresent: summary !== null,
+    });
     if (events.length > 0)
       await this.finalizeTrace(runId, {
         status: "completed",
@@ -674,6 +718,16 @@ export class RunService {
         }),
     );
     for (const event of events) this.publish(event);
+    logger.debug("run_failure_recorded", {
+      sessionId,
+      runId,
+      operation,
+      failureCode: failure.code,
+      terminalRecorded: events.length > 0,
+      eventCount: events.length,
+      artifactCount: artifacts.length,
+      workerReportPresent: Boolean(workerReport),
+    });
     if (events.length > 0)
       await this.finalizeTrace(runId, {
         status: "failed",
@@ -768,6 +822,13 @@ export class RunService {
       }),
     );
     for (const event of events) this.publish(event);
+    logger.debug("run_cancellation_recorded", {
+      sessionId,
+      runId,
+      terminalRecorded: events.length > 0,
+      eventCount: events.length,
+      diffBytes: Buffer.byteLength(diff),
+    });
     if (events.length > 0)
       await this.finalizeTrace(runId, {
         status: "cancelled",

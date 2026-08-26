@@ -9,6 +9,7 @@ import { buildWorkerBrief, type WorkerCorrection } from "./worker-brief";
 import { getPromptText } from "../../prompts/load-prompt";
 import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 import { recordModelUsage } from "../eval/model-usage";
+import { logger } from "../../logger";
 
 export const MAX_DELEGATIONS_PER_TURN = 2;
 export const ORCHESTRATOR_MAX_STEPS = 6;
@@ -143,6 +144,11 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
         stopWhen: stepCountIs(ORCHESTRATOR_MAX_STEPS),
       });
     } catch (error) {
+      logger.debug("orchestrator_model_failed", {
+        runId: input.runId ?? null,
+        durationMs: Date.now() - startedAt,
+        outcome: input.signal.aborted ? "cancelled" : "failed",
+      });
       recordModelUsage({
         recorder: this.recorder,
         runId: input.runId,
@@ -160,6 +166,12 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
       model: this.model,
       startedAt,
       result,
+    });
+    logger.debug("orchestrator_model_completed", {
+      runId: input.runId ?? null,
+      durationMs: Date.now() - startedAt,
+      delegationCount: delegations.length,
+      replyPresent: result.text.trim().length > 0,
     });
 
     return {

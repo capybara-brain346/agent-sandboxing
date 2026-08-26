@@ -31,6 +31,16 @@ representation of a `TaskRun` (see the
 It is reached exclusively through `RunService` and `ChatSessionService`; there
 is no direct task-scoped route or service boundary anymore.
 
+## Debug logging
+
+`RunService` emits structured debug logs when runs are scheduled, started,
+transitioned, finished, and recorded as completed, failed, or cancelled. Fields
+include lifecycle IDs, state-transition outcomes, durations, byte counts, and
+artifact counts. User instructions, summaries, worker reports, and raw runtime
+output are not logged. Backend logs are JSON-only. `LOG_LEVEL` controls
+emission, and `LOG_COLOR` can color JSON lines for TTY readability; non-TTY
+output remains clean JSON by default.
+
 ## Read first
 
 - [`Chat Session Service`](../chat-session/README.md) — the current product

@@ -22,8 +22,15 @@ services:
     environment:
       NODE_ENV: development
       PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_COLOR: ${LOG_COLOR:-auto}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent_sandboxing?schema=public
       FIXTURE_REPO_PATH: /workspace/fixture-repo
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+      LANGFUSE_FLUSH_TIMEOUT_MS: ${LANGFUSE_FLUSH_TIMEOUT_MS:-2000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       AGENT_MODEL: ${AGENT_MODEL:-openrouter:deepseek/deepseek-v4-flash}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-25}
