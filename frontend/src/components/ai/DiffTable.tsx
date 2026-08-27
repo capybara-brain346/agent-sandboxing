@@ -17,7 +17,7 @@ type DiffHunk = {
   lines: DiffLine[];
 };
 
-type DiffFile = {
+export type DiffFile = {
   path: string;
   hunks: DiffHunk[];
   additions: number;
@@ -37,7 +37,7 @@ const filePathFromHeader = (block: string[]): string => {
   return match ? match[1] : "unknown file";
 };
 
-const parseDiff = (diff: string): DiffFile[] => {
+export const parseDiff = (diff: string): DiffFile[] => {
   const lines = diff.split("\n");
   const fileBlocks: string[][] = [];
   for (const line of lines) {
