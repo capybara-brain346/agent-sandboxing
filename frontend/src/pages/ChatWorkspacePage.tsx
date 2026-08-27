@@ -14,6 +14,7 @@ import { TERMINAL_STATUSES } from "../api/types";
 import { Composer } from "../components/Composer";
 import { MessageThread } from "../components/MessageThread";
 import { RunInspector } from "../components/RunInspector";
+import { useActiveSession } from "../context/ActiveSessionContext";
 
 const SESSION_REFRESH_EVENT_TYPES = new Set([
   "message_created",
@@ -39,6 +40,15 @@ export const ChatWorkspacePage = () => {
 
   const { events } = useEventStream(session?.eventsUrl ?? null);
   const lastHandledSequence = useRef(0);
+  const { setActiveSession } = useActiveSession();
+
+  useEffect(() => {
+    if (session) {
+      setActiveSession({ repo: session.repo, run: session.latestRun });
+    }
+  }, [session, setActiveSession]);
+
+  useEffect(() => () => setActiveSession(null), [setActiveSession]);
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;

@@ -6,14 +6,14 @@ import { LoginPage } from "./pages/LoginPage";
 import { AuthRedirectPage } from "./pages/AuthRedirectPage";
 
 const App = () => (
-  <AppShell>
-    <Routes>
+  <Routes>
+    <Route path="/login" element={<LoginPage />} />
+    <Route element={<AppShell />}>
       <Route path="/" element={<AuthRedirectPage />} />
-      <Route path="/login" element={<LoginPage />} />
       <Route path="/repos" element={<RepoSelectPage />} />
       <Route path="/sessions/:sessionId" element={<ChatWorkspacePage />} />
-    </Routes>
-  </AppShell>
+    </Route>
+  </Routes>
 );
 
 export default App;

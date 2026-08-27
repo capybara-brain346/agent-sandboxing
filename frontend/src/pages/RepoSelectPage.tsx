@@ -3,29 +3,18 @@ import { useNavigate } from "react-router-dom";
 import {
   ApiError,
   createChatSession,
-  getAuthMe,
   getGitHubBranches,
   getGitHubRepositories,
-  listChatSessions,
-  logout,
 } from "../api/client";
 import type {
-  AuthMe,
-  ChatSessionListItem,
   GitHubRepository,
   GitHubRepositoriesResponse,
 } from "../api/types";
-import { StatusBadge } from "../components/StatusBadge";
-
-const formatTimestamp = (value: string): string =>
-  new Date(value).toLocaleString();
 
 export const RepoSelectPage = () => {
   const navigate = useNavigate();
-  const [user, setUser] = useState<AuthMe | null>(null);
   const [connection, setConnection] =
     useState<GitHubRepositoriesResponse | null>(null);
-  const [sessions, setSessions] = useState<ChatSessionListItem[]>([]);
   const [loadingAccess, setLoadingAccess] = useState(true);
   const [selectedRepoId, setSelectedRepoId] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("");
@@ -37,16 +26,10 @@ export const RepoSelectPage = () => {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      getAuthMe(),
-      getGitHubRepositories(),
-      listChatSessions({ limit: 25 }),
-    ])
-      .then(([nextUser, nextConnection, recent]) => {
+    getGitHubRepositories()
+      .then((nextConnection) => {
         if (cancelled) return;
-        setUser(nextUser);
         setConnection(nextConnection);
-        setSessions(recent.items);
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
@@ -176,11 +159,6 @@ export const RepoSelectPage = () => {
     }
   };
 
-  const signOut = async () => {
-    await logout().catch(() => undefined);
-    navigate("/login", { replace: true });
-  };
-
   return (
     <main className="page page--wide repos-page">
       <div className="page-header repos-page__header">
@@ -192,19 +170,6 @@ export const RepoSelectPage = () => {
             point.
           </p>
         </div>
-        {user && (
-          <div className="user-menu">
-            <img className="user-menu__avatar" src={user.avatarUrl} alt="" />
-            <span>{user.login}</span>
-            <button
-              className="button button--secondary"
-              type="button"
-              onClick={signOut}
-            >
-              Sign out
-            </button>
-          </div>
-        )}
       </div>
 
       {loadError && (
@@ -324,52 +289,6 @@ export const RepoSelectPage = () => {
                   {loadingAccess ? "Refreshing access..." : "Refresh access"}
                 </button>
               </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div className="panel">
-          <div className="panel__header">
-            <span className="panel__title">Recent chats</span>
-          </div>
-          <div className="panel__body">
-            {sessions.length === 0 && !loadError && (
-              <p className="run-inspector__empty">No chats yet.</p>
-            )}
-            {sessions.length > 0 && (
-              <ul className="session-list">
-                {sessions.map((session) => (
-                  <li
-                    key={session.chatSessionId}
-                    className="session-list__item"
-                  >
-                    <button
-                      type="button"
-                      className="session-list__link"
-                      onClick={() =>
-                        navigate(`/sessions/${session.chatSessionId}`)
-                      }
-                    >
-                      <span className="session-list__title">
-                        {session.title ?? session.repo.ref}
-                      </span>
-                      <span className="session-list__preview">
-                        {session.lastMessagePreview ?? "No messages yet"}
-                      </span>
-                    </button>
-                    <div className="session-list__meta">
-                      {session.latestRunStatus && (
-                        <StatusBadge status={session.latestRunStatus} />
-                      )}
-                      <span className="session-list__time">
-                        {formatTimestamp(session.updatedAt)}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
             )}
           </div>
         </div>
