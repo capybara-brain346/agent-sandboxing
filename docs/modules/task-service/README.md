@@ -15,22 +15,31 @@ execution runtime consumed only by the chat-session harness:
 
 - `canTransition(from, to)` — the `TaskStatus` transition guard used by
   `RunService` to validate run state changes.
-- `taskServiceRunner` — the process-wide `AgentRunner` instance (a
-  `PlaceholderTaskRunner` under `NODE_ENV=test`) that `CodeWorkerRunner` wraps
-  to execute a worker brief in the session-owned sandbox.
+- `taskServiceWorker` — the process-wide typed `AgentRunner` instance (a
+  placeholder worker under `NODE_ENV=test`) used directly by the chat harness.
 - `taskServiceArtifacts` — the process-wide `ArtifactStore` instance used to
   record diffs, worker reports, and truncated tool output.
 
 [`src/services/task/task-runner.ts`](../../../src/services/task/task-runner.ts)
-defines the shared `TaskRunner`/`TaskRunContext`/`TaskRunResult` contract that
-both `AgentRunner` and `RunOrchestrator` implement; `TaskRunContext` always
-carries `sessionId` and `messageId` now that every run is session-owned.
+defines the shared `TaskRunner`/`TaskRunContext`/`TaskRunResult` contract used
+by `RunService` and `RunOrchestrator`; `TaskRunContext` always carries
+`sessionId` and `messageId` now that every run is session-owned.
 
 The underlying Prisma `Task` table is the transitional storage
 representation of a `TaskRun` (see the
 [Phase 0 decision record](../../planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)).
 It is reached exclusively through `RunService` and `ChatSessionService`; there
 is no direct task-scoped route or service boundary anymore.
+
+## Debug logging
+
+`RunService` emits structured debug logs when runs are scheduled, started,
+transitioned, finished, and recorded as completed, failed, or cancelled. Fields
+include lifecycle IDs, state-transition outcomes, durations, byte counts, and
+artifact counts. User instructions, summaries, worker reports, and raw runtime
+output are not logged. Backend logs are JSON-only. `LOG_LEVEL` controls
+emission, and `LOG_COLOR` can color JSON lines for TTY readability; non-TTY
+output remains clean JSON by default.
 
 ## Read first
 

@@ -12,6 +12,7 @@ import type {
 import type { PublicEvent } from "../../types/event.types";
 import { safeError, ServiceError, notFound } from "../../shared/errors";
 import { logQueryFailure, runQuery } from "../../shared/query-logging";
+import { logger } from "../../logger";
 import { workspaceRoot } from "./workspace";
 import { CommandExecutionService } from "./command-execution";
 import { EventStore } from "../events/event-store";
@@ -146,6 +147,7 @@ export class SandboxService {
     runId: string,
     sandboxId: string,
   ): Promise<SandboxDiffResult> {
+    const startedAt = process.hrtime.bigint();
     const sandbox = await runQuery(
       "get_session_sandbox_for_diff",
       { sessionId, sandboxId },
@@ -181,8 +183,25 @@ export class SandboxService {
         producerId: sandboxId,
         payload: { bytes: Buffer.byteLength(diff) },
       });
+      logger.debug("sandbox_diff_completed", {
+        sessionId,
+        runId,
+        sandboxId,
+        durationMs: Math.round(
+          Number(process.hrtime.bigint() - startedAt) / 1e6,
+        ),
+        diffBytes: Buffer.byteLength(diff),
+      });
       return { sandboxId, diff, generatedAt: new Date().toISOString() };
     } catch (error) {
+      logger.debug("sandbox_diff_failed", {
+        sessionId,
+        runId,
+        sandboxId,
+        durationMs: Math.round(
+          Number(process.hrtime.bigint() - startedAt) / 1e6,
+        ),
+      });
       throw new ServiceError(
         "diff_failed",
         safeError(error, "diff").message,
@@ -199,6 +218,8 @@ export class SandboxService {
     image: string,
     fixturePath: string,
   ): Promise<SandboxProvisionResult> {
+    const startedAt = process.hrtime.bigint();
+    logger.debug("sandbox_provision_started", { sessionId, runId, sandboxId });
     try {
       await this.emitRun({
         sessionId,
@@ -263,10 +284,28 @@ export class SandboxService {
           }),
       );
       events.forEach((event) => this.publish(event));
+      logger.debug("sandbox_provision_completed", {
+        sessionId,
+        runId,
+        sandboxId,
+        durationMs: Math.round(
+          Number(process.hrtime.bigint() - startedAt) / 1e6,
+        ),
+        outcome: "ready",
+      });
       return { status: "ready" };
     } catch (error) {
       logQueryFailure("provision_session_sandbox", { sandboxId }, error);
       const safe = safeError(error, "provision");
+      logger.debug("sandbox_provision_failed", {
+        sessionId,
+        runId,
+        sandboxId,
+        durationMs: Math.round(
+          Number(process.hrtime.bigint() - startedAt) / 1e6,
+        ),
+        failureCode: safe.code,
+      });
       await runQuery("mark_session_sandbox_failed", { sandboxId }, () =>
         this.prisma.$transaction(async (tx) => {
           await tx.sandbox.update({

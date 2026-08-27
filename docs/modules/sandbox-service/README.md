@@ -93,7 +93,9 @@ Provisioning currently:
 1. Resolves and validates the configured fixture directory, defaulting to
    `./repo`.
 2. Creates one named container using `SANDBOX_IMAGE` (default
-   `node:22-bookworm`).
+   `node:22-bookworm`). Repo eval scripts override this with the project-built
+   `agent-sandboxing-eval-sandbox:latest` image so the Python fixture can run
+   pytest while preserving the sandbox `node` user contract.
 3. Applies the configured memory, CPU, and PID limits.
 4. Starts the container with an idle `sleep infinity` process.
 5. Creates `/workspace/repo` and copies the fixture contents, including
@@ -165,6 +167,16 @@ buffers events during replay; reconnects use the run event sequence via the
 `after` query parameter or `Last-Event-ID` header.
 See the [Event Service documentation](../event-service/README.md) for the
 shared event contract and append/publish invariants.
+
+## Debug logging
+
+Sandbox debug logs cover provisioning start and outcome, sandbox reuse through
+`RunService`, and diff capture outcome. They include session, run, and sandbox
+IDs with durations, byte counts, and safe failure codes. Fixture paths, image
+values, command output, and runtime error details are not added to debug logs.
+Backend logs are JSON-only. `LOG_LEVEL` controls emission, and `LOG_COLOR` can
+color JSON lines for TTY readability; non-TTY output remains clean JSON by
+default.
 
 ## Development and smoke test
 

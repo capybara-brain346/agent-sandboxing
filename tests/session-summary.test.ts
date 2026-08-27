@@ -4,6 +4,7 @@ import {
   ModelSessionSummaryCompactor,
   type CompactionInput,
 } from "../src/services/agent/session-summary-compactor";
+import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -20,6 +21,7 @@ const baseInput = (
   previousSummary: "",
   recentMessages: [],
   recentToolActivity: [],
+  runId: "run_1",
   signal: new AbortController().signal,
   ...overrides,
 });
@@ -64,5 +66,35 @@ describe("ModelSessionSummaryCompactor", () => {
     expect(summary).toContain("blocker-0");
     expect(summary).not.toContain("blocker-9");
     expect(Buffer.byteLength(summary, "utf8")).toBeLessThanOrEqual(4000);
+  });
+
+  it("records summary compaction usage", async () => {
+    aiMocks.generateText.mockResolvedValueOnce({
+      output: {
+        objective: "Do X",
+        state: "complete",
+        lastResult: "",
+        files: [],
+        blockers: [],
+      },
+      usage: { inputTokens: 5, outputTokens: 3 },
+    });
+    const recorder = {
+      recordUsage: vi.fn(),
+    } as unknown as EvalTraceRecorderLike;
+    const compactor = new ModelSessionSummaryCompactor(
+      {} as LanguageModel,
+      recorder,
+    );
+
+    await compactor.compact(baseInput());
+
+    expect(recorder.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run_1",
+        stage: "summaryCompaction",
+        usage: expect.objectContaining({ inputTokens: 5, outputTokens: 3 }),
+      }),
+    );
   });
 });

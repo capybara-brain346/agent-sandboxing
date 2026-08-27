@@ -98,6 +98,9 @@ export class ToolEventRelay {
     );
     const bounded = boundUtf8(serialized, RESULT_SNIPPET_MAX_BYTES);
     const outputRecord = isRecord(output) ? output : {};
+    const outputTruncated =
+      event.toolOutput.type === "tool-result" &&
+      (outputRecord.truncated === true || bounded.truncated);
 
     const artifact =
       context.sessionId && bounded.truncated && this.dependencies.artifacts
@@ -118,9 +121,7 @@ export class ToolEventRelay {
         {
           tool_name: event.toolCall.toolName,
           result_snippet: bounded.value,
-          truncated:
-            event.toolOutput.type === "tool-result" &&
-            (outputRecord.truncated === true || bounded.truncated),
+          truncated: outputTruncated,
           exit_code:
             event.toolOutput.type === "tool-result"
               ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)

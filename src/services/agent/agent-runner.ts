@@ -1,23 +1,22 @@
 import {
   generateText,
   isStepCount,
-  Output,
+  tool,
   type LanguageModel,
   type ToolSet,
 } from "ai";
 import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
+import { logger } from "../../logger";
 import type { PublicEvent } from "../../types/event.types";
+import type { WorkerResult } from "../../types/harness.types";
 import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
 import { workerResultSchema } from "../../types/harness.types";
-import type {
-  TaskRunContext,
-  TaskRunResult,
-  TaskRunner,
-} from "../task/task-runner";
+import type { TaskRunContext } from "../task/task-runner";
 import { createAgentToolRegistry } from "./tools/registry";
 import type { AgentToolConfig } from "./tools/config";
+import type { CodeWorker } from "./code-worker";
 import {
   createAbortError,
   isAbortError,
@@ -29,6 +28,8 @@ import {
 } from "./tool-event-relay";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
 import { getPromptText } from "../../prompts/load-prompt";
+import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import { recordModelUsage } from "../eval/model-usage";
 
 export const AGENT_SYSTEM_PROMPT = getPromptText("code-worker");
 
@@ -51,6 +52,7 @@ export type AgentRunnerDependencies = {
   model: LanguageModel;
   publish: PublishEvent;
   artifacts?: ArtifactRecorder;
+  traceRecorder?: EvalTraceRecorderLike;
 };
 
 class SerialExecutor {
@@ -87,11 +89,17 @@ export const serializeToolRegistry = <TOOLS extends ToolSet>(
   return Object.fromEntries(entries) as TOOLS;
 };
 
-export class AgentRunner implements TaskRunner {
+export class AgentRunner implements CodeWorker {
   constructor(private readonly dependencies: AgentRunnerDependencies) {}
 
-  async run(context: TaskRunContext): Promise<TaskRunResult> {
+  async run(context: TaskRunContext): Promise<WorkerResult> {
     throwIfAborted(context.signal);
+    const executionStartedAt = Date.now();
+    logger.debug("agent_worker_started", {
+      sessionId: context.sessionId,
+      runId: context.taskId,
+      sandboxId: context.sandboxId,
+    });
     const target = await this.dependencies.sandbox.getAgentToolTarget(
       context.sessionId,
       context.taskId,
@@ -107,6 +115,18 @@ export class AgentRunner implements TaskRunner {
         context.signal,
       ),
     );
+    let finalResult: WorkerResult | undefined;
+    const allTools = {
+      ...tools,
+      finish: tool({
+        description: "Submit the structured result for this worker attempt.",
+        inputSchema: workerResultSchema,
+        execute: async (input) => {
+          finalResult = workerResultSchema.parse(input);
+          return { accepted: true };
+        },
+      }),
+    };
     const relay = new ToolEventRelay({
       events: this.dependencies.events,
       publish: this.dependencies.publish,
@@ -114,43 +134,43 @@ export class AgentRunner implements TaskRunner {
         ? { artifacts: this.dependencies.artifacts }
         : {}),
     } satisfies ToolEventRelayDependencies);
-    const callbacks = relay.callbacks<typeof tools>({
+    const callbacks = relay.callbacks<ToolSet>({
       taskId: context.taskId,
       sandboxId: context.sandboxId,
       sessionId: context.sessionId,
     });
 
+    const startedAt = Date.now();
+    let usageRecorded = false;
     try {
       const result = await generateText({
         model: this.dependencies.model,
         system: AGENT_SYSTEM_PROMPT,
         messages: [{ role: "user", content: context.instructions }],
-        tools,
+        tools: allTools,
         abortSignal: context.signal,
-        stopWhen: isStepCount(this.dependencies.config.AGENT_MAX_STEPS),
-        onToolExecutionStart: callbacks.onToolExecutionStart,
-        onToolExecutionEnd: callbacks.onToolExecutionEnd,
-      });
-
-      // A single generateText call that offers both `tools` and a
-      // structured `output` schema unreliably skips tool-calling for some
-      // models/providers (observed: the model settles for schema-shaped
-      // prose instead of ever calling a tool). Structuring the result is
-      // therefore a second, tools-free call over the completed transcript.
-      const structured = await generateText({
-        model: this.dependencies.model,
-        system: AGENT_SYSTEM_PROMPT,
-        messages: [
-          { role: "user", content: context.instructions },
-          ...result.response.messages,
-          {
-            role: "user",
-            content: "Produce the structured result for this attempt now.",
-          },
+        stopWhen: [
+          () => finalResult !== undefined,
+          isStepCount(this.dependencies.config.AGENT_MAX_STEPS + 1),
         ],
-        abortSignal: context.signal,
-        output: Output.object({ schema: workerResultSchema }),
+        onToolExecutionStart: async (event) => {
+          if (event.toolCall.toolName !== "finish")
+            await callbacks.onToolExecutionStart(event);
+        },
+        onToolExecutionEnd: async (event) => {
+          if (event.toolCall.toolName !== "finish")
+            await callbacks.onToolExecutionEnd(event);
+        },
       });
+      recordModelUsage({
+        recorder: this.dependencies.traceRecorder,
+        runId: context.taskId,
+        stage: "worker",
+        model: this.dependencies.model,
+        startedAt,
+        result,
+      });
+      usageRecorded = true;
 
       const changedFiles = [
         ...new Set(
@@ -161,16 +181,53 @@ export class AgentRunner implements TaskRunner {
             .map((call) => (call.input as { path: string }).path),
         ),
       ];
+      const workerResult =
+        finalResult ??
+        ({
+          status: "blocked",
+          summary: "Worker did not submit a structured result.",
+          changedFiles: [],
+          testsRun: [],
+          blockers: ["worker_result_not_submitted"],
+          suggestedNextStep: "Retry the worker attempt with a smaller scope.",
+        } satisfies WorkerResult);
 
+      logger.debug("agent_worker_completed", {
+        sessionId: context.sessionId,
+        runId: context.taskId,
+        sandboxId: context.sandboxId,
+        durationMs: Date.now() - executionStartedAt,
+        status: workerResult.status,
+        finishSubmitted: finalResult !== undefined,
+        toolCallCount: result.toolCalls.length,
+        changedFileCount: changedFiles.length,
+      });
       return {
-        summary: JSON.stringify({
-          ...structured.output,
-          changedFiles: changedFiles.length
-            ? changedFiles
-            : structured.output.changedFiles,
-        }),
+        ...workerResult,
+        changedFiles: changedFiles.length
+          ? changedFiles
+          : workerResult.changedFiles,
       };
     } catch (error) {
+      const cancelled = isAbortError(error) || context.signal.aborted;
+      logger.debug("agent_worker_failed", {
+        sessionId: context.sessionId,
+        runId: context.taskId,
+        sandboxId: context.sandboxId,
+        durationMs: Date.now() - executionStartedAt,
+        outcome: cancelled ? "cancelled" : "failed",
+        failureCode: error instanceof ServiceError ? error.code : null,
+        usageRecorded,
+      });
+      if (!usageRecorded)
+        recordModelUsage({
+          recorder: this.dependencies.traceRecorder,
+          runId: context.taskId,
+          stage: "worker",
+          model: this.dependencies.model,
+          startedAt,
+          result: {},
+        });
       if (isAbortError(error)) throw error;
       if (context.signal.aborted) throw createAbortError();
       if (error instanceof ServiceError) throw error;

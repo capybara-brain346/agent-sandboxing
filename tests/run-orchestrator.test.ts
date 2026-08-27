@@ -4,13 +4,14 @@ import { RunOrchestrator } from "../src/services/chat/run-orchestrator";
 import type { OrchestratorAgent } from "../src/services/agent/orchestrator-agent";
 import type { SessionContextBuilder } from "../src/services/chat/session-context-builder";
 import type { SessionSummaryCompactor } from "../src/services/agent/session-summary-compactor";
-import type { CodeWorkerRunner } from "../src/services/agent/code-worker-runner";
+import type { CodeWorker } from "../src/services/agent/code-worker";
 import type {
   OrchestratorContext,
   WorkerResult,
 } from "../src/types/harness.types";
 import type { TaskRunContext } from "../src/services/task/task-runner";
 import { ServiceError } from "../src/shared/errors";
+import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 
 const baseContext = (
   overrides: Partial<OrchestratorContext> = {},
@@ -53,6 +54,7 @@ const workerResult = (overrides: Partial<WorkerResult> = {}): WorkerResult => ({
 const makeHarness = (options: {
   context?: OrchestratorContext;
   decision?: { reply: string; delegations: WorkerResult[] };
+  traceRecorder?: EvalTraceRecorderLike;
 }) => {
   const context = options.context ?? baseContext();
   const decision = options.decision ?? { reply: "ok", delegations: [] };
@@ -99,7 +101,7 @@ const makeHarness = (options: {
     },
   } as unknown as Pick<PrismaClient, "chatSession">;
 
-  const worker = { run: vi.fn() } as unknown as CodeWorkerRunner;
+  const worker: CodeWorker = { run: vi.fn(async () => workerResult()) };
 
   const orchestrator = new RunOrchestrator(
     prisma,
@@ -107,6 +109,7 @@ const makeHarness = (options: {
     compactor,
     worker,
     agent,
+    options.traceRecorder,
   );
 
   return { orchestrator, contextBuilder, agent, compactor, updates };
@@ -135,8 +138,6 @@ describe("RunOrchestrator", () => {
     });
     expect(agent.decide).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: "chat_1",
-        repoRef: "./repo",
         summary: "Objective: ship it",
         message: "what did you change last turn?",
         signal,
@@ -152,6 +153,57 @@ describe("RunOrchestrator", () => {
     const result = await orchestrator.run(runContext("what does this do?"));
     expect(result.summary).toBe("clarifying reply");
     expect(result.workerReport).toBeUndefined();
+  });
+
+  it("captures the exact delegated brief and result", async () => {
+    const traceRecorder = {
+      recordOrchestratorContext: vi.fn(),
+      recordWorkerBrief: vi.fn(),
+      recordWorkerResult: vi.fn(),
+      recordOrchestratorReply: vi.fn(),
+    } as unknown as EvalTraceRecorderLike;
+    const context = baseContext();
+    const contextBuilder = {
+      build: vi.fn(async () => context),
+    } as unknown as SessionContextBuilder;
+    const result = workerResult({ changedFiles: ["a.ts"] });
+    const worker: CodeWorker = { run: vi.fn(async () => result) };
+    const agent: OrchestratorAgent = {
+      decide: vi.fn(async (input) => {
+        const delegated = await input.delegate("exact worker brief");
+        return { reply: "done", delegations: [delegated] };
+      }),
+    };
+    const compactor = {
+      compact: vi.fn(async () => "summary"),
+    } as unknown as SessionSummaryCompactor;
+    const prisma = {
+      chatSession: { updateMany: vi.fn(async () => ({ count: 1 })) },
+    } as unknown as Pick<PrismaClient, "chatSession">;
+    const orchestrator = new RunOrchestrator(
+      prisma,
+      contextBuilder,
+      compactor,
+      worker,
+      agent,
+      traceRecorder,
+    );
+
+    await orchestrator.run(runContext("fix it"));
+
+    expect(traceRecorder.recordWorkerBrief).toHaveBeenCalledWith({
+      runId: "run_1",
+      brief: "exact worker brief",
+    });
+    expect(traceRecorder.recordWorkerResult).toHaveBeenCalledWith({
+      runId: "run_1",
+      result,
+    });
+    expect(traceRecorder.recordOrchestratorReply).toHaveBeenCalledWith({
+      runId: "run_1",
+      reply: "done",
+      delegated: true,
+    });
   });
 
   it("returns the raw worker report alongside the composed reply on completion", async () => {
@@ -228,6 +280,7 @@ describe("RunOrchestrator", () => {
       previousSummary: context.summary,
       recentMessages: context.recentMessages,
       recentToolActivity: context.recentToolActivity,
+      runId: "run_1",
       signal,
     });
     expect(updates).toEqual([

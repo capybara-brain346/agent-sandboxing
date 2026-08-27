@@ -7,18 +7,20 @@ import type {
 } from "../../types/harness.types";
 import { buildWorkerBrief, type WorkerCorrection } from "./worker-brief";
 import { getPromptText } from "../../prompts/load-prompt";
+import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import { recordModelUsage } from "../eval/model-usage";
+import { logger } from "../../logger";
 
 export const MAX_DELEGATIONS_PER_TURN = 2;
 export const ORCHESTRATOR_MAX_STEPS = 6;
 
 export type OrchestratorAgentInput = {
-  sessionId: string;
-  repoRef: string;
   summary: string;
   recentMessages: OrchestratorChatMessage[];
   recentToolActivity: string[];
   workspace: OrchestratorContext["workspace"];
   message: string;
+  runId?: string;
   signal: AbortSignal;
   delegate: (brief: string) => Promise<WorkerResult>;
 };
@@ -34,6 +36,11 @@ export type OrchestratorAgent = {
 
 type WorkerBriefContext = Pick<OrchestratorContext, "summary" | "workspace">;
 
+type DelegationToolInput = {
+  context: WorkerBriefContext;
+  delegate: OrchestratorAgentInput["delegate"];
+};
+
 const toWorkerBriefContext = (
   input: OrchestratorAgentInput,
 ): WorkerBriefContext => ({
@@ -43,6 +50,54 @@ const toWorkerBriefContext = (
 
 const ORCHESTRATOR_SYSTEM_PROMPT = getPromptText("orchestrator");
 
+const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
+  const delegations: WorkerResult[] = [];
+  let lastCorrection: WorkerCorrection | undefined;
+
+  const delegateTool = tool({
+    description:
+      "Delegate a bounded, sandboxed coding attempt to the CodeWorker. " +
+      "Only call this for imperative, actionable requests — never for " +
+      "questions about past work or general conversation.",
+    inputSchema: z.object({
+      brief: z
+        .string()
+        .describe("A focused brief describing the coding work to do"),
+    }),
+    execute: async ({ brief }) => {
+      const previousResult = delegations.at(-1);
+      if (previousResult?.status === "failed") return previousResult;
+      if (delegations.length >= MAX_DELEGATIONS_PER_TURN) {
+        const blocked: WorkerResult = {
+          status: "blocked",
+          summary: "Delegation budget for this turn is exhausted.",
+          changedFiles: [],
+          testsRun: [],
+          blockers: ["max_delegations_reached"],
+          suggestedNextStep: "",
+        };
+        delegations.push(blocked);
+        return blocked;
+      }
+      const correction =
+        previousResult?.status === "blocked" ? lastCorrection : undefined;
+      const fullBrief = buildWorkerBrief(context, brief, correction);
+      const result = await delegate(fullBrief);
+      delegations.push(result);
+      lastCorrection =
+        result.status === "blocked"
+          ? {
+              blockers: result.blockers,
+              suggestedNextStep: result.suggestedNextStep,
+            }
+          : undefined;
+      return result;
+    },
+  });
+
+  return { delegateTool, delegations };
+};
+
 /**
  * Production agent: one context-aware generateText call that decides,
  * via real tool-calling, whether to reply directly or delegate to the
@@ -51,51 +106,15 @@ const ORCHESTRATOR_SYSTEM_PROMPT = getPromptText("orchestrator");
  * model's own prose.
  */
 export class ModelOrchestratorAgent implements OrchestratorAgent {
-  constructor(private readonly model: LanguageModel) {}
+  constructor(
+    private readonly model: LanguageModel,
+    private readonly recorder?: EvalTraceRecorderLike,
+  ) {}
 
   async decide(input: OrchestratorAgentInput): Promise<OrchestratorDecision> {
-    const context = toWorkerBriefContext(input);
-    const delegations: WorkerResult[] = [];
-    let lastCorrection: WorkerCorrection | undefined;
-
-    const delegateTool = tool({
-      description:
-        "Delegate a bounded, sandboxed coding attempt to the CodeWorker. " +
-        "Only call this for imperative, actionable requests — never for " +
-        "questions about past work or general conversation.",
-      inputSchema: z.object({
-        brief: z
-          .string()
-          .describe("A focused brief describing the coding work to do"),
-      }),
-      execute: async ({ brief }) => {
-        if (delegations.length >= MAX_DELEGATIONS_PER_TURN) {
-          const blocked: WorkerResult = {
-            status: "blocked",
-            summary: "Delegation budget for this turn is exhausted.",
-            changedFiles: [],
-            testsRun: [],
-            blockers: ["max_delegations_reached"],
-            suggestedNextStep: "",
-          };
-          delegations.push(blocked);
-          return blocked;
-        }
-        const previousResult = delegations.at(-1);
-        const correction =
-          previousResult?.status === "blocked" ? lastCorrection : undefined;
-        const fullBrief = buildWorkerBrief(context, brief, correction);
-        const result = await input.delegate(fullBrief);
-        delegations.push(result);
-        lastCorrection =
-          result.status === "blocked"
-            ? {
-                blockers: result.blockers,
-                suggestedNextStep: result.suggestedNextStep,
-              }
-            : undefined;
-        return result;
-      },
+    const { delegateTool, delegations } = createDelegationTool({
+      context: toWorkerBriefContext(input),
+      delegate: input.delegate,
     });
 
     const summaryLine = input.summary
@@ -105,25 +124,54 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
       ? `Recent tool activity:\n${input.recentToolActivity.join("\n")}`
       : "Recent tool activity: none.";
 
-    // Deliberately no `output` schema here: combined with `tools`, some
-    // models/providers unreliably skip tool-calling entirely in favor of
-    // schema-shaped prose (see agent-runner.ts for the same finding). The
-    // reply is a single free-text field, so plain result.text is enough.
-    const result = await generateText({
+    const startedAt = Date.now();
+    let result;
+    try {
+      result = await generateText({
+        model: this.model,
+        system: ORCHESTRATOR_SYSTEM_PROMPT,
+        messages: [
+          { role: "user", content: summaryLine },
+          { role: "user", content: toolActivityLine },
+          ...input.recentMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+          { role: "user", content: input.message },
+        ],
+        tools: { delegate_to_code_worker: delegateTool },
+        abortSignal: input.signal,
+        stopWhen: stepCountIs(ORCHESTRATOR_MAX_STEPS),
+      });
+    } catch (error) {
+      logger.debug("orchestrator_model_failed", {
+        runId: input.runId ?? null,
+        durationMs: Date.now() - startedAt,
+        outcome: input.signal.aborted ? "cancelled" : "failed",
+      });
+      recordModelUsage({
+        recorder: this.recorder,
+        runId: input.runId,
+        stage: "orchestrator",
+        model: this.model,
+        startedAt,
+        result: {},
+      });
+      throw error;
+    }
+    recordModelUsage({
+      recorder: this.recorder,
+      runId: input.runId,
+      stage: "orchestrator",
       model: this.model,
-      system: ORCHESTRATOR_SYSTEM_PROMPT,
-      messages: [
-        { role: "user", content: summaryLine },
-        { role: "user", content: toolActivityLine },
-        ...input.recentMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-        { role: "user", content: input.message },
-      ],
-      tools: { delegate_to_code_worker: delegateTool },
-      abortSignal: input.signal,
-      stopWhen: stepCountIs(ORCHESTRATOR_MAX_STEPS),
+      startedAt,
+      result,
+    });
+    logger.debug("orchestrator_model_completed", {
+      runId: input.runId ?? null,
+      durationMs: Date.now() - startedAt,
+      delegationCount: delegations.length,
+      replyPresent: result.text.trim().length > 0,
     });
 
     return {

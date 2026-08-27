@@ -11,6 +11,7 @@ import type {
   TaskRunContext,
   TaskRunner,
 } from "../src/services/task/task-runner";
+import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 
 const sessionId = "chat_1";
 const runId = "run_1";
@@ -34,6 +35,9 @@ type Harness = {
   publish: ReturnType<typeof vi.fn>;
   artifacts: ArtifactRecorder & {
     create: ReturnType<typeof vi.fn>;
+  };
+  traceRecorder: EvalTraceRecorderLike & {
+    finishRun: ReturnType<typeof vi.fn>;
   };
 };
 
@@ -146,6 +150,7 @@ const makeHarness = (
   const eventStore = {
     appendSessionEventInTransaction: vi.fn(appendScoped("session")),
     appendRunEventInTransaction: vi.fn(appendScoped("run")),
+    listRunEvents: vi.fn(async () => []),
   } as unknown as EventStore;
 
   const sandbox = {
@@ -166,6 +171,17 @@ const makeHarness = (
   };
 
   const publish = vi.fn();
+  const traceRecorder = {
+    startRun: vi.fn(),
+    recordOrchestratorContext: vi.fn(),
+    recordWorkerBrief: vi.fn(),
+    recordWorkerResult: vi.fn(),
+    recordOrchestratorReply: vi.fn(),
+    recordUsage: vi.fn(),
+    finishRun: vi.fn(async () => undefined),
+  } as unknown as EvalTraceRecorderLike & {
+    finishRun: ReturnType<typeof vi.fn>;
+  };
   let artifactSequence = 0;
   const artifacts = {
     create: vi.fn(async (input: { kind: string }) => ({
@@ -185,6 +201,7 @@ const makeHarness = (
     runner,
     publish,
     artifacts,
+    traceRecorder,
   );
 
   return {
@@ -196,6 +213,7 @@ const makeHarness = (
     chatMessages,
     publish,
     artifacts,
+    traceRecorder,
   };
 };
 
@@ -214,6 +232,18 @@ describe("RunService", () => {
     harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
 
     await vi.waitFor(() => expect(harness.status.value).toBe("completed"));
+    await vi.waitFor(() =>
+      expect(harness.traceRecorder.finishRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId,
+          terminal: expect.objectContaining({
+            status: "completed",
+            exitReason: "completed",
+            diffPresent: true,
+          }),
+        }),
+      ),
+    );
 
     expect(harness.sandbox.createForSessionInTransaction).toHaveBeenCalledWith(
       expect.anything(),
@@ -282,6 +312,17 @@ describe("RunService", () => {
 
     expect(harness.service.requestCancellation(sessionId, runId)).toBe(true);
     await vi.waitFor(() => expect(harness.status.value).toBe("cancelled"));
+    await vi.waitFor(() =>
+      expect(harness.traceRecorder.finishRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId,
+          terminal: expect.objectContaining({
+            status: "cancelled",
+            exitReason: "cancelled",
+          }),
+        }),
+      ),
+    );
 
     expect(context?.signal.aborted).toBe(true);
     expect(harness.session.activeRunId).toBeNull();
@@ -348,6 +389,17 @@ describe("RunService", () => {
 
     harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
     await vi.waitFor(() => expect(harness.status.value).toBe("failed"));
+    await vi.waitFor(() =>
+      expect(harness.traceRecorder.finishRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId,
+          terminal: expect.objectContaining({
+            status: "failed",
+            exitReason: "failed",
+          }),
+        }),
+      ),
+    );
 
     expect(harness.artifacts.create).toHaveBeenCalledWith(
       expect.objectContaining({

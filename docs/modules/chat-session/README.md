@@ -90,6 +90,16 @@ Cancellation marks the transitional run `cancelled`, clears the session lock,
 and writes session and run cancellation/result events after the transaction
 commits.
 
+## Debug logging
+
+The chat boundary emits structured debug logs for session creation, message and
+run scheduling, and cancellation mode selection. Logs carry session, message,
+and run IDs plus event counts; message content and run instructions are not
+logged. Run execution, sandbox, agent, and SSE logs provide the lower-level
+diagnostic details described in their module guides. Backend logs are JSON-only.
+`LOG_LEVEL` controls emission, and `LOG_COLOR` can color JSON lines for TTY
+readability; non-TTY output remains clean JSON by default.
+
 ## Event streams
 
 The session SSE route replays the ordered `session` stream. The nested run SSE
@@ -124,18 +134,17 @@ by the Agent Service:
   the worker — the orchestrator never edits code.
 - On a code turn, `buildWorkerBrief` composes a focused brief (session
   summary + workspace hint + the instruction, not the chat transcript) and
-  hands it to `CodeWorkerRunner`, which wraps the existing agent tool loop
-  (`taskServiceRunner`) and parses its free text into a schema-validated
-  `WorkerResult` (`status`, `summary`, `changedFiles`, `testsRun`, `blockers`,
-  `suggestedNextStep`). A worker that skips the JSON fence still produces a
-  usable `completed` result from its free text; only an explicit
-  `blocked`/`failed` status changes the run outcome.
+  hands it through the narrow `CodeWorker` contract to `AgentRunner`, which
+  returns a schema-validated `WorkerResult` (`status`, `summary`,
+  `changedFiles`, `testsRun`, `blockers`, `suggestedNextStep`) directly. The
+  chat harness does not serialize and reparse the worker result.
 - If the worker reports `blocked`, the orchestrator retries once with a
   narrow correction brief built from the worker's blockers/suggested next
-  step (`DEFAULT_MAX_WORKER_ATTEMPTS`, currently 2). If it still isn't
-  `completed` after the attempt budget, `blocked` becomes an actionable
-  assistant message and `failed` becomes a thrown `ServiceError` so
-  `RunService` marks the run failed instead of silently completing it.
+  step (`DEFAULT_MAX_WORKER_ATTEMPTS`, currently 2). A `failed` result is
+  terminal and is never delegated again. If the worker is still blocked after
+  the attempt budget, `blocked` becomes an actionable assistant message and
+  `failed` becomes a thrown `ServiceError` so `RunService` marks the run failed
+  instead of silently completing it.
 - When the context builder reaches the compaction interval, the injected
   `SessionSummaryCompactor` rewrites (not appends to) the session's bounded
   `ChatSession.summary`: `Objective` is set once and carried forward,
@@ -194,10 +203,34 @@ terminology only. The historical `/tasks` contract is documented for
 reference in [`docs/modules/task-service/README.md`](../task-service/README.md#history).
 
 `src/services/task/task.ts` still exists as shared execution runtime
-(`canTransition`, `taskServiceRunner`, `taskServiceArtifacts`) consumed only
+(`canTransition`, `taskServiceWorker`, `taskServiceArtifacts`) consumed only
 by this module — see
 [`docs/modules/task-service/README.md`](../task-service/README.md) for what
 remains and why.
+
+## Trace export
+
+Each run is normalized as one `chat_run` trace by
+[`EvalTraceRecorder`](../../../src/services/eval/eval-trace-recorder.ts). The
+recorder starts with the bounded user prompt, captures context facts,
+delegation briefs and worker results, records model usage, and finalizes after
+the terminal run transition with diff, artifact, assistant-message, and
+persisted tool-event facts. Tool calls and results are paired by their existing
+correlation IDs; `ToolEventRelay` event semantics are unchanged.
+
+Langfuse export uses the JavaScript SDK v4 packages
+`@langfuse/tracing@4.6.1` and `@langfuse/otel@4.6.1`. The Langfuse sink uses a
+deterministic W3C trace ID derived from the run ID and stores the original run
+ID in metadata because SDK v4 requires a 32-character hexadecimal trace ID.
+The trace contains nested orchestrator, worker agent, generation, tool, and
+terminal-finalization observations. Langfuse flushes are best effort and
+cannot fail a user run.
+
+Set `LANGFUSE_ENABLED=true` with both API keys to enable the remote sink. Set
+`LOCAL_TRACE_EXPORT_ENABLED=true` to append the same normalized traces as JSON
+lines to `LOCAL_TRACE_EXPORT_PATH`. Context snapshots are excluded unless
+`EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED=true` is explicitly set for evaluation or
+debugging.
 
 ## Verification
 
@@ -205,8 +238,9 @@ Run the focused API tests and repository checks from the project root:
 
 ```bash
 npm test -- tests/chat-routes.test.ts tests/chat-session-service.test.ts tests/run-service.test.ts tests/sandbox-service.test.ts
-npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/code-worker-runner.test.ts tests/harness-integration.test.ts
+npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/harness-integration.test.ts
 npm test -- tests/artifact-store.test.ts tests/agent-tool-relay.test.ts
+npm test -- tests/eval-trace.test.ts tests/config.test.ts tests/agent-runner.test.ts tests/orchestrator-agent.test.ts tests/run-orchestrator.test.ts tests/session-summary.test.ts
 npm run typecheck
 npm run lint
 npm test

@@ -4,12 +4,16 @@ import { prisma } from "../../db/prisma";
 import { loadConfig } from "../../config";
 import { ServiceError, notFound } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
+import { logger } from "../../logger";
 import { EventStore } from "../events/event-store";
 import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
-import { taskServiceArtifacts, taskServiceRunner } from "../task/task";
+import {
+  taskServiceArtifacts,
+  taskServiceTraceRecorder,
+  taskServiceWorker,
+} from "../task/task";
 import { resolveAgentModel } from "../agent/model";
-import { CodeWorkerRunner } from "../agent/code-worker-runner";
 import { RunService } from "../task/run-service";
 import { ArtifactStore } from "../artifacts/artifact-store";
 import type { ArtifactContent } from "../../types/artifact.types";
@@ -17,6 +21,7 @@ import { RunOrchestrator } from "./run-orchestrator";
 import { ModelOrchestratorAgent } from "../agent/orchestrator-agent";
 import { SessionContextBuilder } from "./session-context-builder";
 import { ModelSessionSummaryCompactor } from "../agent/session-summary-compactor";
+import { PlaceholderTaskRunner } from "../task/task-runner";
 import type { PublicEvent } from "../../types/event.types";
 import type {
   ChatMessage,
@@ -282,6 +287,7 @@ export class ChatSessionService {
       }),
     );
     this.publish(result.event);
+    logger.debug("chat_session_created", { sessionId });
     return sessionView({ ...result.session, sandbox: null, runs: [] });
   }
 
@@ -553,6 +559,13 @@ export class ChatSessionService {
         }),
     );
     for (const event of result.events) this.publish(event);
+    logger.debug("chat_message_appended", {
+      sessionId,
+      messageId,
+      runId,
+      startRun: result.run !== null,
+      eventCount: result.events.length,
+    });
     if (result.run)
       this.runService.createRunForMessage(
         sessionId,
@@ -654,8 +667,14 @@ export class ChatSessionService {
         409,
       );
 
-    if (!this.runService.requestCancellation(sessionId, runId))
-      await this.runService.cancelDirectly(sessionId, runId);
+    const tracked = this.runService.requestCancellation(sessionId, runId);
+    logger.debug("run_cancellation_requested", {
+      sessionId,
+      runId,
+      previousStatus: current.status,
+      mode: tracked ? "tracked" : "direct",
+    });
+    if (!tracked) await this.runService.cancelDirectly(sessionId, runId);
 
     return {
       taskRunId: runId,
@@ -734,13 +753,20 @@ const publishChatEvent = (event: PublicEvent): void => sseHub.publish(event);
 const chatHarnessConfig = loadConfig();
 const chatRunner =
   chatHarnessConfig.NODE_ENV === "test"
-    ? taskServiceRunner
+    ? new PlaceholderTaskRunner()
     : new RunOrchestrator(
         prisma,
         new SessionContextBuilder(prisma, chatSessionEvents),
-        new ModelSessionSummaryCompactor(resolveAgentModel(chatHarnessConfig)),
-        new CodeWorkerRunner(taskServiceRunner),
-        new ModelOrchestratorAgent(resolveAgentModel(chatHarnessConfig)),
+        new ModelSessionSummaryCompactor(
+          resolveAgentModel(chatHarnessConfig),
+          taskServiceTraceRecorder,
+        ),
+        taskServiceWorker,
+        new ModelOrchestratorAgent(
+          resolveAgentModel(chatHarnessConfig),
+          taskServiceTraceRecorder,
+        ),
+        taskServiceTraceRecorder,
       );
 const chatRunService = new RunService(
   prisma,
@@ -749,6 +775,7 @@ const chatRunService = new RunService(
   chatRunner,
   publishChatEvent,
   taskServiceArtifacts,
+  taskServiceTraceRecorder,
 );
 export const chatSessionService = new ChatSessionService(
   prisma,

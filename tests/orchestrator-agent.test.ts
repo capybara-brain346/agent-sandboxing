@@ -6,6 +6,7 @@ import {
   type OrchestratorAgentInput,
 } from "../src/services/agent/orchestrator-agent";
 import type { WorkerResult } from "../src/types/harness.types";
+import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -29,8 +30,6 @@ const workerResult = (overrides: Partial<WorkerResult> = {}): WorkerResult => ({
 const baseInput = (
   overrides: Partial<OrchestratorAgentInput> = {},
 ): OrchestratorAgentInput => ({
-  sessionId: "chat_1",
-  repoRef: "./repo",
   summary: "Objective: do X",
   recentMessages: [],
   recentToolActivity: [],
@@ -41,6 +40,7 @@ const baseInput = (
     changedFilesHint: [],
   },
   message: "fix the bug",
+  runId: "run_1",
   signal: new AbortController().signal,
   delegate: vi.fn(async () => workerResult()),
   ...overrides,
@@ -60,6 +60,31 @@ describe("ModelOrchestratorAgent", () => {
     expect(decision.delegations).toEqual([]);
     expect(aiMocks.generateText).toHaveBeenCalledWith(
       expect.objectContaining({ abortSignal: signal }),
+    );
+  });
+
+  it("records model usage for a direct orchestrator reply", async () => {
+    aiMocks.generateText.mockResolvedValueOnce({
+      text: "direct reply",
+      usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+    });
+    const recorder = {
+      recordUsage: vi.fn(),
+    } as unknown as EvalTraceRecorderLike;
+    const agent = new ModelOrchestratorAgent({} as LanguageModel, recorder);
+
+    await agent.decide(baseInput());
+
+    expect(recorder.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run_1",
+        stage: "orchestrator",
+        usage: expect.objectContaining({
+          inputTokens: 4,
+          outputTokens: 2,
+          totalTokens: 6,
+        }),
+      }),
     );
   });
 
@@ -95,5 +120,23 @@ describe("ModelOrchestratorAgent", () => {
     expect(decision.delegations.at(-1)?.blockers).toEqual([
       "max_delegations_reached",
     ]);
+  });
+
+  it("does not retry a failed delegation", async () => {
+    const failed = workerResult({
+      status: "failed",
+      blockers: ["the attempt failed"],
+    });
+    const delegate = vi.fn(async () => failed);
+    aiMocks.generateText.mockImplementationOnce(async (options) => {
+      const tool = options.tools.delegate_to_code_worker;
+      await tool.execute({ brief: "fix the bug" }, {} as never);
+      await tool.execute({ brief: "retry the bug" }, {} as never);
+      return { text: "The attempt failed." };
+    });
+    const agent = new ModelOrchestratorAgent({} as LanguageModel);
+    const decision = await agent.decide(baseInput({ delegate }));
+    expect(delegate).toHaveBeenCalledTimes(1);
+    expect(decision.delegations).toEqual([failed]);
   });
 });
