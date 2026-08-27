@@ -69,6 +69,25 @@ const snapshot = (runId: string): RunSnapshot => ({
   failure: null,
 });
 
+const event = (runId: string, sandboxId = "sbox_eval"): PublicEvent => ({
+  id: `evt_${runId}`,
+  streamId: runId,
+  streamScope: "run",
+  domain: "sandbox",
+  sessionId: "chat_eval",
+  runId,
+  taskId: null,
+  sandboxId,
+  commandId: null,
+  sequence: 1,
+  type: "sandbox_ready",
+  producerService: "sandbox",
+  producerId: sandboxId,
+  correlationId: "corr_eval",
+  payload: {},
+  createdAt: "2026-01-01T00:00:00.000Z",
+});
+
 const message = (
   runId: string,
   content = "Updated README.md and completed the requested change.",
@@ -85,6 +104,7 @@ const fakeService = (
   repositoryPaths: string[],
   resultDiff = "diff --git a/README.md b/README.md\n+Acme Tools is ready for teams.",
   assistantContent = "Updated README.md and completed the requested change.",
+  snapshotSandboxId: string | null = "sbox_eval",
 ): RepoEvalChatSessionService => {
   const session: CreateSessionResponse = {
     chatSessionId: "chat_eval",
@@ -157,10 +177,13 @@ const fakeService = (
         taskRunId: runId,
         createdAt: "2026-01-01T00:00:00.000Z",
       },
-      run: snapshot(runId),
+      run: { ...snapshot(runId), sandboxId: snapshotSandboxId },
       eventsUrl: snapshot(runId).eventsUrl,
     })),
-    getRun: vi.fn(async () => snapshot(runId)),
+    getRun: vi.fn(async () => ({
+      ...snapshot(runId),
+      sandboxId: snapshotSandboxId,
+    })),
     result: vi.fn(async () => result),
     listMessages: vi.fn(
       async (): Promise<{
@@ -171,7 +194,7 @@ const fakeService = (
         nextCursor: null,
       }),
     ),
-    runEventsAfter: vi.fn(async (): Promise<PublicEvent[]> => []),
+    runEventsAfter: vi.fn(async (): Promise<PublicEvent[]> => [event(runId)]),
     getArtifact: vi.fn(async (): Promise<ArtifactContent> => workerArtifact),
   };
 };
@@ -329,6 +352,55 @@ describe("repo eval suite", () => {
       expect(
         (await readFile(resultsPath, "utf8")).trim().split("\n"),
       ).toHaveLength(1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses run event sandbox id for post-run checks", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "repo-evals-event-sandbox-"),
+    );
+    const resultsPath = join(directory, "results.jsonl");
+    const casesPath = join(directory, "cases.jsonl");
+    const paths: string[] = [];
+    const base = loadRepoCases()[2];
+    if (!base) throw new Error("repo case not found");
+    const testCase = {
+      ...base,
+      expect: {
+        ...base.expect,
+        postRunCommands: ["python -m pytest tests/test_cli.py"],
+      },
+    };
+    try {
+      await writeFile(casesPath, `${JSON.stringify(testCase)}\n`, "utf8");
+      const service = fakeService(
+        paths,
+        "diff --git a/README.md b/README.md\n+Acme Tools is ready for teams.",
+        "Verified with pytest.",
+        null,
+      );
+      service.runPostRunCommand = vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+        truncated: false,
+      }));
+
+      await runRepoEvals({
+        service,
+        casesPath,
+        fixturesDir: join(process.cwd(), "tests/evals/fixtures"),
+        resultsPath,
+        timeoutMs: 100,
+        pollIntervalMs: 1,
+      });
+
+      expect(service.runPostRunCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ sandboxId: "sbox_eval" }),
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

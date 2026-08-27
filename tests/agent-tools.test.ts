@@ -208,6 +208,15 @@ describe("sandbox-proxied agent tools", () => {
     expect(() => validateBashCommand(command)).toThrow(ServiceError);
   });
 
+  it.each([
+    "python -m pytest tests/test_config.py",
+    "python3 verify_fix.py",
+    "pytest tests/test_cli.py -k test_help",
+    "uv run pytest tests/test_text_utils.py",
+  ])("allows Python fixture verification: %s", (command) => {
+    expect(validateBashCommand(command)).toBe(command);
+  });
+
   it("treats grep exit code one as an empty match result", async () => {
     const fake = runtime({ ...success(), exitCode: 1 });
     const result = await execute(

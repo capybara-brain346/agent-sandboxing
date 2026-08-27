@@ -80,7 +80,8 @@ failures locally.
 
 ## Repo eval suite
 
-`npm run eval:repo` runs the ten repository cases in
+`npm run eval:repo` builds `agent-sandboxing-eval-sandbox:latest` from
+[`Dockerfile.eval`](../../../Dockerfile.eval), then runs the ten repository cases in
 [`tests/evals/cases/repo.jsonl`](../../../tests/evals/cases/repo.jsonl) through
 the real chat-session service seam. Each case is copied to a temporary Git
 repository, executed in its own chat session, and removed after the terminal
@@ -98,9 +99,9 @@ snippets, required response text, test mentions, and blocker mentions.
 
 The suite requires the same database, Docker, model, and provider settings as a
 live agent run. It passes when at least nine of ten cases pass all deterministic
-scores and no case changes a forbidden file or diff snippet. The runner uses
-`SANDBOX_IMAGE` for the fixture container, so the configured image must provide
-the fixture's Python and Git tooling.
+scores and no case changes a forbidden file or diff snippet. The eval sandbox
+image keeps the runtime's `node` user contract while adding Git, Python,
+pytest, and uv for the Python fixture's verification commands.
 
 ## Composition and model configuration
 

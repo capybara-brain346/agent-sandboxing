@@ -93,7 +93,9 @@ Provisioning currently:
 1. Resolves and validates the configured fixture directory, defaulting to
    `./repo`.
 2. Creates one named container using `SANDBOX_IMAGE` (default
-   `node:22-bookworm`).
+   `node:22-bookworm`). Repo eval scripts override this with the project-built
+   `agent-sandboxing-eval-sandbox:latest` image so the Python fixture can run
+   pytest while preserving the sandbox `node` user contract.
 3. Applies the configured memory, CPU, and PID limits.
 4. Starts the container with an idle `sleep infinity` process.
 5. Creates `/workspace/repo` and copies the fixture contents, including

@@ -420,18 +420,22 @@ const runRepoCase = async (
         options.pollIntervalMs,
       );
       activeRun = undefined;
-      if (snapshot.sandboxId)
-        finalRun = {
-          sessionId: session.chatSessionId,
-          runId,
-          sandboxId: snapshot.sandboxId,
-        };
       const result = await service.result(session.chatSessionId, runId);
       const events = await service.runEventsAfter(
         session.chatSessionId,
         runId,
         0,
       );
+      const sandboxId =
+        snapshot.sandboxId ??
+        events.find((event) => event.sandboxId !== null)?.sandboxId ??
+        null;
+      if (sandboxId)
+        finalRun = {
+          sessionId: session.chatSessionId,
+          runId,
+          sandboxId,
+        };
       const messages = await service.listMessages(session.chatSessionId, {
         limit: 100,
       });
