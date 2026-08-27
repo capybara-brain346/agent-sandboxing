@@ -30,7 +30,12 @@ export type GitHubInstallationRecord = {
   accountType: string;
 };
 
+export type GitHubAppInstallationRecord = GitHubInstallationRecord & {
+  installationId: string;
+};
+
 export type GitHubApi = {
+  listAppInstallations(): Promise<GitHubAppInstallationRecord[]>;
   listOAuthRepositories(accessToken: string): Promise<GitHubRepositoryRecord[]>;
   getInstallation(installationId: string): Promise<GitHubInstallationRecord>;
   listInstallationRepositories(
@@ -58,6 +63,38 @@ class OctokitGitHubApi implements GitHubApi {
       appId: config.GITHUB_APP_ID,
       privateKey: config.GITHUB_APP_PRIVATE_KEY,
     });
+  }
+
+  async listAppInstallations(): Promise<GitHubAppInstallationRecord[]> {
+    const installations: GitHubAppInstallationRecord[] = [];
+    for (let page = 1; ; page += 1) {
+      const response = await this.app.octokit.request(
+        "GET /app/installations",
+        {
+          per_page: 100,
+          page,
+        },
+      );
+      const data = response.data as Array<{
+        id: number;
+        account: { id: number; login: string; type: string } | null;
+      }>;
+      installations.push(
+        ...data.flatMap((installation) =>
+          installation.account
+            ? [
+                {
+                  installationId: String(installation.id),
+                  accountId: String(installation.account.id),
+                  accountLogin: installation.account.login,
+                  accountType: installation.account.type,
+                },
+              ]
+            : [],
+        ),
+      );
+      if (data.length < 100) return installations;
+    }
   }
 
   async listOAuthRepositories(
@@ -222,6 +259,65 @@ export class GitHubService {
     }
   }
 
+  private async installationsForUser(
+    userId: string,
+    githubUserId: string,
+  ): Promise<
+    Array<{ installationId: string; accountLogin: string; accountType: string }>
+  > {
+    const saved = await this.prisma.gitHubInstallation.findMany({
+      where: { userId },
+      orderBy: { accountLogin: "asc" },
+      select: {
+        installationId: true,
+        accountLogin: true,
+        accountType: true,
+      },
+    });
+    const installations = saved.filter(
+      (installation) => installation.accountType.toLowerCase() === "user",
+    );
+    const known = new Set(
+      installations.map((installation) => installation.installationId),
+    );
+    for (const installation of await this.api.listAppInstallations()) {
+      if (
+        installation.accountType.toLowerCase() !== "user" ||
+        installation.accountId !== githubUserId ||
+        known.has(installation.installationId)
+      )
+        continue;
+      const next = await this.prisma.gitHubInstallation.upsert({
+        where: {
+          userId_installationId: {
+            userId,
+            installationId: installation.installationId,
+          },
+        },
+        create: {
+          userId,
+          installationId: installation.installationId,
+          accountLogin: installation.accountLogin,
+          accountType: "User",
+        },
+        update: {
+          accountLogin: installation.accountLogin,
+          accountType: "User",
+        },
+        select: {
+          installationId: true,
+          accountLogin: true,
+          accountType: true,
+        },
+      });
+      known.add(next.installationId);
+      installations.push(next);
+    }
+    return installations.sort((left, right) =>
+      left.accountLogin.localeCompare(right.accountLogin),
+    );
+  }
+
   async repositories(userId: string): Promise<GitHubRepositoriesResponse> {
     try {
       const [user, token] = await Promise.all([
@@ -244,15 +340,10 @@ export class GitHubService {
           "Reconnect GitHub to refresh repository access",
           401,
         );
-      const installations = await this.prisma.gitHubInstallation.findMany({
-        where: { userId },
-        orderBy: { accountLogin: "asc" },
-        select: {
-          installationId: true,
-          accountLogin: true,
-          accountType: true,
-        },
-      });
+      const installations = await this.installationsForUser(
+        userId,
+        user.githubUserId,
+      );
       const accessToken = decryptToken(
         {
           ciphertext: token.accessTokenCiphertext,
@@ -280,11 +371,6 @@ export class GitHubService {
         for (const repository of installed) {
           const oauthRepository = visible.get(repository.id);
           if (!oauthRepository || repositories.has(repository.id)) continue;
-          const branches = await this.api.listBranches(
-            installation.installationId,
-            repository.ownerLogin,
-            repository.name,
-          );
           repositories.set(repository.id, {
             repoId: repository.id,
             owner: repository.ownerLogin,
@@ -293,25 +379,93 @@ export class GitHubService {
             private: oauthRepository.private,
             defaultBranch: repository.defaultBranch,
             installationId: installation.installationId,
-            branches,
+            branches: [],
           });
         }
       }
       return {
-        installations: installations
-          .filter(
-            (installation) => installation.accountType.toLowerCase() === "user",
-          )
-          .map((installation) => ({
-            installationId: installation.installationId,
-            accountLogin: installation.accountLogin,
-            accountType: "user" as const,
-          })),
+        installations: installations.map((installation) => ({
+          installationId: installation.installationId,
+          accountLogin: installation.accountLogin,
+          accountType: "user" as const,
+        })),
         repositories: [...repositories.values()].sort((left, right) =>
           left.fullName.localeCompare(right.fullName),
         ),
         installUrl: this.installUrl(),
       };
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      throw new ServiceError(
+        "github_reconnect_required",
+        "Reconnect GitHub to refresh repository access",
+        401,
+      );
+    }
+  }
+
+  async branches(userId: string, repoId: string): Promise<GitHubBranch[]> {
+    try {
+      const [user, token] = await Promise.all([
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { githubUserId: true },
+        }),
+        this.prisma.gitHubOAuthToken.findUnique({
+          where: { userId },
+          select: {
+            accessTokenCiphertext: true,
+            accessTokenIv: true,
+            accessTokenTag: true,
+          },
+        }),
+      ]);
+      if (!user || !token)
+        throw new ServiceError(
+          "github_reconnect_required",
+          "Reconnect GitHub to refresh repository access",
+          401,
+        );
+      const installations = await this.installationsForUser(
+        userId,
+        user.githubUserId,
+      );
+      const accessToken = decryptToken(
+        {
+          ciphertext: token.accessTokenCiphertext,
+          iv: token.accessTokenIv,
+          tag: token.accessTokenTag,
+        },
+        this.config.AUTH_TOKEN_ENCRYPTION_KEY,
+      );
+      const visible = new Set(
+        (await this.api.listOAuthRepositories(accessToken))
+          .filter(
+            (repository) =>
+              repository.ownerType.toLowerCase() === "user" &&
+              repository.ownerId === user.githubUserId,
+          )
+          .map((repository) => repository.id),
+      );
+      for (const installation of installations) {
+        const installed = await this.api.listInstallationRepositories(
+          installation.installationId,
+        );
+        const repository = installed.find(
+          (candidate) => candidate.id === repoId && visible.has(candidate.id),
+        );
+        if (repository)
+          return this.api.listBranches(
+            installation.installationId,
+            repository.ownerLogin,
+            repository.name,
+          );
+      }
+      throw new ServiceError(
+        "github_repository_not_found",
+        "Repository was not found",
+        404,
+      );
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(

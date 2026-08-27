@@ -1,15 +1,15 @@
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../src/config";
-import { githubRouter, githubService } from "../src/routes/github.routes";
+import {
+  githubConfig,
+  githubRouter,
+  githubService,
+} from "../src/routes/github.routes";
 import { AUTH_COOKIE_NAME, signSessionToken } from "../src/services/auth/auth";
 import { ServiceError } from "../src/shared/errors";
 
-const config = loadConfig({
-  NODE_ENV: "test",
-  DATABASE_URL: "postgresql://test",
-});
+const config = githubConfig;
 const authCookie = `${AUTH_COOKIE_NAME}=${await signSessionToken(
   {
     sub: "user_1",
@@ -55,7 +55,7 @@ describe("GitHub routes", () => {
     expect(response.headers.location).toBe(config.GITHUB_APP_INSTALL_URL);
   });
 
-  it("returns repository and branch metadata", async () => {
+  it("returns repository metadata without eager branch loading", async () => {
     vi.spyOn(githubService, "repositories").mockResolvedValue({
       installations: [
         { installationId: "10", accountLogin: "octo", accountType: "user" },
@@ -69,7 +69,7 @@ describe("GitHub routes", () => {
           private: true,
           defaultBranch: "main",
           installationId: "10",
-          branches: [{ name: "main", sha: "abc", protected: true }],
+          branches: [],
         },
       ],
       installUrl: config.GITHUB_APP_INSTALL_URL,
@@ -78,7 +78,18 @@ describe("GitHub routes", () => {
       .get("/github/repositories")
       .set("Cookie", authCookie);
     expect(response.status).toBe(200);
-    expect(response.body.repositories[0].branches[0]).toEqual({
+    expect(response.body.repositories[0].branches).toEqual([]);
+  });
+
+  it("returns branches for one repository", async () => {
+    vi.spyOn(githubService, "branches").mockResolvedValue([
+      { name: "main", sha: "abc", protected: true },
+    ]);
+    const response = await request(makeApp())
+      .get("/github/repositories/1/branches")
+      .set("Cookie", authCookie);
+    expect(response.status).toBe(200);
+    expect(response.body[0]).toEqual({
       name: "main",
       sha: "abc",
       protected: true,
@@ -95,7 +106,7 @@ describe("GitHub routes", () => {
       .get("/github/install/callback?installation_id=10")
       .set("Cookie", authCookie);
     expect(response.status).toBe(302);
-    expect(response.headers.location).toBe("/repos");
+    expect(response.headers.location).toBe(`${config.APP_BASE_URL}/repos`);
     expect(save).toHaveBeenCalledWith("user_1", "10");
   });
 
@@ -105,7 +116,7 @@ describe("GitHub routes", () => {
       .set("Cookie", authCookie);
     expect(response.status).toBe(302);
     expect(response.headers.location).toBe(
-      "/repos?error=github_installation_cancelled",
+      `${config.APP_BASE_URL}/repos?error=github_installation_cancelled`,
     );
   });
 });

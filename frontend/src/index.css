@@ -554,6 +554,10 @@ a.button {
   gap: 16px;
 }
 
+.repo-picker__hint {
+  grid-column: 1 / -1;
+}
+
 .field select {
   font: inherit;
   padding: 8px 12px;
@@ -581,6 +585,12 @@ a.button {
   margin: 6px 0 16px;
   color: var(--color-fg-muted);
   font-size: 13px;
+}
+
+.empty-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .repo-card__body {

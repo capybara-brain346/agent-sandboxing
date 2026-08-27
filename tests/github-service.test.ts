@@ -16,6 +16,7 @@ describe("GitHubService", () => {
       config.AUTH_TOKEN_ENCRYPTION_KEY,
     );
     const api: GitHubApi = {
+      listAppInstallations: vi.fn(async () => []),
       listOAuthRepositories: vi.fn(async () => [
         {
           id: "1",
@@ -100,15 +101,12 @@ describe("GitHubService", () => {
           private: true,
           defaultBranch: "trunk",
           installationId: "10",
-          branches: [
-            { name: "main", sha: "abc", protected: true },
-            { name: "feature", sha: "def", protected: false },
-          ],
+          branches: [],
         },
       ],
       installUrl: config.GITHUB_APP_INSTALL_URL,
     });
-    expect(api.listBranches).toHaveBeenCalledWith("10", "octo", "repo");
+    expect(api.listBranches).not.toHaveBeenCalled();
   });
 
   it("only saves installations owned by the authenticated personal account", async () => {
@@ -118,6 +116,7 @@ describe("GitHubService", () => {
       accountType: "User",
     }));
     const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
       listOAuthRepositories: vi.fn(),
       listInstallationRepositories: vi.fn(),
       listBranches: vi.fn(),
@@ -151,5 +150,145 @@ describe("GitHubService", () => {
       code: "github_installation_not_allowed",
       status: 403,
     });
+  });
+
+  it("saves an already-installed personal app installation while listing repositories", async () => {
+    const encrypted = encryptToken(
+      "oauth-token",
+      config.AUTH_TOKEN_ENCRYPTION_KEY,
+    );
+    const upsert = vi.fn(async () => ({
+      installationId: "10",
+      accountLogin: "octo",
+      accountType: "User",
+    }));
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(async () => [
+        {
+          installationId: "10",
+          accountId: "42",
+          accountLogin: "octo",
+          accountType: "User",
+        },
+      ]),
+      listOAuthRepositories: vi.fn(async () => [
+        {
+          id: "1",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "repo",
+          fullName: "octo/repo",
+          private: true,
+          defaultBranch: "main",
+        },
+      ]),
+      getInstallation: vi.fn(),
+      listInstallationRepositories: vi.fn(async () => [
+        {
+          id: "1",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "repo",
+          fullName: "octo/repo",
+          private: true,
+          defaultBranch: "main",
+        },
+      ]),
+      listBranches: vi.fn(async () => [
+        { name: "main", sha: "abc", protected: false },
+      ]),
+    };
+    const prisma = {
+      user: { findUnique: vi.fn(async () => ({ githubUserId: "42" })) },
+      gitHubOAuthToken: {
+        findUnique: vi.fn(async () => ({
+          accessTokenCiphertext: encrypted.ciphertext,
+          accessTokenIv: encrypted.iv,
+          accessTokenTag: encrypted.tag,
+        })),
+      },
+      gitHubInstallation: {
+        findMany: vi.fn(async () => []),
+        upsert,
+      },
+    } as unknown as PrismaClient;
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(service.repositories("user_1")).resolves.toMatchObject({
+      installations: [
+        { installationId: "10", accountLogin: "octo", accountType: "user" },
+      ],
+      repositories: [{ fullName: "octo/repo", installationId: "10" }],
+    });
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ installationId: "10" }),
+      }),
+    );
+  });
+
+  it("loads branches for one selected repository", async () => {
+    const encrypted = encryptToken(
+      "oauth-token",
+      config.AUTH_TOKEN_ENCRYPTION_KEY,
+    );
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(async () => []),
+      listOAuthRepositories: vi.fn(async () => [
+        {
+          id: "1",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "repo",
+          fullName: "octo/repo",
+          private: true,
+          defaultBranch: "main",
+        },
+      ]),
+      getInstallation: vi.fn(),
+      listInstallationRepositories: vi.fn(async () => [
+        {
+          id: "1",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "repo",
+          fullName: "octo/repo",
+          private: true,
+          defaultBranch: "main",
+        },
+      ]),
+      listBranches: vi.fn(async () => [
+        { name: "main", sha: "abc", protected: false },
+      ]),
+    };
+    const prisma = {
+      user: { findUnique: vi.fn(async () => ({ githubUserId: "42" })) },
+      gitHubOAuthToken: {
+        findUnique: vi.fn(async () => ({
+          accessTokenCiphertext: encrypted.ciphertext,
+          accessTokenIv: encrypted.iv,
+          accessTokenTag: encrypted.tag,
+        })),
+      },
+      gitHubInstallation: {
+        findMany: vi.fn(async () => [
+          {
+            installationId: "10",
+            accountLogin: "octo",
+            accountType: "User",
+          },
+        ]),
+      },
+    } as unknown as PrismaClient;
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(service.branches("user_1", "1")).resolves.toEqual([
+      { name: "main", sha: "abc", protected: false },
+    ]);
+    expect(api.listBranches).toHaveBeenCalledWith("10", "octo", "repo");
   });
 });

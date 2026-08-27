@@ -64,7 +64,7 @@ describe("auth routes", () => {
     const logout = await request(makeApp())
       .post("/auth/logout")
       .set("Cookie", cookie)
-      .set("Origin", "http://localhost:3000");
+      .set("Origin", config.APP_BASE_URL);
     expect(logout.status).toBe(204);
     expect(logout.headers["set-cookie"][0]).toContain(
       `${AUTH_COOKIE_NAME}=; Max-Age=0`,
@@ -99,7 +99,9 @@ describe("auth routes", () => {
       "/auth/github/callback?code=code&state=state",
     );
     expect(response.status).toBe(302);
-    expect(response.headers.location).toBe("/login?error=auth_state_invalid");
+    expect(response.headers.location).toBe(
+      `${config.APP_BASE_URL}/login?error=auth_state_invalid`,
+    );
   });
 
   it("sets an app session after a successful OAuth callback", async () => {
@@ -117,7 +119,7 @@ describe("auth routes", () => {
       .get(`/auth/github/callback?code=code&state=${state.state}`)
       .set("Cookie", `${OAUTH_STATE_COOKIE_NAME}=${state.token}`);
     expect(response.status).toBe(302);
-    expect(response.headers.location).toBe("/repos");
+    expect(response.headers.location).toBe(`${config.APP_BASE_URL}/repos`);
     expect(response.headers["set-cookie"].join(";")).toContain(
       `${AUTH_COOKIE_NAME}=`,
     );

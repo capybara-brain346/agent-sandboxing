@@ -26,9 +26,11 @@ MVP only, matching the current session API surface:
 - **Login** (`/login`) — starts GitHub OAuth and redirects authenticated users to
   repository selection.
 - **Repo select** (`/repos`) — loads the authenticated user, GitHub App
-  installations, personal repositories shared by OAuth and the App, all branch
-  metadata, and recent user-owned sessions. Selecting a repository and branch
-  immediately creates a GitHub-backed chat session.
+  installations, personal repositories shared by OAuth and the App, and recent
+  user-owned sessions. Branch metadata loads for the selected repository only;
+  selecting a branch immediately creates a GitHub-backed chat session. The page
+  distinguishes first-time repository setup, installed-with-no-shared-repos, and
+  ready states, and includes a refresh action after GitHub access changes.
 - **Root** (`/`) — redirects logged-out users to `/login` and logged-in users to
   `/repos`.
 - **Chat workspace** (`/sessions/:sessionId`) — the primary route:
@@ -83,9 +85,17 @@ There is no task list/history page or task-shaped route left in the frontend.
 
 The backend has no CORS middleware. `frontend/vite.config.ts` proxies `/auth`,
 `/github`, `/chat-sessions`, and `/health` to `http://localhost:3000` in dev,
-so the SPA calls same-origin paths and no backend change is needed locally. A
-production deploy where the frontend and backend are on different origins will
-need CORS (or a reverse proxy) added to the backend — not yet implemented.
+including full-page navigations such as `/auth/github/start`, so the SPA calls
+same-origin paths and no backend change is needed locally. Backend OAuth and
+GitHub App callbacks redirect browser users back to frontend routes through
+`APP_BASE_URL`. A production deploy where the frontend and backend are on
+different origins will need CORS (or a reverse proxy) added to the backend — not
+yet implemented.
+
+For local GitHub auth, `APP_BASE_URL` must be `http://localhost:5173`. The
+GitHub OAuth callback URL and GitHub App Setup URL stay on the backend:
+`http://localhost:3000/auth/github/callback` and
+`http://localhost:3000/github/install/callback`.
 
 ## Development and verification
 

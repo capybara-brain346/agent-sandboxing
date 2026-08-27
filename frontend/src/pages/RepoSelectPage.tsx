@@ -4,6 +4,7 @@ import {
   ApiError,
   createChatSession,
   getAuthMe,
+  getGitHubBranches,
   getGitHubRepositories,
   listChatSessions,
   logout,
@@ -25,8 +26,11 @@ export const RepoSelectPage = () => {
   const [connection, setConnection] =
     useState<GitHubRepositoriesResponse | null>(null);
   const [sessions, setSessions] = useState<ChatSessionListItem[]>([]);
+  const [loadingAccess, setLoadingAccess] = useState(true);
   const [selectedRepoId, setSelectedRepoId] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("");
+  const [branches, setBranches] = useState<GitHubRepository["branches"]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reconnectRequired, setReconnectRequired] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -59,6 +63,9 @@ export const RepoSelectPage = () => {
           caught instanceof ApiError &&
             caught.code === "github_reconnect_required",
         );
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingAccess(false);
       });
     return () => {
       cancelled = true;
@@ -69,18 +76,69 @@ export const RepoSelectPage = () => {
     connection?.repositories.find(
       (repository) => repository.repoId === selectedRepoId,
     );
+  const selectedDefaultBranch = selectedRepo?.defaultBranch;
+  const hasInstallations = (connection?.installations.length ?? 0) > 0;
+  const hasRepositories = (connection?.repositories.length ?? 0) > 0;
 
-  const selectRepository = (repoId: string) => {
+  const refreshAccess = async () => {
+    setLoadingAccess(true);
+    setLoadError(null);
+    setReconnectRequired(false);
+    setSelectedRepoId("");
+    setSelectedBranch("");
+    setBranches([]);
+    try {
+      setConnection(await getGitHubRepositories());
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      setLoadError(
+        caught instanceof ApiError
+          ? caught.message
+          : "Failed to load GitHub repositories",
+      );
+      setReconnectRequired(
+        caught instanceof ApiError &&
+          caught.code === "github_reconnect_required",
+      );
+    } finally {
+      setLoadingAccess(false);
+    }
+  };
+
+  const selectRepository = async (repoId: string) => {
     setSelectedRepoId(repoId);
     setSelectedBranch("");
+    setBranches([]);
+    if (!repoId) return;
+    setLoadingBranches(true);
+    setLoadError(null);
+    setReconnectRequired(false);
+    try {
+      setBranches(await getGitHubBranches(repoId));
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      setLoadError(
+        caught instanceof ApiError ? caught.message : "Failed to load branches",
+      );
+      setReconnectRequired(
+        caught instanceof ApiError &&
+          caught.code === "github_reconnect_required",
+      );
+    } finally {
+      setLoadingBranches(false);
+    }
   };
 
   const selectBranch = async (branchName: string) => {
     setSelectedBranch(branchName);
     if (!selectedRepo || !branchName) return;
-    const branch = selectedRepo.branches.find(
-      (candidate) => candidate.name === branchName,
-    );
+    const branch = branches.find((candidate) => candidate.name === branchName);
     if (!branch) return;
     setCreating(true);
     setLoadError(null);
@@ -162,50 +220,65 @@ export const RepoSelectPage = () => {
         <div className="panel">
           <div className="panel__header">
             <span className="panel__title">GitHub repositories</span>
-            <a className="button button--secondary" href="/github/install">
-              Connect GitHub App
-            </a>
+            {hasRepositories && (
+              <a className="button button--secondary" href="/github/install">
+                Manage access
+              </a>
+            )}
           </div>
           <div className="panel__body">
-            {!connection && !loadError && (
-              <p className="run-inspector__empty">Loading repositories...</p>
+            {loadingAccess && !connection && !loadError && (
+              <p className="run-inspector__empty">Checking GitHub access...</p>
             )}
-            {connection && connection.installations.length === 0 && (
+            {!loadingAccess && connection && !hasInstallations && (
               <div className="empty-state">
-                <h2>Connect the GitHub App</h2>
+                <h2>Set up repository access</h2>
                 <p>
-                  Grant the app access to a personal account before selecting a
-                  repository.
+                  Choose your personal GitHub account and select which
+                  repositories Agent Sandboxing can use.
                 </p>
                 <a className="button" href="/github/install">
-                  Install GitHub App
+                  Set up repository access
                 </a>
               </div>
             )}
-            {connection &&
-              connection.installations.length > 0 &&
-              connection.repositories.length === 0 && (
+            {!loadingAccess &&
+              connection &&
+              hasInstallations &&
+              !hasRepositories && (
                 <div className="empty-state">
                   <h2>No shared repositories</h2>
                   <p>
-                    The app needs access to a personal repository visible to
-                    your GitHub account.
+                    The GitHub App is installed for your account, but no
+                    repositories are available to both your GitHub login and the
+                    App installation. Manage access in GitHub, then refresh.
                   </p>
-                  <a
-                    className="button button--secondary"
-                    href="/github/install"
-                  >
-                    Review App access
-                  </a>
+                  <div className="empty-state__actions">
+                    <a className="button" href="/github/install">
+                      Manage repository access
+                    </a>
+                    <button
+                      className="button button--secondary"
+                      type="button"
+                      onClick={() => void refreshAccess()}
+                    >
+                      Refresh access
+                    </button>
+                  </div>
                 </div>
               )}
-            {connection && connection.repositories.length > 0 && (
+            {connection && hasRepositories && (
               <div className="repo-picker__controls">
+                <p className="field__hint repo-picker__hint">
+                  Select a repository, then choose a branch.
+                </p>
                 <label className="field">
                   <span className="field__label">Repository</span>
                   <select
                     value={selectedRepoId}
-                    onChange={(event) => selectRepository(event.target.value)}
+                    onChange={(event) =>
+                      void selectRepository(event.target.value)
+                    }
                     disabled={creating}
                   >
                     <option value="">Choose a repository</option>
@@ -222,13 +295,17 @@ export const RepoSelectPage = () => {
                   <select
                     value={selectedBranch}
                     onChange={(event) => void selectBranch(event.target.value)}
-                    disabled={!selectedRepo || creating}
+                    disabled={!selectedRepo || loadingBranches || creating}
                   >
-                    <option value="">Choose a branch</option>
-                    {selectedRepo?.branches.map((branch) => (
+                    <option value="">
+                      {loadingBranches
+                        ? "Loading branches..."
+                        : "Choose a branch"}
+                    </option>
+                    {branches.map((branch) => (
                       <option key={branch.name} value={branch.name}>
                         {branch.name}
-                        {branch.name === selectedRepo.defaultBranch
+                        {branch.name === selectedDefaultBranch
                           ? "  [default]"
                           : ""}
                       </option>
@@ -238,6 +315,14 @@ export const RepoSelectPage = () => {
                 {creating && (
                   <p className="field__hint">Opening workspace...</p>
                 )}
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  onClick={() => void refreshAccess()}
+                  disabled={loadingAccess || creating}
+                >
+                  {loadingAccess ? "Refreshing access..." : "Refresh access"}
+                </button>
               </div>
             )}
           </div>

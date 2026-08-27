@@ -12,6 +12,9 @@ export const githubRouter = Router();
 const queryString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
+const frontendUrl = (path: string): string =>
+  new URL(path, githubConfig.APP_BASE_URL).toString();
+
 const installationFailureCode = (error: unknown): string => {
   if (!(error instanceof ServiceError)) return "github_installation_failed";
   if (
@@ -34,7 +37,9 @@ githubRouter.get(
   async (request, response) => {
     const installationId = queryString(request.query.installation_id);
     if (!installationId || !/^\d+$/.test(installationId)) {
-      response.redirect("/repos?error=github_installation_cancelled");
+      response.redirect(
+        frontendUrl("/repos?error=github_installation_cancelled"),
+      );
       return;
     }
     try {
@@ -42,10 +47,12 @@ githubRouter.get(
         sessionClaims(request).sub,
         installationId,
       );
-      response.redirect("/repos");
+      response.redirect(frontendUrl("/repos"));
     } catch (error) {
       response.redirect(
-        `/repos?error=${encodeURIComponent(installationFailureCode(error))}`,
+        frontendUrl(
+          `/repos?error=${encodeURIComponent(installationFailureCode(error))}`,
+        ),
       );
     }
   },
@@ -58,6 +65,27 @@ githubRouter.get(
     try {
       response.json(
         await githubService.repositories(sessionClaims(request).sub),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+githubRouter.get(
+  "/github/repositories/:repoId/branches",
+  requireAuth(githubConfig),
+  async (request, response, next) => {
+    try {
+      const repoId = request.params.repoId;
+      if (typeof repoId !== "string")
+        throw new ServiceError(
+          "github_repository_not_found",
+          "Repository was not found",
+          404,
+        );
+      response.json(
+        await githubService.branches(sessionClaims(request).sub, repoId),
       );
     } catch (error) {
       next(error);

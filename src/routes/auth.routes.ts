@@ -24,6 +24,9 @@ export const authRouter = Router();
 const queryString = (request: Request, key: string): string | undefined =>
   typeof request.query[key] === "string" ? request.query[key] : undefined;
 
+const frontendUrl = (path: string): string =>
+  new URL(path, authConfig.APP_BASE_URL).toString();
+
 const redirectFailure = (
   response: Response,
   path: "/login" | "/repos",
@@ -38,7 +41,9 @@ const redirectFailure = (
     "github_installation_cancelled",
   ]);
   const safeCode = allowed.has(code) ? code : "github_oauth_failed";
-  response.redirect(`${path}?error=${encodeURIComponent(safeCode)}`);
+  response.redirect(
+    frontendUrl(`${path}?error=${encodeURIComponent(safeCode)}`),
+  );
 };
 
 authRouter.get("/auth/github/start", async (_request, response, next) => {
@@ -68,7 +73,7 @@ authRouter.get("/auth/github/callback", async (request, response) => {
   try {
     const result = await githubOAuthService.callback(code);
     setSessionCookie(response, result.token, authConfig);
-    response.redirect("/repos");
+    response.redirect(frontendUrl("/repos"));
   } catch (error) {
     redirectFailure(
       response,

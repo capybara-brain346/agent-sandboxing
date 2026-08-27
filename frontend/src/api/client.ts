@@ -9,6 +9,7 @@ import type {
   CreateMessageRequest,
   CreateMessageResponse,
   GitHubRepositoriesResponse,
+  GitHubBranch,
   Page,
   RunCancellationResponse,
   RunResult,
@@ -57,6 +58,9 @@ export const logout = (): Promise<void> =>
 
 export const getGitHubRepositories = (): Promise<GitHubRepositoriesResponse> =>
   request("/github/repositories");
+
+export const getGitHubBranches = (repoId: string): Promise<GitHubBranch[]> =>
+  request(`/github/repositories/${repoId}/branches`);
 
 export const createChatSession = (
   input: CreateChatSessionRequest,

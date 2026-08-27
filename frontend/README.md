@@ -35,3 +35,8 @@ configuration is needed in dev.
 frontend is deployed separately from the backend origin. The backend
 currently has no CORS middleware; deploying the frontend cross-origin
 requires adding CORS (or a reverse proxy) to the backend as a follow-up.
+
+For local GitHub auth, backend `APP_BASE_URL` must point at the Vite app
+(`http://localhost:5173`), while the GitHub OAuth callback and GitHub App Setup
+URL both point at the backend (`http://localhost:3000/auth/github/callback` and
+`http://localhost:3000/github/install/callback`).
