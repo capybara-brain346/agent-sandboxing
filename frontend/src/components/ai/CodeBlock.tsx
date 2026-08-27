@@ -41,7 +41,7 @@ export const CodeBlock = ({
         type="button"
         onClick={() => void copy()}
         aria-label="Copy code"
-        className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-md text-fg-subtle opacity-0 transition-opacity hover:bg-panel hover:text-fg group-hover/code:opacity-100"
+        className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-md text-fg-subtle opacity-0 transition-opacity hover:bg-panel hover:text-fg focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand group-hover/code:opacity-100"
       >
         {copied ? (
           <Check className="size-3.5" />

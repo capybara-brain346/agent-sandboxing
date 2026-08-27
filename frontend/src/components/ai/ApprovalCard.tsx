@@ -43,6 +43,7 @@ export const ApprovalCard = ({
       onClick={onApprove}
       className={cn(
         "w-fit rounded-md bg-brand px-3 py-1.5 text-xs font-medium text-fg-on-brand transition-opacity",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
         "disabled:cursor-not-allowed disabled:opacity-40",
       )}
     >

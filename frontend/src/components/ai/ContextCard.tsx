@@ -19,6 +19,7 @@ export const ContextCard = ({
     onClick={() => onSelect?.(repository)}
     className={cn(
       "flex flex-col gap-3 rounded-lg border border-border-subtle bg-panel p-4 text-left transition-colors",
+      "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
       !disabled && onSelect && "hover:border-border-default hover:bg-raised",
       disabled && "opacity-60",
     )}

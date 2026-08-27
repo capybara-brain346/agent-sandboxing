@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useParams } from "react-router-dom";
@@ -197,6 +198,7 @@ const RunPanel = ({
             value={item.id}
             className={cn(
               "border-b-2 border-transparent px-2 py-2 text-xs font-medium text-fg-muted transition-colors",
+              "focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-brand",
               "data-[state=active]:border-brand data-[state=active]:text-fg",
             )}
           >
@@ -319,17 +321,24 @@ const ResizeHandle = ({ onResize }: { onResize: (deltaX: number) => void }) => {
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "ArrowLeft") onResize(24);
+    else if (event.key === "ArrowRight") onResize(-24);
+  };
+
   return (
     <div
       role="separator"
       aria-orientation="vertical"
+      tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      className="group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+      onKeyDown={onKeyDown}
+      className="group flex w-2 shrink-0 cursor-col-resize items-center justify-center focus-visible:outline-none"
     >
-      <div className="flex h-8 w-1 items-center justify-center rounded-full bg-border-default group-hover:bg-border-strong">
-        <GripVertical className="size-3 text-fg-subtle opacity-0 group-hover:opacity-100" />
+      <div className="flex h-8 w-1 items-center justify-center rounded-full bg-border-default group-hover:bg-border-strong group-focus-visible:bg-brand">
+        <GripVertical className="size-3 text-fg-subtle opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
       </div>
     </div>
   );
@@ -523,7 +532,7 @@ export const ChatWorkspacePage = () => {
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-1 flex-col gap-3 overflow-hidden p-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-hidden p-4">
           {session === null && !loadError ? (
             <p className="flex-1 py-10 text-center text-sm text-fg-subtle">
               Loading chat…
@@ -561,7 +570,7 @@ export const ChatWorkspacePage = () => {
             />
             <div
               style={{ width: inspectorWidth }}
-              className="shrink-0 border-l border-border-subtle bg-panel"
+              className="max-w-[70vw] shrink-0 border-l border-border-subtle bg-panel"
             >
               <RunPanel
                 run={run}

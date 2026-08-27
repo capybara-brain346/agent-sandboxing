@@ -75,6 +75,7 @@ const BranchPicker = ({
             onClick={() => onSelect(branch.name)}
             className={cn(
               "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-xs transition-colors disabled:opacity-50",
+              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
               selectedBranch === branch.name
                 ? "border-brand bg-brand/10 text-brand"
                 : "border-border-subtle bg-raised text-fg-muted hover:border-border-default hover:text-fg",
@@ -349,7 +350,7 @@ export const RepoSelectPage = () => {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search repositories…"
               disabled={creating}
-              className="w-full rounded-md border border-border-subtle bg-panel py-2 pr-3 pl-8 text-sm text-fg outline-none placeholder:text-fg-subtle focus-visible:border-border-strong"
+              className="w-full rounded-md border border-border-subtle bg-panel py-2 pr-3 pl-8 text-sm text-fg outline-none placeholder:text-fg-subtle focus-visible:border-border-strong focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand"
             />
           </div>
 

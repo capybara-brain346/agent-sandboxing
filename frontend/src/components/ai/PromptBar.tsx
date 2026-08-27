@@ -65,7 +65,7 @@ export const PromptBar = ({
         placeholder="Describe what you want the agent to do…"
         rows={1}
         disabled={disabled}
-        className="max-h-64 min-h-6 resize-none border-none bg-transparent px-1 py-0.5 text-sm text-fg outline-none placeholder:text-fg-subtle disabled:opacity-60"
+        className="max-h-64 min-h-6 resize-none rounded-sm border-none bg-transparent px-1 py-0.5 text-sm text-fg outline-none placeholder:text-fg-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:opacity-60"
       />
       <div className="flex items-center justify-between gap-2">
         <span className="min-w-0 flex-1 truncate text-2xs text-fg-subtle">
@@ -77,6 +77,7 @@ export const PromptBar = ({
           disabled={disabled || value.trim() === ""}
           className={cn(
             "flex size-7 shrink-0 items-center justify-center rounded-md bg-brand text-fg-on-brand transition-opacity",
+            "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
             "disabled:cursor-not-allowed disabled:opacity-40",
           )}
         >

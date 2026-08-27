@@ -147,7 +147,7 @@ const RepoBranchSwitcher = () => {
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-raised px-2.5 py-1 text-xs font-mono text-fg hover:border-border-default"
+          className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-raised px-2.5 py-1 text-xs font-mono text-fg hover:border-border-default focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
         >
           <GitBranch className="size-3.5 text-fg-subtle" />
           <span className="max-w-48 truncate">{triggerLabel}</span>
@@ -179,7 +179,7 @@ const RepoBranchSwitcher = () => {
                 <button
                   type="button"
                   onClick={() => void toggleRepo(repository)}
-                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-panel"
+                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
                 >
                   <span className="truncate">{repository.fullName}</span>
                   {loadingBranchesFor === repository.repoId ? (
@@ -201,7 +201,7 @@ const RepoBranchSwitcher = () => {
                         type="button"
                         disabled={creating}
                         onClick={() => void selectBranch(repository, branch)}
-                        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left font-mono text-xs text-fg-muted hover:bg-panel disabled:opacity-50"
+                        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left font-mono text-xs text-fg-muted hover:bg-panel disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
                       >
                         {branch.name}
                         {branch.name === repository.defaultBranch && (
@@ -218,7 +218,7 @@ const RepoBranchSwitcher = () => {
             <Link
               to="/repos"
               onClick={() => setOpen(false)}
-              className="text-xs text-brand hover:underline"
+              className="text-xs text-brand hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
             >
               Open full repository picker
             </Link>
@@ -263,7 +263,7 @@ const ThemeToggle = () => {
       type="button"
       onClick={toggle}
       aria-label="Toggle theme"
-      className="flex size-7 items-center justify-center rounded-md text-fg-subtle hover:bg-panel hover:text-fg"
+      className="flex size-7 items-center justify-center rounded-md text-fg-subtle hover:bg-panel hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
     >
       {mode === "dark" ? (
         <Sun className="size-4" />
@@ -288,7 +288,7 @@ const UserMenu = ({ user }: { user: AuthMe }) => {
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-panel"
+          className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
         >
           <img src={user.avatarUrl} alt="" className="size-6 rounded-full" />
           <span className="text-xs text-fg-muted">{user.login}</span>
@@ -303,7 +303,7 @@ const UserMenu = ({ user }: { user: AuthMe }) => {
           <button
             type="button"
             onClick={() => void signOut()}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-fg hover:bg-panel"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-fg hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
           >
             <LogOut className="size-3.5" />
             Sign out
@@ -333,7 +333,7 @@ const Sidebar = ({ sessions }: { sessions: ChatSessionListItem[] }) => {
               key={session.chatSessionId}
               to={`/sessions/${session.chatSessionId}`}
               className={cn(
-                "mb-0.5 flex flex-col gap-0.5 rounded-md px-2 py-1.5",
+                "mb-0.5 flex flex-col gap-0.5 rounded-md px-2 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
                 isActive ? "bg-raised" : "hover:bg-raised/60",
               )}
             >
@@ -365,7 +365,7 @@ const Sidebar = ({ sessions }: { sessions: ChatSessionListItem[] }) => {
       <div className="border-t border-border-subtle p-2">
         <Link
           to="/repos"
-          className="flex items-center justify-center gap-1.5 rounded-md border border-border-subtle py-1.5 text-xs font-medium text-fg-muted hover:bg-raised"
+          className="flex items-center justify-center gap-1.5 rounded-md border border-border-subtle py-1.5 text-xs font-medium text-fg-muted hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
         >
           <Plus className="size-3.5" />
           New
@@ -414,7 +414,10 @@ const ShellChrome = () => {
   return (
     <div className="flex h-screen flex-col bg-canvas text-fg">
       <header className="flex h-13 shrink-0 items-center gap-3 border-b border-border-subtle bg-panel px-4">
-        <Link to="/" className="flex items-center gap-1.5 font-semibold">
+        <Link
+          to="/"
+          className="flex items-center gap-1.5 font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+        >
           <Sparkles className="size-4 text-brand" />
           <span className="text-sm">sandbox</span>
         </Link>
