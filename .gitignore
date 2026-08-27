@@ -147,3 +147,4 @@ vite.config.ts.timestamp-*
 
 # Local eval results
 tests/evals/results/*.jsonl
+docs/planning/
