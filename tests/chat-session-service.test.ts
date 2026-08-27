@@ -65,6 +65,8 @@ const runRow = {
   messages: [{ id: "msg_1", role: "user" as const }],
 };
 
+const userId = "user_1";
+
 describe("ChatSessionService", () => {
   it("creates a session and publishes its event after the transaction commits", async () => {
     let committed = false;
@@ -96,7 +98,7 @@ describe("ChatSessionService", () => {
     );
 
     await expect(
-      service.createSession({
+      service.createSession(userId, {
         repo: {
           source: "fixture",
           ref: "./repo",
@@ -130,26 +132,53 @@ describe("ChatSessionService", () => {
     );
 
     await expect(
-      service.createSession({ repo: { source: "fixture", ref: "./repo" } }),
+      service.createSession(userId, {
+        repo: { source: "fixture", ref: "./repo" },
+      }),
     ).rejects.toMatchObject({
       code: "fixture_repo_disabled",
       status: 403,
     });
   });
 
-  it("keeps GitHub session creation explicitly unavailable", async () => {
+  it("creates GitHub sessions with the selected base branch", async () => {
+    const tx = {
+      chatSession: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+          ...sessionRow,
+          ...data,
+          repoSource: "github",
+          repoBaseBranch: "feature",
+          repoBaseSha: "abc123",
+        })),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    } as unknown as PrismaClient;
+    const events = {
+      appendSessionEventInTransaction: vi.fn(async () =>
+        event("chat_1", "session"),
+      ),
+    };
     const service = new ChatSessionService(
-      {} as PrismaClient,
-      {} as EventStore,
+      prisma,
+      events as unknown as EventStore,
     );
 
     await expect(
-      service.createSession({
-        repo: { source: "github", ref: "github:octo/repo" },
+      service.createSession(userId, {
+        repo: {
+          source: "github",
+          ref: "github:octo/repo",
+          baseBranch: "feature",
+          baseSha: "abc123",
+        },
       }),
-    ).rejects.toMatchObject({
-      code: "repo_source_not_supported",
-      status: 501,
+    ).resolves.toMatchObject({
+      repo: { baseBranch: "feature", baseSha: "abc123" },
     });
   });
 
@@ -160,6 +189,7 @@ describe("ChatSessionService", () => {
       chatSession: {
         findUnique: vi.fn(async () => ({
           id: "chat_1",
+          userId,
           activeRunId: null,
           repoRef: "./repo",
           image: null,
@@ -196,7 +226,7 @@ describe("ChatSessionService", () => {
       publish,
     );
 
-    const result = await service.appendMessage("chat_1", {
+    const result = await service.appendMessage(userId, "chat_1", {
       content: "Fix the tests",
       startRun: true,
     });
@@ -235,6 +265,7 @@ describe("ChatSessionService", () => {
       chatSession: {
         findUnique: vi.fn(async () => ({
           id: "chat_1",
+          userId,
           activeRunId: "run_existing",
           repoRef: "./repo",
           image: null,
@@ -249,7 +280,7 @@ describe("ChatSessionService", () => {
     const service = new ChatSessionService(prisma, {} as EventStore);
 
     await expect(
-      service.appendMessage("chat_1", {
+      service.appendMessage(userId, "chat_1", {
         content: "Second run",
         startRun: true,
       }),
@@ -261,7 +292,11 @@ describe("ChatSessionService", () => {
   });
 
   it("delegates artifact fetches to the injected artifact store", async () => {
-    const prisma = {} as unknown as PrismaClient;
+    const prisma = {
+      chatSession: {
+        findFirst: vi.fn(async () => ({ id: "chat_1" })),
+      },
+    } as unknown as PrismaClient;
     const get = vi.fn(async (sessionId: string, artifactId: string) => ({
       artifactId,
       sessionId,
@@ -282,7 +317,7 @@ describe("ChatSessionService", () => {
       { get },
     );
 
-    const artifact = await service.getArtifact("chat_1", "art_1");
+    const artifact = await service.getArtifact(userId, "chat_1", "art_1");
     expect(get).toHaveBeenCalledWith("chat_1", "art_1");
     expect(artifact.content).toBe("diff --git a/x b/x");
   });

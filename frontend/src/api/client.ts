@@ -1,12 +1,14 @@
 import type {
   ApiErrorBody,
   ArtifactContent,
+  AuthMe,
   ChatSession,
   ChatSessionListItem,
   ChatMessage,
   CreateChatSessionRequest,
   CreateMessageRequest,
   CreateMessageResponse,
+  GitHubRepositoriesResponse,
   Page,
   RunCancellationResponse,
   RunResult,
@@ -31,6 +33,7 @@ export class ApiError extends Error {
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   if (!response.ok) {
@@ -43,8 +46,17 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
       body?.error.message ?? `Request failed with status ${response.status}`,
     );
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 };
+
+export const getAuthMe = (): Promise<AuthMe> => request("/auth/me");
+
+export const logout = (): Promise<void> =>
+  request("/auth/logout", { method: "POST" });
+
+export const getGitHubRepositories = (): Promise<GitHubRepositoriesResponse> =>
+  request("/github/repositories");
 
 export const createChatSession = (
   input: CreateChatSessionRequest,

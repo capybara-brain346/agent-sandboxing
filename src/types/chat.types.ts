@@ -30,6 +30,8 @@ export const repoScopeSchema = z
     repoId: z.string().trim().min(1).nullable().optional(),
     defaultBranch: z.string().trim().min(1).nullable().optional(),
     installationId: z.string().trim().min(1).nullable().optional(),
+    baseBranch: z.string().trim().min(1).nullable().optional(),
+    baseSha: z.string().trim().min(1).nullable().optional(),
   })
   .strict();
 export type RepoScope = {
@@ -41,6 +43,8 @@ export type RepoScope = {
   repoId: string | null;
   defaultBranch: string | null;
   installationId: string | null;
+  baseBranch: string | null;
+  baseSha: string | null;
 };
 
 export const createChatSessionSchema = z

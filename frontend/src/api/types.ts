@@ -39,6 +39,8 @@ export type RepoScope = {
   repoId: string | null;
   defaultBranch: string | null;
   installationId: string | null;
+  baseBranch: string | null;
+  baseSha: string | null;
 };
 
 export type CreateChatSessionRequest = {
@@ -51,6 +53,8 @@ export type CreateChatSessionRequest = {
     repoId?: string;
     defaultBranch?: string;
     installationId?: string;
+    baseBranch?: string;
+    baseSha?: string;
   };
   title?: string;
   image?: string;
@@ -227,4 +231,42 @@ export type ApiErrorBody = {
     message: string;
     details?: unknown;
   };
+};
+
+export type AuthMe = {
+  sub: string;
+  login: string;
+  avatarUrl: string;
+  email: string | null;
+  iat: number;
+  exp: number;
+};
+
+export type GitHubInstallation = {
+  installationId: string;
+  accountLogin: string;
+  accountType: "user";
+};
+
+export type GitHubBranch = {
+  name: string;
+  sha: string;
+  protected: boolean;
+};
+
+export type GitHubRepository = {
+  repoId: string;
+  owner: string;
+  name: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+  installationId: string;
+  branches: GitHubBranch[];
+};
+
+export type GitHubRepositoriesResponse = {
+  installations: GitHubInstallation[];
+  repositories: GitHubRepository[];
+  installUrl: string;
 };

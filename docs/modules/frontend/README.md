@@ -23,10 +23,14 @@ React + TypeScript SPA, separate from the backend's `tsconfig`/build.
 
 MVP only, matching the current session API surface:
 
-- **Repo select** (`/`) — shows the GitHub login-required/coming-soon state and
-  recent sessions. It no longer starts the local fixture repository; `github` is a
-  stored, not-yet-executable choice (backend returns the
-  `501 repo_source_not_supported` error).
+- **Login** (`/login`) — starts GitHub OAuth and redirects authenticated users to
+  repository selection.
+- **Repo select** (`/repos`) — loads the authenticated user, GitHub App
+  installations, personal repositories shared by OAuth and the App, all branch
+  metadata, and recent user-owned sessions. Selecting a repository and branch
+  immediately creates a GitHub-backed chat session.
+- **Root** (`/`) — redirects logged-out users to `/login` and logged-in users to
+  `/repos`.
 - **Chat workspace** (`/sessions/:sessionId`) — the primary route:
   - `MessageThread` renders the session's chat history
     (`GET /chat-sessions/:sessionId/messages`); the user bubble for a new
@@ -42,8 +46,8 @@ MVP only, matching the current session API surface:
     unified diff via `DiffView`.
   - `EventTimeline` renders the live run event stream.
 
-There is no auth or multi-user support; those remain out of scope for the
-backend too.
+The app sends same-origin cookie credentials on API requests. The backend owns
+authentication and user scoping; the frontend does not store tokens.
 
 ## Structure
 
@@ -51,15 +55,15 @@ backend too.
   `src/types/chat.types.ts`/`src/types/task.types.ts` and `EVENT_TYPES` from
   `src/types/event.types.ts`. Field names must stay identical to the backend
   contract; update both sides together when the backend contract changes.
-- `frontend/src/api/client.ts` — thin fetch wrapper for the chat-session REST
-  endpoints (sessions, messages, runs, results, artifacts).
+- `frontend/src/api/client.ts` — thin fetch wrapper for auth, GitHub, and
+  chat-session REST endpoints; requests include same-origin cookie credentials.
 - `frontend/src/api/useEventStream.ts` — generic hook that opens an
   `EventSource` against a session or run's events URL. Reconnect/replay uses
   the browser's native `Last-Event-ID` behavior, matching the cursor contract
   in the Event Service; no manual cursor bookkeeping is implemented
   client-side.
-- `frontend/src/pages/` — route components (`RepoSelectPage`,
-  `ChatWorkspacePage`).
+- `frontend/src/pages/` — route components (`LoginPage`, `AuthRedirectPage`,
+  `RepoSelectPage`, `ChatWorkspacePage`).
 - `frontend/src/components/` — `AppShell` (top bar), `Composer` (message
   input), `MessageThread` (chat history), `RunInspector` (run status/result),
   `StatusBadge` (lifecycle status pill), `EventTimeline` (activity rows),
@@ -77,11 +81,11 @@ There is no task list/history page or task-shaped route left in the frontend.
 
 ## Dev-time cross-origin
 
-The backend has no CORS middleware. `frontend/vite.config.ts` proxies
-`/chat-sessions` and `/health` to `http://localhost:3000` in dev, so the SPA
-calls same-origin paths and no backend change is needed locally. A production
-deploy where the frontend and backend are on different origins will need
-CORS (or a reverse proxy) added to the backend — not yet implemented.
+The backend has no CORS middleware. `frontend/vite.config.ts` proxies `/auth`,
+`/github`, `/chat-sessions`, and `/health` to `http://localhost:3000` in dev,
+so the SPA calls same-origin paths and no backend change is needed locally. A
+production deploy where the frontend and backend are on different origins will
+need CORS (or a reverse proxy) added to the backend — not yet implemented.
 
 ## Development and verification
 

@@ -23,6 +23,7 @@ import type { TaskStatus } from "../../src/types/task.types";
 import { takeUtf8Prefix } from "../../src/shared/utf8";
 import type { SimpleExecResult } from "../../src/types/sandbox.types";
 import { loadAgentModelConfig } from "../../src/config";
+import { prisma } from "../../src/db/prisma";
 import { resolveAgentModel } from "../../src/services/agent/model";
 import {
   allRepoScoresPass,
@@ -48,6 +49,7 @@ const DEFAULT_RESULTS_DIR = join(process.cwd(), "tests/evals/results");
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_RUN_TIMEOUT_MS = 180000;
 const DEFAULT_POST_RUN_TIMEOUT_MS = 120000;
+const EVAL_USER_ID = "user_eval";
 const POST_RUN_OUTPUT_MAX_BYTES = 16_384;
 const TERMINAL_STATUSES = new Set<TaskStatus>([
   "completed",
@@ -56,26 +58,40 @@ const TERMINAL_STATUSES = new Set<TaskStatus>([
 ]);
 
 export type RepoEvalChatSessionService = {
-  createSession(input: {
-    repo: { source: "fixture"; ref: string };
-    image?: string;
-  }): Promise<CreateSessionResponse>;
+  createSession(
+    userId: string,
+    input: {
+      repo: { source: "fixture"; ref: string };
+      image?: string;
+    },
+  ): Promise<CreateSessionResponse>;
   appendMessage(
+    userId: string,
     sessionId: string,
     input: { content: string; startRun: true },
   ): Promise<CreateMessageResponse>;
-  getRun(sessionId: string, runId: string): Promise<RunSnapshot>;
-  result(sessionId: string, runId: string): Promise<RunResult>;
+  getRun(
+    userId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<RunSnapshot>;
+  result(userId: string, sessionId: string, runId: string): Promise<RunResult>;
   listMessages(
+    userId: string,
     sessionId: string,
     query: { limit: number },
   ): Promise<Page<ChatMessage>>;
   runEventsAfter(
+    userId: string,
     sessionId: string,
     runId: string,
     after: number,
   ): Promise<PublicEvent[]>;
-  getArtifact(sessionId: string, artifactId: string): Promise<ArtifactContent>;
+  getArtifact(
+    userId: string,
+    sessionId: string,
+    artifactId: string,
+  ): Promise<ArtifactContent>;
   runPostRunCommand?(input: {
     sessionId: string;
     runId: string;
@@ -83,7 +99,11 @@ export type RepoEvalChatSessionService = {
     command: string;
     timeoutMs: number;
   }): Promise<SimpleExecResult>;
-  cancelRun?(sessionId: string, runId: string): Promise<unknown>;
+  cancelRun?(
+    userId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<unknown>;
 };
 
 export type RepoEvalOptions = {
@@ -128,12 +148,12 @@ export const waitForTerminalRun = async (
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 ): Promise<RunSnapshot> => {
   const deadline = Date.now() + timeoutMs;
-  let snapshot = await service.getRun(sessionId, runId);
+  let snapshot = await service.getRun(EVAL_USER_ID, sessionId, runId);
   while (!TERMINAL_STATUSES.has(snapshot.status)) {
     if (Date.now() >= deadline)
       throw new Error(`Run ${runId} did not reach a terminal state in time`);
     await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
-    snapshot = await service.getRun(sessionId, runId);
+    snapshot = await service.getRun(EVAL_USER_ID, sessionId, runId);
   }
   return snapshot;
 };
@@ -336,7 +356,11 @@ const readWorkerReport = async (
   );
   if (!artifact) return null;
   try {
-    const content = await service.getArtifact(sessionId, artifact.artifactId);
+    const content = await service.getArtifact(
+      EVAL_USER_ID,
+      sessionId,
+      artifact.artifactId,
+    );
     return workerResultSchema.parse(JSON.parse(content.content));
   } catch {
     return null;
@@ -398,16 +422,20 @@ const runRepoCase = async (
     await initializeRepository(repositoryPath);
     await access(join(repositoryPath, ".git"));
 
-    const session = await service.createSession({
+    const session = await service.createSession(EVAL_USER_ID, {
       repo: { source: "fixture", ref: repositoryPath },
       ...(options.image ? { image: options.image } : {}),
     });
 
     for (const message of testCase.messages) {
-      const created = await service.appendMessage(session.chatSessionId, {
-        content: message.content,
-        startRun: true,
-      });
+      const created = await service.appendMessage(
+        EVAL_USER_ID,
+        session.chatSessionId,
+        {
+          content: message.content,
+          startRun: true,
+        },
+      );
       if (!created.run)
         throw new Error(`Message did not create a run: ${testCase.id}`);
       const runId = created.run.taskRunId;
@@ -420,8 +448,13 @@ const runRepoCase = async (
         options.pollIntervalMs,
       );
       activeRun = undefined;
-      const result = await service.result(session.chatSessionId, runId);
+      const result = await service.result(
+        EVAL_USER_ID,
+        session.chatSessionId,
+        runId,
+      );
       const events = await service.runEventsAfter(
+        EVAL_USER_ID,
         session.chatSessionId,
         runId,
         0,
@@ -436,9 +469,13 @@ const runRepoCase = async (
           runId,
           sandboxId,
         };
-      const messages = await service.listMessages(session.chatSessionId, {
-        limit: 100,
-      });
+      const messages = await service.listMessages(
+        EVAL_USER_ID,
+        session.chatSessionId,
+        {
+          limit: 100,
+        },
+      );
       const report = await readWorkerReport(
         service,
         session.chatSessionId,
@@ -505,7 +542,7 @@ const runRepoCase = async (
     observed.error = errorMessage(error);
     if (activeRun && service.cancelRun) {
       await service
-        .cancelRun(activeRun.sessionId, activeRun.runId)
+        .cancelRun(EVAL_USER_ID, activeRun.sessionId, activeRun.runId)
         .catch(() => undefined);
       await waitForTerminalRun(
         service,
@@ -561,6 +598,16 @@ const printReport = (results: RepoEvalResult[], resultsPath: string): void => {
 };
 
 const defaultService = async (): Promise<RepoEvalChatSessionService> => {
+  await prisma.user.upsert({
+    where: { id: EVAL_USER_ID },
+    create: {
+      id: EVAL_USER_ID,
+      githubUserId: EVAL_USER_ID,
+      login: "agent-eval",
+      avatarUrl: "https://github.com/ghost.png",
+    },
+    update: { login: "agent-eval" },
+  });
   const chat = await import("../../src/services/chat/chat-session");
   const sandbox = await import("../../src/services/sandbox/sandbox");
   return Object.assign(chat.chatSessionService, {

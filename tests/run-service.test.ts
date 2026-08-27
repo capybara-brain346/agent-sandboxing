@@ -43,7 +43,7 @@ type Harness = {
 
 const makeHarness = (
   runner: TaskRunner,
-  options: { existingSandboxId?: string | null } = {},
+  options: { existingSandboxId?: string | null; repoSource?: string } = {},
 ): Harness => {
   const status = { value: "created" as TaskStatus };
   const session = {
@@ -100,6 +100,7 @@ const makeHarness = (
     chatSession: {
       findUnique: vi.fn(async () => ({
         id: sessionId,
+        repoSource: options.repoSource ?? "fixture",
         repoRef: "./repo",
         image: null,
         sandbox: session.sandboxId ? { id: session.sandboxId } : null,
@@ -218,6 +219,22 @@ const makeHarness = (
 };
 
 describe("RunService", () => {
+  it("fails GitHub runs before fixture provisioning is attempted", async () => {
+    const runner: TaskRunner = { run: vi.fn() };
+    const harness = makeHarness(runner, { repoSource: "github" });
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
+
+    await vi.waitFor(() => expect(harness.status.value).toBe("failed"));
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(
+      harness.sandbox.createForSessionInTransaction,
+    ).not.toHaveBeenCalled();
+    expect(harness.events).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "run_failed" })]),
+    );
+  });
+
   it("provisions a session sandbox on first run, runs the worker, and completes without stopping it", async () => {
     const runner: TaskRunner = {
       run: vi.fn(async (context: TaskRunContext) => {

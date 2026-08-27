@@ -12,6 +12,9 @@ const optionalStringEnv = z.preprocess(
 const logLevel = z.enum(["debug", "info", "warn", "error"]);
 const logColor = z.enum(["auto", "true", "false"]);
 const defaultAgentModel = "openrouter:deepseek/deepseek-v4-flash";
+const testAuthCookieSecret = "test-auth-cookie-secret-012345678901";
+const testTokenEncryptionKey = Buffer.alloc(32).toString("base64");
+const testGitHubPrivateKey = "test-github-private-key";
 
 const schema = z
   .object({
@@ -75,6 +78,28 @@ const schema = z
       .min(1)
       .default(".data/eval-traces.jsonl"),
     EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED: booleanEnv.default(false),
+    GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
+    GITHUB_APP_PRIVATE_KEY: z
+      .string()
+      .min(1)
+      .transform((value) => value.replaceAll("\\n", "\n"))
+      .optional(),
+    GITHUB_CLIENT_ID: z.string().min(1).optional(),
+    GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
+    GITHUB_CALLBACK_URL: z.string().url().optional(),
+    GITHUB_APP_INSTALL_URL: z.string().url().optional(),
+    AUTH_COOKIE_SECRET: z.string().min(32).optional(),
+    AUTH_TOKEN_ENCRYPTION_KEY: z
+      .string()
+      .refine((value) => {
+        try {
+          return Buffer.from(value, "base64").length === 32;
+        } catch {
+          return false;
+        }
+      }, "AUTH_TOKEN_ENCRYPTION_KEY must be a base64-encoded 32-byte key")
+      .optional(),
+    APP_BASE_URL: z.string().url().optional(),
   })
   .superRefine((config, context) => {
     if (config.NODE_ENV !== "test" && config.OPENROUTER_API_KEY === undefined)
@@ -89,6 +114,26 @@ const schema = z
         path: ["FIXTURE_REPOS_ENABLED"],
         message: "FIXTURE_REPOS_ENABLED cannot be enabled in production",
       });
+    if (config.NODE_ENV !== "test") {
+      const required = [
+        "GITHUB_APP_ID",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+        "GITHUB_CALLBACK_URL",
+        "GITHUB_APP_INSTALL_URL",
+        "AUTH_COOKIE_SECRET",
+        "AUTH_TOKEN_ENCRYPTION_KEY",
+        "APP_BASE_URL",
+      ] as const;
+      for (const key of required)
+        if (config[key] === undefined)
+          context.addIssue({
+            code: "custom",
+            path: [key],
+            message: `${key} is required outside test mode`,
+          });
+    }
     if (config.LANGFUSE_ENABLED) {
       if (config.LANGFUSE_PUBLIC_KEY === undefined)
         context.addIssue({
@@ -105,7 +150,21 @@ const schema = z
     }
   });
 
-export type Config = z.infer<typeof schema>;
+type ParsedConfig = z.infer<typeof schema>;
+type AuthConfigKey =
+  | "GITHUB_APP_ID"
+  | "GITHUB_APP_PRIVATE_KEY"
+  | "GITHUB_CLIENT_ID"
+  | "GITHUB_CLIENT_SECRET"
+  | "GITHUB_CALLBACK_URL"
+  | "GITHUB_APP_INSTALL_URL"
+  | "AUTH_COOKIE_SECRET"
+  | "AUTH_TOKEN_ENCRYPTION_KEY"
+  | "APP_BASE_URL";
+type RequiredAuthConfig = {
+  [Key in AuthConfigKey]-?: NonNullable<ParsedConfig[Key]>;
+};
+export type Config = Omit<ParsedConfig, AuthConfigKey> & RequiredAuthConfig;
 export type AgentModelConfig = Pick<
   Config,
   "AGENT_MODEL" | "OPENROUTER_API_KEY"
@@ -124,4 +183,24 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config =>
   schema.parse({
     ...env,
     LOG_LEVEL: env.LOG_LEVEL ?? (env.NODE_ENV === "test" ? "error" : "info"),
-  });
+    ...(env.NODE_ENV === "test"
+      ? {
+          GITHUB_APP_ID: env.GITHUB_APP_ID ?? "1",
+          GITHUB_APP_PRIVATE_KEY:
+            env.GITHUB_APP_PRIVATE_KEY ?? testGitHubPrivateKey,
+          GITHUB_CLIENT_ID: env.GITHUB_CLIENT_ID ?? "test-client-id",
+          GITHUB_CLIENT_SECRET:
+            env.GITHUB_CLIENT_SECRET ?? "test-client-secret",
+          GITHUB_CALLBACK_URL:
+            env.GITHUB_CALLBACK_URL ??
+            "http://localhost:3000/auth/github/callback",
+          GITHUB_APP_INSTALL_URL:
+            env.GITHUB_APP_INSTALL_URL ??
+            "https://github.com/apps/test/installations/new",
+          AUTH_COOKIE_SECRET: env.AUTH_COOKIE_SECRET ?? testAuthCookieSecret,
+          AUTH_TOKEN_ENCRYPTION_KEY:
+            env.AUTH_TOKEN_ENCRYPTION_KEY ?? testTokenEncryptionKey,
+          APP_BASE_URL: env.APP_BASE_URL ?? "http://localhost:3000",
+        }
+      : {}),
+  }) as Config;

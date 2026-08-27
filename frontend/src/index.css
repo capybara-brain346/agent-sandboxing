@@ -1,6 +1,7 @@
 :root {
   --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+  --font-mono:
+    "Geist Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
 
   --color-bg: #ffffff;
   --color-fg: #000000;
@@ -197,6 +198,10 @@ section + section {
   cursor: pointer;
   width: fit-content;
   white-space: nowrap;
+}
+
+a.button {
+  text-decoration: none;
 }
 
 .button:hover:not(:disabled) {
@@ -477,6 +482,105 @@ section + section {
 
 .repo-card--disabled {
   background: var(--color-panel);
+}
+
+.login-page {
+  max-width: 560px;
+  padding-top: 15vh;
+}
+
+.login-page h1 {
+  max-width: 440px;
+  margin-top: 10px;
+  font-size: clamp(30px, 6vw, 52px);
+  line-height: 1.04;
+  letter-spacing: -0.04em;
+}
+
+.login-page .page-subtitle {
+  max-width: 440px;
+  margin-top: 16px;
+  font-size: 15px;
+}
+
+.login-page__eyebrow {
+  color: var(--color-fg-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+
+.login-page__button {
+  display: inline-block;
+  margin-top: 28px;
+}
+
+.login-page__note {
+  max-width: 380px;
+  margin: 12px 0 0;
+  color: var(--color-fg-subtle);
+  font-size: 12px;
+}
+
+.repos-page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-fg-muted);
+  font-size: 13px;
+}
+
+.user-menu__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+}
+
+.repo-picker {
+  margin-top: 8px;
+}
+
+.repo-picker__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(180px, 1fr);
+  gap: 16px;
+}
+
+.field select {
+  font: inherit;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+.field select:focus {
+  outline: 2px solid var(--color-link);
+  outline-offset: -1px;
+  border-color: var(--color-link);
+}
+
+.empty-state {
+  max-width: 480px;
+}
+
+.empty-state h2 {
+  font-size: 15px;
+}
+
+.empty-state p {
+  margin: 6px 0 16px;
+  color: var(--color-fg-muted);
+  font-size: 13px;
 }
 
 .repo-card__body {
@@ -760,5 +864,21 @@ section + section {
 
   .event__sequence {
     display: none;
+  }
+
+  .repos-page__header {
+    flex-direction: column;
+  }
+
+  .user-menu {
+    width: 100%;
+  }
+
+  .user-menu .button {
+    margin-left: auto;
+  }
+
+  .repo-picker__controls {
+    grid-template-columns: 1fr;
   }
 }

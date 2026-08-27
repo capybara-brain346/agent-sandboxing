@@ -17,8 +17,8 @@ npm install
 npm run dev
 ```
 
-The Vite dev server proxies `/chat-sessions` and `/health` to
-`http://localhost:3000` (see `vite.config.ts`), so no backend CORS
+The Vite dev server proxies `/auth`, `/github`, `/chat-sessions`, and `/health`
+to `http://localhost:3000` (see `vite.config.ts`), so no backend CORS
 configuration is needed in dev.
 
 ## Scripts

@@ -3,9 +3,12 @@ import { Link, useMatch } from "react-router-dom";
 
 const useSurfaceLabel = (): string => {
   const isRepoSelect = useMatch("/");
+  const isRepos = useMatch("/repos");
+  const isLogin = useMatch("/login");
   const isChatWorkspace = useMatch("/sessions/:sessionId");
   if (isChatWorkspace) return "Chat";
-  if (isRepoSelect) return "Repos";
+  if (isRepoSelect || isRepos) return "Repos";
+  if (isLogin) return "Sign in";
   return "";
 };
 

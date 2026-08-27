@@ -40,33 +40,88 @@ enum ChatMessageRole {
 }
 
 model ChatSession {
-  title              String?
-  id                 String        @id
-  repoRef            String        @map("repo_ref")
-  repoSource         String        @default("local") @map("repo_source")
-  repoProvider       String?       @map("repo_provider")
-  repoOwner          String?       @map("repo_owner")
-  repoName           String?       @map("repo_name")
-  repoId             String?       @map("repo_id")
-  repoDefaultBranch  String?       @map("repo_default_branch")
-  repoInstallationId String?       @map("repo_installation_id")
-  image              String?
-  summary            String?       @db.Text
-  summaryCompactedThroughMessageCount Int @default(0) @map("summary_compacted_through_message_count")
-  nextEventSequence  Int           @default(1) @map("next_event_sequence")
-  activeRunId        String?       @unique @map("active_run_id")
-  lockedAt           DateTime?     @map("locked_at")
-  lockVersion        Int           @default(0) @map("lock_version")
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
-  messages           ChatMessage[]
-  runs               Task[]        @relation("SessionRuns")
-  sandbox            Sandbox?      @relation("SessionSandbox")
-  artifacts          Artifact[]    @relation("SessionArtifacts")
-  events             Event[]       @relation("SessionEvents")
+  title                               String?
+  id                                  String        @id
+  userId                              String        @map("user_id")
+  repoRef                             String        @map("repo_ref")
+  repoSource                          String        @default("local") @map("repo_source")
+  repoProvider                        String?       @map("repo_provider")
+  repoOwner                           String?       @map("repo_owner")
+  repoName                            String?       @map("repo_name")
+  repoId                              String?       @map("repo_id")
+  repoDefaultBranch                   String?       @map("repo_default_branch")
+  repoInstallationId                  String?       @map("repo_installation_id")
+  repoBaseBranch                      String?       @map("repo_base_branch")
+  repoBaseSha                         String?       @map("repo_base_sha")
+  image                               String?
+  summary                             String?       @db.Text
+  summaryCompactedThroughMessageCount Int           @default(0) @map("summary_compacted_through_message_count")
+  nextEventSequence                   Int           @default(1) @map("next_event_sequence")
+  activeRunId                         String?       @unique @map("active_run_id")
+  lockedAt                            DateTime?     @map("locked_at")
+  lockVersion                         Int           @default(0) @map("lock_version")
+  createdAt                           DateTime      @default(now()) @map("created_at")
+  updatedAt                           DateTime      @updatedAt @map("updated_at")
+  messages                            ChatMessage[]
+  runs                                Task[]        @relation("SessionRuns")
+  sandbox                             Sandbox?      @relation("SessionSandbox")
+  artifacts                           Artifact[]    @relation("SessionArtifacts")
+  events                              Event[]       @relation("SessionEvents")
+  user                                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, updatedAt])
   @@index([createdAt])
   @@map("chat_sessions")
+}
+
+model User {
+  id            String               @id @default(cuid())
+  githubUserId  String               @unique @map("github_user_id")
+  login         String
+  avatarUrl     String               @map("avatar_url")
+  email         String?
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+  oauthToken    GitHubOAuthToken?
+  installations GitHubInstallation[]
+  sessions      ChatSession[]
+
+  @@map("users")
+}
+
+model GitHubOAuthToken {
+  id                     String    @id @default(cuid())
+  userId                 String    @unique @map("user_id")
+  accessTokenCiphertext  String    @map("access_token_ciphertext")
+  accessTokenIv          String    @map("access_token_iv")
+  accessTokenTag         String    @map("access_token_tag")
+  refreshTokenCiphertext String?   @map("refresh_token_ciphertext")
+  refreshTokenIv         String?   @map("refresh_token_iv")
+  refreshTokenTag        String?   @map("refresh_token_tag")
+  scope                  String
+  tokenType              String    @map("token_type")
+  expiresAt              DateTime? @map("expires_at")
+  refreshTokenExpiresAt  DateTime? @map("refresh_token_expires_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("github_oauth_tokens")
+}
+
+model GitHubInstallation {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  installationId String   @map("installation_id")
+  accountLogin   String   @map("account_login")
+  accountType    String   @map("account_type")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, installationId])
+  @@index([userId])
+  @@map("github_installations")
 }
 
 model ChatMessage {

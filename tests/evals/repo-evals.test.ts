@@ -164,7 +164,7 @@ const fakeService = (
   };
 
   return {
-    createSession: vi.fn(async (input) => {
+    createSession: vi.fn(async (_userId, input) => {
       repositoryPaths.push(input.repo.ref);
       return { ...session, repo: { ...session.repo, ref: input.repo.ref } };
     }),

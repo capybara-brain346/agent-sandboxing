@@ -66,11 +66,14 @@ GET    /chat-sessions/:sessionId/artifacts/:artifactId
 ```
 
 Session creation accepts a strict `repo` object with a `fixture` or `github`
-source. Fixture sessions are restricted to test, eval, and acceptance use and
-require `FIXTURE_REPOS_ENABLED=true`; production configuration rejects that
-flag. GitHub-shaped fields are stored in the request contract for future
-integration, but GitHub execution currently returns the
-`501 repo_source_not_supported` error.
+source and requires application cookie authentication. Sessions belong to the
+authenticated user; all reads, writes, event streams, runs, and artifacts are
+scoped to that user and do not expose `userId`. Fixture sessions are restricted
+to test, eval, and acceptance use and require `FIXTURE_REPOS_ENABLED=true`;
+production configuration rejects that flag. GitHub sessions persist the chosen
+repository, default branch, selected base branch, and selected base SHA. GitHub
+execution currently fails with the explicit `501 github_clone_unavailable`
+error until sandbox cloning is implemented.
 
 Session creation does not accept an initial message. Send a message separately;
 `startRun` defaults to `true`. A message-only request returns `201`, while a

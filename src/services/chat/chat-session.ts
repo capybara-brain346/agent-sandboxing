@@ -77,6 +77,8 @@ type SessionRow = {
   repoId: string | null;
   repoDefaultBranch: string | null;
   repoInstallationId: string | null;
+  repoBaseBranch: string | null;
+  repoBaseSha: string | null;
   image: string | null;
   activeRunId: string | null;
   createdAt: Date;
@@ -142,6 +144,8 @@ const repo = (session: SessionRow): RepoScope => ({
   repoId: session.repoId,
   defaultBranch: session.repoDefaultBranch,
   installationId: session.repoInstallationId,
+  baseBranch: session.repoBaseBranch,
+  baseSha: session.repoBaseSha,
 });
 
 const runSnapshot = (run: RunRow): RunSnapshot => {
@@ -247,13 +251,10 @@ export class ChatSessionService {
     private readonly fixtureReposEnabled = false,
   ) {}
 
-  async createSession(input: CreateChatSessionRequest): Promise<ChatSession> {
-    if (input.repo.source === "github")
-      throw new ServiceError(
-        "repo_source_not_supported",
-        "GitHub repositories are not supported yet",
-        501,
-      );
+  async createSession(
+    userId: string,
+    input: CreateChatSessionRequest,
+  ): Promise<ChatSession> {
     if (input.repo.source === "fixture" && !this.fixtureReposEnabled)
       throw new ServiceError(
         "fixture_repo_disabled",
@@ -267,6 +268,7 @@ export class ChatSessionService {
         const session = await tx.chatSession.create({
           data: {
             id: sessionId,
+            userId,
             title: input.title ?? null,
             repoRef: input.repo.ref,
             repoSource: input.repo.source,
@@ -276,6 +278,8 @@ export class ChatSessionService {
             repoId: input.repo.repoId ?? null,
             repoDefaultBranch: input.repo.defaultBranch ?? null,
             repoInstallationId: input.repo.installationId ?? null,
+            repoBaseBranch: input.repo.baseBranch ?? null,
+            repoBaseSha: input.repo.baseSha ?? null,
             image: input.image ?? null,
           },
         });
@@ -299,11 +303,13 @@ export class ChatSessionService {
   }
 
   async listSessions(
+    userId: string,
     query: ListSessionQuery,
   ): Promise<Page<ChatSessionListItem>> {
     const rows = await runQuery("list_chat_sessions", query, () =>
       this.prisma.chatSession.findMany({
         where: {
+          userId,
           ...(query.repoSource ? { repoSource: query.repoSource } : {}),
           ...(query.repoRef ? { repoRef: query.repoRef } : {}),
         },
@@ -347,26 +353,29 @@ export class ChatSessionService {
     };
   }
 
-  async getSession(sessionId: string): Promise<ChatSession> {
-    const session = await runQuery("get_chat_session", { sessionId }, () =>
-      this.prisma.chatSession.findUnique({
-        where: { id: sessionId },
-        include: {
-          sandbox: { select: { id: true } },
-          runs: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            include: {
-              messages: {
-                where: { role: "user" },
-                orderBy: { createdAt: "asc" },
-                take: 1,
-                select: { id: true, role: true },
+  async getSession(userId: string, sessionId: string): Promise<ChatSession> {
+    const session = await runQuery(
+      "get_chat_session",
+      { sessionId, userId },
+      () =>
+        this.prisma.chatSession.findFirst({
+          where: { id: sessionId, userId },
+          include: {
+            sandbox: { select: { id: true } },
+            runs: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              include: {
+                messages: {
+                  where: { role: "user" },
+                  orderBy: { createdAt: "asc" },
+                  take: 1,
+                  select: { id: true, role: true },
+                },
               },
             },
           },
-        },
-      }),
+        }),
     );
     if (!session)
       throw notFound("chat_session_not_found", "Chat session was not found");
@@ -374,25 +383,30 @@ export class ChatSessionService {
   }
 
   async updateSession(
+    userId: string,
     sessionId: string,
     input: UpdateChatSessionRequest,
   ): Promise<ChatSession> {
-    const updated = await runQuery("update_chat_session", { sessionId }, () =>
-      this.prisma.chatSession.updateMany({
-        where: { id: sessionId },
-        data: { title: input.title },
-      }),
+    const updated = await runQuery(
+      "update_chat_session",
+      { sessionId, userId },
+      () =>
+        this.prisma.chatSession.updateMany({
+          where: { id: sessionId, userId },
+          data: { title: input.title },
+        }),
     );
     if (updated.count === 0)
       throw notFound("chat_session_not_found", "Chat session was not found");
-    return this.getSession(sessionId);
+    return this.getSession(userId, sessionId);
   }
 
   async listMessages(
+    userId: string,
     sessionId: string,
     query: MessagePageQuery,
   ): Promise<Page<ChatMessage>> {
-    await this.requireSession(sessionId);
+    await this.requireSession(userId, sessionId);
     let before: Date | undefined;
     if (query.before) {
       const cursor = await this.prisma.chatMessage.findFirst({
@@ -422,6 +436,7 @@ export class ChatSessionService {
   }
 
   async appendMessage(
+    userId: string,
     sessionId: string,
     input: CreateMessageRequest,
   ): Promise<CreateMessageResponse> {
@@ -436,12 +451,13 @@ export class ChatSessionService {
             where: { id: sessionId },
             select: {
               id: true,
+              userId: true,
               activeRunId: true,
               repoRef: true,
               image: true,
             },
           });
-          if (!session)
+          if (!session || session.userId !== userId)
             throw notFound(
               "chat_session_not_found",
               "Chat session was not found",
@@ -588,10 +604,11 @@ export class ChatSessionService {
   }
 
   async listRuns(
+    userId: string,
     sessionId: string,
     query: PageQuery,
   ): Promise<Page<RunSnapshot>> {
-    await this.requireSession(sessionId);
+    await this.requireSession(userId, sessionId);
     const rows = await runQuery("list_chat_runs", { sessionId }, () =>
       this.prisma.task.findMany({
         where: { sessionId },
@@ -616,18 +633,26 @@ export class ChatSessionService {
     };
   }
 
-  async getRun(sessionId: string, runId: string): Promise<RunSnapshot> {
-    const run = await this.findRun(sessionId, runId);
+  async getRun(
+    userId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<RunSnapshot> {
+    const run = await this.findRun(userId, sessionId, runId);
     return runSnapshot(run);
   }
 
-  async result(sessionId: string, runId: string): Promise<RunResult> {
+  async result(
+    userId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<RunResult> {
     const run = await runQuery(
       "get_chat_run_result",
       { sessionId, runId },
       () =>
         this.prisma.task.findFirst({
-          where: { id: runId, sessionId },
+          where: { id: runId, sessionId, session: { userId } },
           include: {
             messages: {
               orderBy: { createdAt: "asc" },
@@ -661,10 +686,11 @@ export class ChatSessionService {
   }
 
   async cancelRun(
+    userId: string,
     sessionId: string,
     runId: string,
   ): Promise<RunCancellationResponse> {
-    const current = await this.findRun(sessionId, runId);
+    const current = await this.findRun(userId, sessionId, runId);
     if (current.status === "cancelled")
       return { taskRunId: runId, status: "cancelled" };
     if (current.status === "completed" || current.status === "failed")
@@ -691,51 +717,65 @@ export class ChatSessionService {
   }
 
   async sessionEventsAfter(
+    userId: string,
     sessionId: string,
     after: number,
   ): Promise<PublicEvent[]> {
-    await this.requireSession(sessionId);
+    await this.requireSession(userId, sessionId);
     return this.events.listSessionEvents(sessionId, after);
   }
 
   async runEventsAfter(
+    userId: string,
     sessionId: string,
     runId: string,
     after: number,
   ): Promise<PublicEvent[]> {
-    await this.findRun(sessionId, runId);
+    await this.findRun(userId, sessionId, runId);
     return this.events.listRunEvents(runId, after);
   }
 
   async getArtifact(
+    userId: string,
     sessionId: string,
     artifactId: string,
   ): Promise<ArtifactContent> {
+    await this.requireSession(userId, sessionId);
     return this.artifacts.get(sessionId, artifactId);
   }
 
-  private async requireSession(sessionId: string): Promise<void> {
-    const session = await this.prisma.chatSession.findUnique({
-      where: { id: sessionId },
+  private async requireSession(
+    userId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const session = await this.prisma.chatSession.findFirst({
+      where: { id: sessionId, userId },
       select: { id: true },
     });
     if (!session)
       throw notFound("chat_session_not_found", "Chat session was not found");
   }
 
-  private async findRun(sessionId: string, runId: string): Promise<RunRow> {
-    const run = await runQuery("get_chat_run", { sessionId, runId }, () =>
-      this.prisma.task.findFirst({
-        where: { id: runId, sessionId },
-        include: {
-          messages: {
-            where: { role: "user" },
-            orderBy: { createdAt: "asc" },
-            take: 1,
-            select: { id: true, role: true },
+  private async findRun(
+    userId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<RunRow> {
+    const run = await runQuery(
+      "get_chat_run",
+      { sessionId, runId, userId },
+      () =>
+        this.prisma.task.findFirst({
+          where: { id: runId, sessionId, session: { userId } },
+          include: {
+            messages: {
+              where: { role: "user" },
+              orderBy: { createdAt: "asc" },
+              take: 1,
+              select: { id: true, role: true },
+            },
           },
-        },
-      }),
+        }),
     );
     if (!run) throw notFound("run_not_found", "Run was not found");
     return run;

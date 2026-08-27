@@ -5,6 +5,8 @@ import { chatSessionRouter } from "../src/routes/chat-session.routes";
 import { sseHub } from "../src/services/events/sse-hub";
 import { chatSessionService } from "../src/services/chat/chat-session";
 import { ServiceError } from "../src/shared/errors";
+import { loadConfig } from "../src/config";
+import { AUTH_COOKIE_NAME, signSessionToken } from "../src/services/auth/auth";
 import type {
   ChatMessage,
   ChatSession,
@@ -50,6 +52,20 @@ const run: RunSnapshot = {
   failure: null,
 };
 
+const testConfig = loadConfig({
+  NODE_ENV: "test",
+  DATABASE_URL: "postgresql://test",
+});
+const authCookie = `${AUTH_COOKIE_NAME}=${await signSessionToken(
+  {
+    sub: "user_1",
+    login: "octo",
+    avatarUrl: "https://github.com/octo.png",
+    email: null,
+  },
+  testConfig.AUTH_COOKIE_SECRET,
+)}`;
+
 const message: ChatMessage = {
   messageId: "msg_1",
   chatSessionId: "chat_1",
@@ -83,6 +99,11 @@ const event: PublicEvent = {
 const makeApp = () => {
   const app = express();
   app.use(express.json());
+  app.use((request, _response, next) => {
+    request.headers.cookie = authCookie;
+    request.headers.origin = "http://localhost:3000";
+    next();
+  });
   app.use(chatSessionRouter);
   app.use(
     (
@@ -131,7 +152,7 @@ describe("chat session routes", () => {
         title: "Fix tests",
       });
     expect(valid.status).toBe(201);
-    expect(create).toHaveBeenCalledWith({
+    expect(create).toHaveBeenCalledWith("user_1", {
       repo: {
         source: "fixture",
         ref: "./repo",
@@ -140,16 +161,10 @@ describe("chat session routes", () => {
     });
   });
 
-  it("returns the temporary GitHub integration-unavailable response", async () => {
+  it("accepts an authenticated GitHub session request", async () => {
     const create = vi
       .spyOn(chatSessionService, "createSession")
-      .mockRejectedValue(
-        new ServiceError(
-          "repo_source_not_supported",
-          "GitHub repositories are not supported yet",
-          501,
-        ),
-      );
+      .mockResolvedValue(session);
 
     const response = await request(makeApp())
       .post("/chat-sessions")
@@ -166,11 +181,8 @@ describe("chat session routes", () => {
         },
       });
 
-    expect(response.status).toBe(501);
-    expect(response.body.error).toMatchObject({
-      code: "repo_source_not_supported",
-    });
-    expect(create).toHaveBeenCalledWith({
+    expect(response.status).toBe(201);
+    expect(create).toHaveBeenCalledWith("user_1", {
       repo: {
         source: "github",
         ref: "github:octo/repo",
@@ -201,12 +213,14 @@ describe("chat session routes", () => {
       request(makeApp()).get("/chat-sessions/chat_1/messages?limit=10"),
     ).resolves.toMatchObject({ status: 200, body: { items: [message] } });
 
-    expect(listSessions).toHaveBeenCalledWith({
+    expect(listSessions).toHaveBeenCalledWith("user_1", {
       limit: 25,
       repoSource: "fixture",
       repoRef: "./repo",
     });
-    expect(listMessages).toHaveBeenCalledWith("chat_1", { limit: 10 });
+    expect(listMessages).toHaveBeenCalledWith("user_1", "chat_1", {
+      limit: 10,
+    });
   });
 
   it("creates a message and run by default, or a message only when requested", async () => {
@@ -237,7 +251,7 @@ describe("chat session routes", () => {
       .post("/chat-sessions/chat_1/messages")
       .send({ content: "Keep this for later", startRun: false });
     expect(messageOnly.status).toBe(201);
-    expect(append).toHaveBeenLastCalledWith("chat_1", {
+    expect(append).toHaveBeenLastCalledWith("user_1", "chat_1", {
       content: "Keep this for later",
       startRun: false,
     });
@@ -339,7 +353,7 @@ describe("chat session routes", () => {
       status: "cancelling",
       eventsUrl: run.eventsUrl,
     });
-    expect(cancel).toHaveBeenCalledWith("chat_1", "run_1");
+    expect(cancel).toHaveBeenCalledWith("user_1", "chat_1", "run_1");
   });
 
   it("fetches full artifact content on demand, scoped to the session", async () => {
@@ -367,7 +381,7 @@ describe("chat session routes", () => {
       artifactId: "art_1",
       content: "diff --git a/x b/x",
     });
-    expect(getArtifact).toHaveBeenCalledWith("chat_1", "art_1");
+    expect(getArtifact).toHaveBeenCalledWith("user_1", "chat_1", "art_1");
   });
 
   it("returns not_found when the artifact does not belong to the session", async () => {

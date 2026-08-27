@@ -19,6 +19,14 @@ export default defineConfig({
         bypass: bypassNavigationRequests,
       },
       "/health": "http://localhost:3000",
+      "/auth": {
+        target: "http://localhost:3000",
+        bypass: bypassNavigationRequests,
+      },
+      "/github": {
+        target: "http://localhost:3000",
+        bypass: bypassNavigationRequests,
+      },
     },
   },
 });

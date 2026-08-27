@@ -272,6 +272,7 @@ export class RunService {
           where: { id: sessionId },
           select: {
             id: true,
+            repoSource: true,
             repoRef: true,
             image: true,
             sandbox: { select: { id: true } },
@@ -280,6 +281,12 @@ export class RunService {
     );
     if (!session)
       throw notFound("chat_session_not_found", "Chat session was not found");
+    if (session.repoSource === "github")
+      throw new ServiceError(
+        "github_clone_unavailable",
+        "GitHub repository cloning is unavailable until provisioning support is implemented",
+        501,
+      );
     if (session.sandbox) {
       logger.debug("run_sandbox_reused", {
         sessionId,

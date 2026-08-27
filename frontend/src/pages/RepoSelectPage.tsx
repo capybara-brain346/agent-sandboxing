@@ -1,7 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, listChatSessions } from "../api/client";
-import type { ChatSessionListItem } from "../api/types";
+import {
+  ApiError,
+  createChatSession,
+  getAuthMe,
+  getGitHubRepositories,
+  listChatSessions,
+  logout,
+} from "../api/client";
+import type {
+  AuthMe,
+  ChatSessionListItem,
+  GitHubRepository,
+  GitHubRepositoriesResponse,
+} from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 
 const formatTimestamp = (value: string): string =>
@@ -9,50 +21,225 @@ const formatTimestamp = (value: string): string =>
 
 export const RepoSelectPage = () => {
   const navigate = useNavigate();
+  const [user, setUser] = useState<AuthMe | null>(null);
+  const [connection, setConnection] =
+    useState<GitHubRepositoriesResponse | null>(null);
   const [sessions, setSessions] = useState<ChatSessionListItem[]>([]);
+  const [selectedRepoId, setSelectedRepoId] = useState("");
+  const [selectedBranch, setSelectedBranch] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [reconnectRequired, setReconnectRequired] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    listChatSessions({ limit: 25 })
-      .then((page) => {
-        if (!cancelled) setSessions(page.items);
-      })
-      .catch((caught) => {
+    Promise.all([
+      getAuthMe(),
+      getGitHubRepositories(),
+      listChatSessions({ limit: 25 }),
+    ])
+      .then(([nextUser, nextConnection, recent]) => {
         if (cancelled) return;
+        setUser(nextUser);
+        setConnection(nextConnection);
+        setSessions(recent.items);
+      })
+      .catch((caught: unknown) => {
+        if (cancelled) return;
+        if (caught instanceof ApiError && caught.status === 401) {
+          navigate("/login", { replace: true });
+          return;
+        }
         setLoadError(
           caught instanceof ApiError
             ? caught.message
-            : "Failed to load recent chats",
+            : "Failed to load GitHub repositories",
+        );
+        setReconnectRequired(
+          caught instanceof ApiError &&
+            caught.code === "github_reconnect_required",
         );
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [navigate]);
+
+  const selectedRepo: GitHubRepository | undefined =
+    connection?.repositories.find(
+      (repository) => repository.repoId === selectedRepoId,
+    );
+
+  const selectRepository = (repoId: string) => {
+    setSelectedRepoId(repoId);
+    setSelectedBranch("");
+  };
+
+  const selectBranch = async (branchName: string) => {
+    setSelectedBranch(branchName);
+    if (!selectedRepo || !branchName) return;
+    const branch = selectedRepo.branches.find(
+      (candidate) => candidate.name === branchName,
+    );
+    if (!branch) return;
+    setCreating(true);
+    setLoadError(null);
+    setReconnectRequired(false);
+    try {
+      const session = await createChatSession({
+        repo: {
+          source: "github",
+          ref: `github:${selectedRepo.fullName}`,
+          provider: "github",
+          owner: selectedRepo.owner,
+          name: selectedRepo.name,
+          repoId: selectedRepo.repoId,
+          defaultBranch: selectedRepo.defaultBranch,
+          installationId: selectedRepo.installationId,
+          baseBranch: branch.name,
+          baseSha: branch.sha,
+        },
+      });
+      navigate(`/sessions/${session.chatSessionId}`);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      setLoadError(
+        caught instanceof ApiError ? caught.message : "Failed to create chat",
+      );
+      setReconnectRequired(
+        caught instanceof ApiError &&
+          caught.code === "github_reconnect_required",
+      );
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const signOut = async () => {
+    await logout().catch(() => undefined);
+    navigate("/login", { replace: true });
+  };
 
   return (
-    <main className="page page--wide">
-      <div className="page-header">
-        <h1>Select a repo</h1>
-        <p className="page-subtitle">
-          Start a chat-driven agent session against a repository.
-        </p>
+    <main className="page page--wide repos-page">
+      <div className="page-header repos-page__header">
+        <div>
+          <div className="login-page__eyebrow">REPOSITORY ACCESS</div>
+          <h1>Choose where to work</h1>
+          <p className="page-subtitle">
+            Select a personal repository and hand the agent an exact branch
+            point.
+          </p>
+        </div>
+        {user && (
+          <div className="user-menu">
+            <img className="user-menu__avatar" src={user.avatarUrl} alt="" />
+            <span>{user.login}</span>
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={signOut}
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
 
-      <section>
-        <div className="repo-cards">
-          <div className="repo-card repo-card--disabled">
-            <div className="repo-card__body">
-              <span className="repo-card__title">GitHub repository</span>
-              <p className="repo-card__description">
-                Log in with GitHub to select a repository and run an agent
-                session against your own code.
-              </p>
-            </div>
-            <button type="button" className="button button--secondary" disabled>
-              Log in with GitHub (coming soon)
-            </button>
+      {loadError && (
+        <div className="alert alert--error">
+          <span>{loadError}</span>
+          {reconnectRequired && (
+            <a href="/auth/github/start">Reconnect GitHub</a>
+          )}
+        </div>
+      )}
+
+      <section className="repo-picker">
+        <div className="panel">
+          <div className="panel__header">
+            <span className="panel__title">GitHub repositories</span>
+            <a className="button button--secondary" href="/github/install">
+              Connect GitHub App
+            </a>
+          </div>
+          <div className="panel__body">
+            {!connection && !loadError && (
+              <p className="run-inspector__empty">Loading repositories...</p>
+            )}
+            {connection && connection.installations.length === 0 && (
+              <div className="empty-state">
+                <h2>Connect the GitHub App</h2>
+                <p>
+                  Grant the app access to a personal account before selecting a
+                  repository.
+                </p>
+                <a className="button" href="/github/install">
+                  Install GitHub App
+                </a>
+              </div>
+            )}
+            {connection &&
+              connection.installations.length > 0 &&
+              connection.repositories.length === 0 && (
+                <div className="empty-state">
+                  <h2>No shared repositories</h2>
+                  <p>
+                    The app needs access to a personal repository visible to
+                    your GitHub account.
+                  </p>
+                  <a
+                    className="button button--secondary"
+                    href="/github/install"
+                  >
+                    Review App access
+                  </a>
+                </div>
+              )}
+            {connection && connection.repositories.length > 0 && (
+              <div className="repo-picker__controls">
+                <label className="field">
+                  <span className="field__label">Repository</span>
+                  <select
+                    value={selectedRepoId}
+                    onChange={(event) => selectRepository(event.target.value)}
+                    disabled={creating}
+                  >
+                    <option value="">Choose a repository</option>
+                    {connection.repositories.map((repository) => (
+                      <option key={repository.repoId} value={repository.repoId}>
+                        {repository.fullName}
+                        {repository.private ? "  [private]" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="field__label">Branch</span>
+                  <select
+                    value={selectedBranch}
+                    onChange={(event) => void selectBranch(event.target.value)}
+                    disabled={!selectedRepo || creating}
+                  >
+                    <option value="">Choose a branch</option>
+                    {selectedRepo?.branches.map((branch) => (
+                      <option key={branch.name} value={branch.name}>
+                        {branch.name}
+                        {branch.name === selectedRepo.defaultBranch
+                          ? "  [default]"
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {creating && (
+                  <p className="field__hint">Opening workspace...</p>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -63,7 +250,6 @@ export const RepoSelectPage = () => {
             <span className="panel__title">Recent chats</span>
           </div>
           <div className="panel__body">
-            {loadError && <p className="alert alert--error">{loadError}</p>}
             {sessions.length === 0 && !loadError && (
               <p className="run-inspector__empty">No chats yet.</p>
             )}

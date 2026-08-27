@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { loadAgentModelConfig, loadConfig } from "../src/config";
 
+const authSettings = {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_CLIENT_ID: "client-id",
+  GITHUB_CLIENT_SECRET: "client-secret",
+  GITHUB_CALLBACK_URL: "http://localhost:3000/auth/github/callback",
+  GITHUB_APP_INSTALL_URL: "https://github.com/apps/test/installations/new",
+  AUTH_COOKIE_SECRET: "auth-cookie-secret-012345678901234567890",
+  AUTH_TOKEN_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  APP_BASE_URL: "http://localhost:3000",
+};
+
 describe("configuration", () => {
   it("loads model settings without requiring database configuration", () => {
     expect(loadAgentModelConfig({ OPENROUTER_API_KEY: "test-key" })).toEqual({
@@ -48,6 +60,7 @@ describe("configuration", () => {
         DATABASE_URL: "postgresql://test",
         OPENROUTER_API_KEY: "test-key",
         FIXTURE_REPOS_ENABLED: "true",
+        ...authSettings,
       }),
     ).toThrow(/FIXTURE_REPOS_ENABLED/);
   });
@@ -61,6 +74,7 @@ describe("configuration", () => {
       NODE_ENV: nodeEnv,
       DATABASE_URL: "postgresql://test",
       OPENROUTER_API_KEY: "test-key",
+      ...authSettings,
     });
 
     expect(config.LOG_LEVEL).toBe(logLevel);
@@ -149,6 +163,7 @@ describe("configuration", () => {
       loadConfig({
         NODE_ENV: "development",
         DATABASE_URL: "postgresql://test",
+        ...authSettings,
       }),
     ).toThrow(/OPENROUTER_API_KEY/);
   });
@@ -158,6 +173,7 @@ describe("configuration", () => {
       NODE_ENV: "production",
       DATABASE_URL: "postgresql://test",
       OPENROUTER_API_KEY: "test-key",
+      ...authSettings,
     });
 
     expect(config.OPENROUTER_API_KEY).toBe("test-key");
