@@ -147,5 +147,6 @@ vite.config.ts.timestamp-*
 
 # Local eval results
 tests/evals/results/*.jsonl
-docs/planning/
+docs/planning/*
+docs/planning/github-pr-flow-plan.md
 .hermes/

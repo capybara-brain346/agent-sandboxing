@@ -23,10 +23,10 @@ React + TypeScript SPA, separate from the backend's `tsconfig`/build.
 
 MVP only, matching the current session API surface:
 
-- **Repo select** (`/`) — form to create a `ChatSession` (`POST
-/chat-sessions`), then navigates to the session's chat workspace. Only the
-  local `fixture` repo source is runnable; `github` is a stored,
-  not-yet-executable choice (backend returns `501 repo_source_not_supported`).
+- **Repo select** (`/`) — shows the GitHub login-required/coming-soon state and
+  recent sessions. It no longer starts the local fixture repository; `github` is a
+  stored, not-yet-executable choice (backend returns the
+  `501 repo_source_not_supported` error).
 - **Chat workspace** (`/sessions/:sessionId`) — the primary route:
   - `MessageThread` renders the session's chat history
     (`GET /chat-sessions/:sessionId/messages`); the user bubble for a new

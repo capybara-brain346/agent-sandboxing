@@ -23,7 +23,8 @@ Sandboxes are created only through the chat-session run flow. There are no
 registered `/sandboxes/*` routes. `RunService` provisions the session-owned
 sandbox on the first run of a session and reuses it, unstopped, on later runs.
 
-The service currently uses a local fixture repository and Docker. GitHub
+The service currently uses a local fixture repository and Docker only for
+explicitly enabled non-production test, eval, and acceptance runs. GitHub
 integration, authentication, queues, and a second runtime provider are out of
 scope. The Agent Service owns the control-plane agent loop and uses this
 service only through the narrow session-owned runtime seam.
@@ -230,6 +231,7 @@ All runtime configuration is loaded and validated by `src/config.ts`:
 
 - `SANDBOX_IMAGE`
 - `FIXTURE_REPO_PATH`
+- `FIXTURE_REPOS_ENABLED` (default `false`; rejected in production)
 - `SANDBOX_PROVISION_TIMEOUT_MS`
 - `SANDBOX_COMMAND_TIMEOUT_MS`
 - `SANDBOX_MEMORY_BYTES`

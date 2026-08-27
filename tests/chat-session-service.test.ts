@@ -90,6 +90,9 @@ describe("ChatSessionService", () => {
       prisma,
       events as unknown as EventStore,
       publish,
+      undefined,
+      undefined,
+      true,
     );
 
     await expect(
@@ -118,6 +121,36 @@ describe("ChatSessionService", () => {
       }),
     );
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects fixture sessions when fixture support is disabled", async () => {
+    const service = new ChatSessionService(
+      {} as PrismaClient,
+      {} as EventStore,
+    );
+
+    await expect(
+      service.createSession({ repo: { source: "fixture", ref: "./repo" } }),
+    ).rejects.toMatchObject({
+      code: "fixture_repo_disabled",
+      status: 403,
+    });
+  });
+
+  it("keeps GitHub session creation explicitly unavailable", async () => {
+    const service = new ChatSessionService(
+      {} as PrismaClient,
+      {} as EventStore,
+    );
+
+    await expect(
+      service.createSession({
+        repo: { source: "github", ref: "github:octo/repo" },
+      }),
+    ).rejects.toMatchObject({
+      code: "repo_source_not_supported",
+      status: 501,
+    });
   });
 
   it("persists a message, run, lock, and both scoped event streams together", async () => {

@@ -15,6 +15,7 @@ describe("configuration", () => {
       DATABASE_URL: "postgresql://test",
     });
     expect(config.SANDBOX_IMAGE).toBe("node:22-bookworm");
+    expect(config.FIXTURE_REPOS_ENABLED).toBe(false);
     expect(config.COMMAND_OUTPUT_MAX_BYTES).toBeGreaterThan(0);
     expect(config.AGENT_MODEL).toBe("openrouter:deepseek/deepseek-v4-flash");
     expect(config.AGENT_MAX_STEPS).toBe(25);
@@ -28,6 +29,27 @@ describe("configuration", () => {
     expect(config.LOCAL_TRACE_EXPORT_ENABLED).toBe(false);
     expect(config.LOG_LEVEL).toBe("error");
     expect(config.LOG_COLOR).toBe("auto");
+  });
+
+  it("enables fixture repositories only when explicitly configured", () => {
+    const config = loadConfig({
+      NODE_ENV: "test",
+      DATABASE_URL: "postgresql://test",
+      FIXTURE_REPOS_ENABLED: "true",
+    });
+
+    expect(config.FIXTURE_REPOS_ENABLED).toBe(true);
+  });
+
+  it("rejects fixture repositories in production", () => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: "production",
+        DATABASE_URL: "postgresql://test",
+        OPENROUTER_API_KEY: "test-key",
+        FIXTURE_REPOS_ENABLED: "true",
+      }),
+    ).toThrow(/FIXTURE_REPOS_ENABLED/);
   });
 
   it.each([

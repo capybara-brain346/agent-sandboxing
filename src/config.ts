@@ -25,6 +25,7 @@ const schema = z
     SHUTDOWN_TIMEOUT_MS: z.coerce.number().default(10_000),
     SANDBOX_IMAGE: z.string().default("node:22-bookworm"),
     FIXTURE_REPO_PATH: z.string().default("/workspace/fixture-repo"),
+    FIXTURE_REPOS_ENABLED: booleanEnv.default(false),
     SANDBOX_PROVISION_TIMEOUT_MS: z.coerce
       .number()
       .int()
@@ -81,6 +82,12 @@ const schema = z
         code: "custom",
         path: ["OPENROUTER_API_KEY"],
         message: "OPENROUTER_API_KEY is required outside test mode",
+      });
+    if (config.NODE_ENV === "production" && config.FIXTURE_REPOS_ENABLED)
+      context.addIssue({
+        code: "custom",
+        path: ["FIXTURE_REPOS_ENABLED"],
+        message: "FIXTURE_REPOS_ENABLED cannot be enabled in production",
       });
     if (config.LANGFUSE_ENABLED) {
       if (config.LANGFUSE_PUBLIC_KEY === undefined)

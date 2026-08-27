@@ -244,6 +244,7 @@ export class ChatSessionService {
     private readonly artifacts: Pick<ArtifactStore, "get"> = new ArtifactStore(
       prisma,
     ),
+    private readonly fixtureReposEnabled = false,
   ) {}
 
   async createSession(input: CreateChatSessionRequest): Promise<ChatSession> {
@@ -252,6 +253,12 @@ export class ChatSessionService {
         "repo_source_not_supported",
         "GitHub repositories are not supported yet",
         501,
+      );
+    if (input.repo.source === "fixture" && !this.fixtureReposEnabled)
+      throw new ServiceError(
+        "fixture_repo_disabled",
+        "Fixture repositories are not available in the product path",
+        403,
       );
 
     const sessionId = id("chat");
@@ -783,4 +790,5 @@ export const chatSessionService = new ChatSessionService(
   publishChatEvent,
   chatRunService,
   taskServiceArtifacts,
+  chatHarnessConfig.FIXTURE_REPOS_ENABLED,
 );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, createChatSession, listChatSessions } from "../api/client";
+import { ApiError, listChatSessions } from "../api/client";
 import type { ChatSessionListItem } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -11,8 +11,6 @@ export const RepoSelectPage = () => {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<ChatSessionListItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,24 +31,6 @@ export const RepoSelectPage = () => {
     };
   }, []);
 
-  const onStartDemo = async () => {
-    setStarting(true);
-    setStartError(null);
-    try {
-      const session = await createChatSession({
-        repo: { source: "fixture", ref: "/workspace/fixture-repo" },
-      });
-      navigate(`/sessions/${session.chatSessionId}`);
-    } catch (caught) {
-      setStartError(
-        caught instanceof ApiError
-          ? caught.message
-          : "Failed to start a chat session",
-      );
-      setStarting(false);
-    }
-  };
-
   return (
     <main className="page page--wide">
       <div className="page-header">
@@ -62,34 +42,16 @@ export const RepoSelectPage = () => {
 
       <section>
         <div className="repo-cards">
-          <div className="repo-card">
-            <div className="repo-card__body">
-              <span className="repo-card__title">Demo repo</span>
-              <p className="repo-card__description">
-                A local fixture repository for trying out the agent harness.
-              </p>
-              {startError && <p className="alert alert--error">{startError}</p>}
-            </div>
-            <button
-              type="button"
-              className="button"
-              onClick={onStartDemo}
-              disabled={starting}
-            >
-              {starting ? "Starting…" : "Start chat"}
-            </button>
-          </div>
-
           <div className="repo-card repo-card--disabled">
             <div className="repo-card__body">
               <span className="repo-card__title">GitHub repository</span>
               <p className="repo-card__description">
-                Connect a GitHub repository to run agent sessions against your
-                own code.
+                Log in with GitHub to select a repository and run an agent
+                session against your own code.
               </p>
             </div>
             <button type="button" className="button button--secondary" disabled>
-              Connect GitHub (coming soon)
+              Log in with GitHub (coming soon)
             </button>
           </div>
         </div>

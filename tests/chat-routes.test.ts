@@ -140,6 +140,50 @@ describe("chat session routes", () => {
     });
   });
 
+  it("returns the temporary GitHub integration-unavailable response", async () => {
+    const create = vi
+      .spyOn(chatSessionService, "createSession")
+      .mockRejectedValue(
+        new ServiceError(
+          "repo_source_not_supported",
+          "GitHub repositories are not supported yet",
+          501,
+        ),
+      );
+
+    const response = await request(makeApp())
+      .post("/chat-sessions")
+      .send({
+        repo: {
+          source: "github",
+          ref: "github:octo/repo",
+          provider: "github",
+          owner: "octo",
+          name: "repo",
+          repoId: "1",
+          defaultBranch: "main",
+          installationId: "2",
+        },
+      });
+
+    expect(response.status).toBe(501);
+    expect(response.body.error).toMatchObject({
+      code: "repo_source_not_supported",
+    });
+    expect(create).toHaveBeenCalledWith({
+      repo: {
+        source: "github",
+        ref: "github:octo/repo",
+        provider: "github",
+        owner: "octo",
+        name: "repo",
+        repoId: "1",
+        defaultBranch: "main",
+        installationId: "2",
+      },
+    });
+  });
+
   it("lists sessions and messages with validated pagination", async () => {
     const listSessions = vi
       .spyOn(chatSessionService, "listSessions")

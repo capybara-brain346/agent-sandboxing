@@ -66,9 +66,11 @@ GET    /chat-sessions/:sessionId/artifacts/:artifactId
 ```
 
 Session creation accepts a strict `repo` object with a `fixture` or `github`
-source. Fixture sessions require the existing local repository reference.
-GitHub-shaped fields are stored in the request contract for future integration,
-but GitHub execution currently returns `501 repo_source_not_supported`.
+source. Fixture sessions are restricted to test, eval, and acceptance use and
+require `FIXTURE_REPOS_ENABLED=true`; production configuration rejects that
+flag. GitHub-shaped fields are stored in the request contract for future
+integration, but GitHub execution currently returns the
+`501 repo_source_not_supported` error.
 
 Session creation does not accept an initial message. Send a message separately;
 `startRun` defaults to `true`. A message-only request returns `201`, while a
