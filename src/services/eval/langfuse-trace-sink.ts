@@ -123,6 +123,7 @@ export const langfuseTraceMetadata = (
 ): Record<string, unknown> => ({
   ...asMetadata(trace.metadata),
   runId: trace.runId,
+  chatSessionId: trace.sessionId,
   sessionId: trace.sessionId,
   traceId: trace.traceId,
   orchestrator: {

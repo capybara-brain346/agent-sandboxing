@@ -198,6 +198,7 @@ describe("eval trace normalization", () => {
     expect(metadata).toMatchObject({
       source: "chat",
       runId: "run_1",
+      chatSessionId: "chat_1",
       sessionId: "chat_1",
       traceId: "run_1",
       orchestrator: { delegated: false },

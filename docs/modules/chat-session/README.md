@@ -230,9 +230,11 @@ Langfuse export uses the JavaScript SDK v4 packages
 `@langfuse/tracing@4.6.1` and `@langfuse/otel@4.6.1`. The Langfuse sink uses a
 deterministic W3C trace ID derived from the run ID and stores the original run
 ID in metadata because SDK v4 requires a 32-character hexadecimal trace ID.
-The trace contains nested orchestrator, worker agent, generation, tool, and
-terminal-finalization observations. Langfuse flushes are best effort and
-cannot fail a user run.
+Each trace sets Langfuse's native `sessionId` to the chat session ID so runs are
+grouped in the Langfuse Sessions view, and metadata also includes
+`chatSessionId` for direct product correlation. The trace contains nested
+orchestrator, worker agent, generation, tool, and terminal-finalization
+observations. Langfuse flushes are best effort and cannot fail a user run.
 
 Set `LANGFUSE_ENABLED=true` with both API keys to enable the remote sink. Set
 `LOCAL_TRACE_EXPORT_ENABLED=true` to append the same normalized traces as JSON
