@@ -13,6 +13,7 @@ import {
   createChatSession,
   getGitHubBranches,
   getGitHubRepositories,
+  isSessionAuthFailure,
 } from "@/api/client";
 import type { GitHubRepository, GitHubRepositoriesResponse } from "@/api/types";
 import { ContextCard, Skeleton } from "@/components/ai";
@@ -119,7 +120,7 @@ export const RepoSelectPage = () => {
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
-        if (caught instanceof ApiError && caught.status === 401) {
+        if (isSessionAuthFailure(caught)) {
           navigate("/login", { replace: true });
           return;
         }
@@ -167,7 +168,7 @@ export const RepoSelectPage = () => {
     try {
       setConnection(await getGitHubRepositories());
     } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 401) {
+      if (isSessionAuthFailure(caught)) {
         navigate("/login", { replace: true });
         return;
       }
@@ -195,7 +196,7 @@ export const RepoSelectPage = () => {
     try {
       setBranches(await getGitHubBranches(repository.repoId));
     } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 401) {
+      if (isSessionAuthFailure(caught)) {
         navigate("/login", { replace: true });
         return;
       }

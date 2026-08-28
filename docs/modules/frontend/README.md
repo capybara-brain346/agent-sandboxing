@@ -30,7 +30,9 @@ MVP only, matching the current session API surface:
   user-owned sessions. Branch metadata loads for the selected repository only;
   selecting a branch immediately creates a GitHub-backed chat session. The page
   distinguishes first-time repository setup, installed-with-no-shared-repos, and
-  ready states, and includes a refresh action after GitHub access changes.
+  ready states, and includes a refresh action after GitHub access changes. A
+  `github_reconnect_required` response stays on this page and shows the
+  reconnect state instead of redirecting to login.
 - **Root** (`/`) — redirects logged-out users to `/login` and logged-in users to
   `/repos`.
 - **Chat workspace** (`/sessions/:sessionId`) — the primary route. The thread

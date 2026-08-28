@@ -31,6 +31,11 @@ export class ApiError extends Error {
   }
 }
 
+export const isSessionAuthFailure = (error: unknown): boolean =>
+  error instanceof ApiError &&
+  error.status === 401 &&
+  error.code !== "github_reconnect_required";
+
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
