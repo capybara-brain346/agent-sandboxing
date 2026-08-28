@@ -24,7 +24,7 @@ once the message/run/lock transaction commits. `RunService` then:
 
 - provisions the session's sandbox on the first run
   (`SandboxService.createForSessionInTransaction` + `ensureReadyForSession`)
-  and reuses it unchanged on later runs;
+  and reuses it unchanged on later fixture runs;
 - runs the worker (`AgentRunner`/`TaskRunner`) against that sandbox with
   `sessionId`, `runId`, and `messageId` in its context, so agent tool events
   land on the run's event stream instead of the legacy task stream;
@@ -34,11 +34,13 @@ once the message/run/lock transaction commits. `RunService` then:
   reuses it.
 
 GitHub-backed workers can use the platform-mediated `publish_pull_request`
-capability. The backend owns branch creation, commit, push, and PR creation.
-Pull requests are persisted with history and one current row per session; PR
-failures do not change a completed coding run to a failed run. Failed publish
-attempts are retained for history but cleared as current so a later retry is not
-blocked by the failed row.
+capability. The backend checks out `agent/<sessionId>/<runId>` before the worker
+runs, then publication commits, pushes, creates the PR, and restores the diff for
+final run capture. Pull requests are persisted with history and one current row
+per session; PR failures do not change a completed coding run to a failed run.
+Failed publish attempts are retained for history but cleared as current so a
+later retry is not blocked by the failed row. Reused GitHub sandboxes are
+currently rejected before worker execution instead of being reused.
 
 Cancellation aborts the tracked in-flight execution's `AbortSignal` through
 `RunService.requestCancellation` and falls back to a direct terminal-state
@@ -85,7 +87,9 @@ runs mint a short-lived GitHub App installation token in the control plane and
 provision the selected repository and branch into the session-owned sandbox.
 Provisioning uses the latest head of the selected branch; the persisted base SHA
 is not used for component 3 provisioning. The token is never persisted or
-passed to the Agent Service.
+passed to the Agent Service. GitHub provisioning leaves the workspace on the
+selected base branch, then run setup switches to the deterministic run branch
+before the worker can edit.
 
 Session creation does not accept an initial message. Send a message separately;
 `startRun` defaults to `true`. A message-only request returns `201`, while a

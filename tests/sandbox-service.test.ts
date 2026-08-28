@@ -226,6 +226,49 @@ describe("SandboxService", () => {
     });
   });
 
+  it("prepares a deterministic GitHub run branch from the selected base", async () => {
+    const findFirst = vi.fn(async () => sandboxRow("ready"));
+    const simpleExec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: "main\n",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      });
+    const runtime = { simpleExec } as unknown as SandboxRuntime;
+    const service = new SandboxService(
+      { sandbox: { findFirst } } as unknown as PrismaClient,
+      {} as EventStore,
+      runtime,
+      { ...config, SANDBOX_COMMAND_TIMEOUT_MS: 1000 } as Config,
+      vi.fn(),
+    );
+
+    await expect(
+      service.prepareRunBranchForSession("chat_1", "run_1", "s1", {
+        baseBranch: "main",
+        defaultBranch: "main",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(simpleExec).toHaveBeenNthCalledWith(
+      2,
+      "sandbox-s1",
+      "git checkout -B 'agent/chat_1/run_1' 'origin/main'",
+      "/workspace/repo",
+      { timeoutMs: 1000 },
+    );
+  });
+
   it("rejects diff before the session workspace is available", async () => {
     const runtime = { diff: vi.fn() } as unknown as SandboxRuntime;
     const prisma = {

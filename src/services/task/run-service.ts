@@ -27,6 +27,7 @@ type GitHubInstallationTokenProvider = {
 type EnsuredSandbox = {
   sandboxId: string;
   source?: SandboxProvisioningSource;
+  runBranch?: { baseBranch: string; defaultBranch: string | null };
 };
 
 type RunExecution = {
@@ -158,6 +159,16 @@ export class RunService {
           null,
         );
         return;
+      }
+
+      if (sandbox.runBranch) {
+        await this.sandbox.prepareRunBranchForSession(
+          sessionId,
+          runId,
+          sandboxId,
+          sandbox.runBranch,
+        );
+        if (await this.waitForCancellation(execution)) return;
       }
 
       if (!(await this.transitionStatus(runId, "running"))) return;
@@ -354,6 +365,12 @@ export class RunService {
       };
     };
     if (session.sandbox && session.sandbox.status !== "creating") {
+      if (session.repoSource === "github")
+        throw new ServiceError(
+          "github_reused_sandbox_unsupported",
+          "GitHub session sandbox reuse is not supported",
+          409,
+        );
       logger.debug("run_sandbox_reused", {
         sessionId,
         runId,
@@ -362,8 +379,19 @@ export class RunService {
       return { sandboxId: session.sandbox.id };
     }
     const provisioningSource = await source();
+    const runBranch =
+      provisioningSource.source === "github"
+        ? {
+            baseBranch: provisioningSource.baseBranch,
+            defaultBranch: session.repoDefaultBranch?.trim() || null,
+          }
+        : undefined;
     if (session.sandbox)
-      return { sandboxId: session.sandbox.id, source: provisioningSource };
+      return {
+        sandboxId: session.sandbox.id,
+        source: provisioningSource,
+        ...(runBranch ? { runBranch } : {}),
+      };
 
     const created = await runQuery(
       "create_session_sandbox",
@@ -404,6 +432,7 @@ export class RunService {
     return {
       sandboxId: created.sandbox.sandboxId,
       source: provisioningSource,
+      ...(runBranch ? { runBranch } : {}),
     };
   }
 

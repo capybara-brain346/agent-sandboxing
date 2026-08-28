@@ -21,6 +21,7 @@ import type { SimpleExecOptions } from "../../types/sandbox.types";
 import { decryptToken } from "../auth/token-crypto";
 import type { EventStore } from "../events/event-store";
 import { workspaceRoot } from "../sandbox/workspace";
+import { githubRunBranch, sameGitBranch } from "./branch";
 
 export type GitHubRepositoryRecord = {
   id: string;
@@ -461,12 +462,6 @@ const isExpectedGitHubRemote = (
   }
 };
 
-const publishBranch = (sessionId: string, runId: string): string =>
-  `agent/${sessionId}/${runId}`.replace(/[^A-Za-z0-9._/-]/g, "-");
-
-const sameBranch = (left: string | null, right: string): boolean =>
-  left?.toLowerCase() === right.toLowerCase();
-
 const githubFailure = (error: unknown): GitHubResponseFailure => {
   const candidate = error as {
     code?: unknown;
@@ -732,6 +727,51 @@ export class GitHubService {
         "The configured Git remote does not match the session repository",
       );
 
+    const branch = githubRunBranch(sessionId, runId);
+    if (
+      sameGitBranch(repository.baseBranch, branch) ||
+      sameGitBranch(repository.defaultBranch, branch)
+    )
+      return operationFailure(
+        "publish",
+        "protected_git_branch",
+        "Refusing to publish the session base branch",
+      );
+
+    const currentBranch = await this.publishExec(
+      target,
+      "git branch --show-current",
+      options,
+    );
+    if (!currentBranch.success)
+      return operationFailure(
+        "publish",
+        currentBranch.code,
+        currentBranch.message,
+      );
+    if (!sameGitBranch(currentBranch.stdout.trim(), branch)) {
+      const dirty = await this.publishExec(
+        target,
+        "git status --porcelain=v1",
+        options,
+      );
+      if (!dirty.success)
+        return operationFailure("publish", dirty.code, dirty.message);
+      if (dirty.stdout.trim())
+        return operationFailure(
+          "publish",
+          "git_branch_mismatch",
+          "Workspace changes are not on the expected run branch",
+        );
+      const checkout = await this.publishExec(
+        target,
+        `git checkout ${shellQuote(branch)}`,
+        options,
+      );
+      if (!checkout.success)
+        return operationFailure("publish", checkout.code, checkout.message);
+    }
+
     const status = await this.publishExec(
       target,
       "git status --porcelain=v1",
@@ -744,17 +784,6 @@ export class GitHubService {
         "publish",
         "no_workspace_diff",
         "Refusing to publish a pull request without workspace changes",
-      );
-
-    const branch = publishBranch(sessionId, runId);
-    if (
-      sameBranch(repository.baseBranch, branch) ||
-      sameBranch(repository.defaultBranch, branch)
-    )
-      return operationFailure(
-        "publish",
-        "protected_git_branch",
-        "Refusing to publish the session base branch",
       );
 
     const creating = await this.prisma.$transaction(async (tx) => {
@@ -790,20 +819,6 @@ export class GitHubService {
       return { row, event };
     });
     if (creating.event) this.publish(creating.event);
-
-    const checkout = await this.publishExec(
-      target,
-      `git checkout -B ${shellQuote(branch)} ${shellQuote(`origin/${baseBranch}`)} || git checkout -B ${shellQuote(branch)} ${shellQuote(baseBranch)}`,
-      options,
-    );
-    if (!checkout.success)
-      return this.failPublishingPullRequest(
-        sessionId,
-        runId,
-        creating.row,
-        checkout.code,
-        checkout.message,
-      );
 
     const add = await this.publishExec(target, "git add -A", options);
     if (!add.success) {

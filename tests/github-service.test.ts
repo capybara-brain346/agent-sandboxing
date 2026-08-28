@@ -173,6 +173,13 @@ describe("GitHubService", () => {
           truncated: false,
         })
         .mockResolvedValueOnce({
+          stdout: "agent/chat_1/run_1\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
           stdout: " M file.txt\n",
           stderr: "",
           exitCode: 0,
@@ -227,6 +234,11 @@ describe("GitHubService", () => {
     expect(runtime.simpleExec.mock.calls.at(-1)?.[1]).toBe(
       "git reset --mixed HEAD~1",
     );
+    expect(
+      runtime.simpleExec.mock.calls.some((call) =>
+        String(call[1]).includes("origin/main"),
+      ),
+    ).toBe(false);
   });
 
   it("refuses to publish without a workspace diff", async () => {
@@ -257,6 +269,13 @@ describe("GitHubService", () => {
         .fn()
         .mockResolvedValueOnce({
           stdout: "https://github.com/octo/repo.git\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "agent/chat_1/run_1\n",
           stderr: "",
           exitCode: 0,
           timedOut: false,
@@ -337,6 +356,78 @@ describe("GitHubService", () => {
     expect(api.createInstallationToken).not.toHaveBeenCalled();
   });
 
+  it("refuses to publish dirty changes from the wrong branch", async () => {
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      createPullRequest: vi.fn(),
+    };
+    const prisma = {
+      chatSession: {
+        findUnique: vi.fn(async () => ({
+          repoSource: "github",
+          repoOwner: "octo",
+          repoName: "repo",
+          repoInstallationId: "10",
+          repoBaseBranch: "main",
+          repoDefaultBranch: "main",
+        })),
+      },
+      $transaction: vi.fn(),
+    } as unknown as PrismaClient;
+    const runtime = {
+      simpleExec: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: "https://github.com/octo/repo.git\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "main\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: " M file.txt\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        }),
+    };
+    const service = new GitHubService(prisma, config, api);
+
+    const result = await service.publishPullRequest(
+      "chat_1",
+      "run_1",
+      { runtime, containerName: "sandbox-1" },
+      { title: "Fix it" },
+      { timeoutMs: 300, signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: { code: "git_branch_mismatch" },
+    });
+    expect(api.createInstallationToken).not.toHaveBeenCalled();
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(
+      runtime.simpleExec.mock.calls.some((call) =>
+        String(call[1]).includes("git add"),
+      ),
+    ).toBe(false);
+  });
+
   it("returns a safe publication failure and restores the workspace after push rejection", async () => {
     const token = "installation-token";
     const creating = pullRequestRow({
@@ -392,8 +483,8 @@ describe("GitHubService", () => {
           ...ok,
           stdout: "https://github.com/octo/repo.git\n",
         })
+        .mockResolvedValueOnce({ ...ok, stdout: "agent/chat_1/run_1\n" })
         .mockResolvedValueOnce({ ...ok, stdout: " M file.txt\n" })
-        .mockResolvedValueOnce(ok)
         .mockResolvedValueOnce(ok)
         .mockResolvedValueOnce(ok)
         .mockResolvedValueOnce({

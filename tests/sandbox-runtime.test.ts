@@ -78,6 +78,8 @@ describe("SandboxRuntime.simpleExec", () => {
       [
         "exec",
         "-i",
+        "-u",
+        "node",
         "-w",
         "/workspace/repo",
         "-e",

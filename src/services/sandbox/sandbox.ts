@@ -14,6 +14,7 @@ import type { PublicEvent } from "../../types/event.types";
 import { safeError, ServiceError, notFound } from "../../shared/errors";
 import { logQueryFailure, runQuery } from "../../shared/query-logging";
 import { logger } from "../../logger";
+import { githubRunBranch, sameGitBranch } from "../github/branch";
 import { workspaceRoot } from "./workspace";
 import { CommandExecutionService } from "./command-execution";
 import { EventStore } from "../events/event-store";
@@ -34,6 +35,9 @@ export const canTransition = (
   to: SandboxStatusType,
 ): boolean => transitions[from].includes(to);
 
+const shellQuote = (value: string): string =>
+  `'${value.replaceAll("'", "'\\''")}'`;
+
 export type TaskSandboxCreation = {
   sandboxId: string;
   containerName: string;
@@ -51,7 +55,10 @@ export type AgentToolTarget = {
 
 export type SessionSandboxCollaborator = Pick<
   SandboxService,
-  "createForSessionInTransaction" | "ensureReadyForSession" | "diffForSession"
+  | "createForSessionInTransaction"
+  | "ensureReadyForSession"
+  | "prepareRunBranchForSession"
+  | "diffForSession"
 >;
 
 export class SandboxService {
@@ -210,6 +217,61 @@ export class SandboxService {
         500,
       );
     }
+  }
+
+  async prepareRunBranchForSession(
+    sessionId: string,
+    runId: string,
+    sandboxId: string,
+    input: { baseBranch: string; defaultBranch: string | null },
+  ): Promise<void> {
+    const branch = githubRunBranch(sessionId, runId);
+    if (
+      sameGitBranch(input.baseBranch, branch) ||
+      sameGitBranch(input.defaultBranch, branch)
+    )
+      throw new ServiceError(
+        "protected_git_branch",
+        "Refusing to use the session base branch as the run branch",
+        409,
+      );
+    const sandbox = await runQuery(
+      "get_session_sandbox_for_run_branch",
+      { sessionId, sandboxId },
+      () =>
+        this.prisma.sandbox.findFirst({
+          where: { id: sandboxId, sessionId },
+          select: { containerName: true, status: true },
+        }),
+    );
+    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
+    if (sandbox.status !== "ready")
+      throw new ServiceError("sandbox_not_ready", "Sandbox is not ready", 409);
+    const current = await this.runtime.simpleExec(
+      sandbox.containerName,
+      "git branch --show-current",
+      workspaceRoot,
+      { timeoutMs: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
+    );
+    if (current.timedOut || current.exitCode !== 0)
+      throw new ServiceError(
+        "github_run_branch_failed",
+        "GitHub run branch could not be prepared",
+        502,
+      );
+    if (sameGitBranch(current.stdout.trim(), branch)) return;
+    const checkout = await this.runtime.simpleExec(
+      sandbox.containerName,
+      `git checkout -B ${shellQuote(branch)} ${shellQuote(`origin/${input.baseBranch}`)}`,
+      workspaceRoot,
+      { timeoutMs: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
+    );
+    if (checkout.timedOut || checkout.exitCode !== 0)
+      throw new ServiceError(
+        "github_run_branch_failed",
+        "GitHub run branch could not be prepared",
+        502,
+      );
   }
 
   private async provisionForSession(

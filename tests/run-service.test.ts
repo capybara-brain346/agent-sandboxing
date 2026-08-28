@@ -24,6 +24,7 @@ type Harness = {
   sandbox: SessionSandboxCollaborator & {
     createForSessionInTransaction: ReturnType<typeof vi.fn>;
     ensureReadyForSession: ReturnType<typeof vi.fn>;
+    prepareRunBranchForSession: ReturnType<typeof vi.fn>;
     diffForSession: ReturnType<typeof vi.fn>;
   };
   events: {
@@ -135,7 +136,9 @@ const makeHarness = (
             : options.repoSource === "github"
               ? "feature"
               : null,
-        sandbox: session.sandboxId ? { id: session.sandboxId } : null,
+        sandbox: session.sandboxId
+          ? { id: session.sandboxId, status: "ready" }
+          : null,
       })),
     },
     task: {
@@ -196,6 +199,7 @@ const makeHarness = (
       };
     }),
     ensureReadyForSession: vi.fn(async () => ({ status: "ready" as const })),
+    prepareRunBranchForSession: vi.fn(async () => undefined),
     diffForSession: vi.fn(async () => ({
       sandboxId: session.sandboxId ?? "sbox_new",
       diff: "diff --git a b",
@@ -260,8 +264,11 @@ const makeHarness = (
 
 describe("RunService", () => {
   it("provisions GitHub runs instead of using fixture provisioning", async () => {
+    const run = vi.fn(async () => ({
+      summary: "Provisioned GitHub workspace",
+    }));
     const runner: TaskRunner = {
-      run: vi.fn(async () => ({ summary: "Provisioned GitHub workspace" })),
+      run,
     };
     const harness = makeHarness(runner, { repoSource: "github" });
 
@@ -292,6 +299,15 @@ describe("RunService", () => {
       "sbox_new",
       expect.objectContaining({ source: "github", baseBranch: "feature" }),
     );
+    expect(harness.sandbox.prepareRunBranchForSession).toHaveBeenCalledWith(
+      sessionId,
+      runId,
+      "sbox_new",
+      { baseBranch: "feature", defaultBranch: "main" },
+    );
+    expect(
+      harness.sandbox.prepareRunBranchForSession.mock.invocationCallOrder[0],
+    ).toBeLessThan(run.mock.invocationCallOrder[0]);
     expect(harness.events.map((event) => event.type)).toContain(
       "run_completed",
     );
@@ -445,6 +461,32 @@ describe("RunService", () => {
       sessionId,
       runId,
       "sbox_existing",
+    );
+    expect(harness.sandbox.prepareRunBranchForSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects reused GitHub sandboxes before worker execution", async () => {
+    const runner: TaskRunner = {
+      run: vi.fn(async () => ({ summary: "Should not run" })),
+    };
+    const harness = makeHarness(runner, {
+      repoSource: "github",
+      existingSandboxId: "sbox_existing",
+    });
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
+
+    await vi.waitFor(() => expect(harness.status.value).toBe("failed"));
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(harness.sandbox.ensureReadyForSession).not.toHaveBeenCalled();
+    expect(harness.sandbox.prepareRunBranchForSession).not.toHaveBeenCalled();
+    expect(harness.traceRecorder.finishRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminal: expect.objectContaining({
+          status: "failed",
+          exitReason: "failed",
+        }),
+      }),
     );
   });
 

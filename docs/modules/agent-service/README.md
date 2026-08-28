@@ -116,12 +116,13 @@ fake model or runner.
 The key remains in the control plane. It is not included in sandbox
 environment variables, tool inputs, events, provider error messages, or logs.
 
-`publish_pull_request` verifies the configured GitHub remote, refuses empty
-workspace diffs, generates the branch name, commits the sandbox diff, pushes
-`HEAD:refs/heads/<branch>` with a short-lived installation token, creates the
-pull request, and restores the workspace changes so final run diff capture still
-reports the worker's edits. The token is passed over stdin only and is not
-persisted or returned in tool output.
+`publish_pull_request` verifies the configured GitHub remote, verifies the
+workspace is already on the deterministic run branch, refuses empty workspace
+diffs, commits the sandbox diff, pushes `HEAD:refs/heads/<branch>` with a
+short-lived installation token, creates the pull request, and restores the
+workspace changes so final run diff capture still reports the worker's edits.
+The token is passed over stdin only and is not persisted or returned in tool
+output.
 When the user explicitly asks to raise or publish a PR, the worker is instructed
 to call this tool after the requested workspace change instead of giving manual
 `git` or `gh` instructions. If there is no diff because the requested state is
@@ -238,8 +239,9 @@ truncated }` output. Its timeout is `AGENT_BASH_TIMEOUT_MS` and its response
 - `find({ pattern, path? })` returns matching file paths in `paths`.
 - `ls({ path? })` returns a detailed directory listing in `listing`.
 - `publish_pull_request({ title, body?, draft? })` publishes current workspace
-  changes as a pull request. The backend owns branch naming, commit, push, and
-  PR creation. Pull requests are draft by default.
+  changes as a pull request from the backend-created run branch. The backend owns
+  branch naming, run-branch setup, commit, push, and PR creation. Pull requests
+  are draft by default.
 
 `grep`, `find`, and `ls` have a fixed 50 KiB UTF-8 response budget and report
 `truncated: true` when the budget is exceeded. All truncation preserves valid

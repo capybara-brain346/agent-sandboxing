@@ -47,22 +47,28 @@ operations are:
   immediately for an already-ready sandbox, otherwise provisions it from the
   in-memory fixture or GitHub source and returns `ready` or a structured
   provisioning failure.
+- `prepareRunBranchForSession(sessionId, runId, sandboxId, input)` — validates a
+  ready GitHub sandbox and checks out the deterministic `agent/<sessionId>/<runId>`
+  branch from the selected base before worker execution.
 - `getAgentToolTarget(sessionId, runId, sandboxId)` — validates session
   ownership and `ready` status, then returns only the container name and a
   `simpleExec` runtime seam to the Agent Service. It never exposes Docker,
   Prisma, or unrelated runtime methods.
 - `diffForSession(sessionId, runId, sandboxId)` — reads `git diff --binary`
   from the session workspace.
-- GitHub pull request publication may temporarily commit and push the sandbox
-  diff through the same runtime seam, then resets that commit so the workspace
+- GitHub pull request publication temporarily commits and pushes the existing run
+  branch through the same runtime seam, then resets that commit so the workspace
   changes remain available for `diffForSession`.
 
-The sandbox is never stopped by a completed run; it is reused by later runs in
-the same session for as long as the session lives.
+Fixture sandboxes are never stopped by a completed run; they are reused by later
+runs in the same session for as long as the session lives. GitHub sandboxes are
+currently first-run only and reused ready GitHub sandboxes are rejected before
+worker execution.
 
 The Agent Service uses an in-process runtime seam and never receives raw Docker
 access. `SandboxRuntime.simpleExec(containerName, command, cwd, options)` runs a
-single command and captures bounded `stdout` and `stderr` asynchronously. It
+single command as the sandbox `node` user and captures bounded `stdout` and
+`stderr` asynchronously. It
 returns non-zero exit codes as normal results, reports a killed timeout with
 `timedOut: true`, and rejects cancellation with an `AbortError`. Environment
 variables, command stdin, and an `AbortSignal` are optional inputs. Secret
@@ -109,7 +115,9 @@ Provisioning:
    `/workspace/repo`. For GitHub sessions, verifies Git, clones the selected
    repository without checkout, resets `origin` to a token-free HTTPS URL, and
    checks out the selected base branch or repository default branch.
-6. Verifies the Git workspace, changes ownership to `node:node`, and adds
+6. For GitHub sessions, run setup checks out `agent/<sessionId>/<runId>` from
+   the selected base branch before the Agent Service receives a tool target.
+7. Verifies the Git workspace, changes ownership to `node:node`, and adds
    `/workspace/repo` to Git's safe directories as `node`.
 
 Fixture contents are copied into the container and GitHub contents are cloned

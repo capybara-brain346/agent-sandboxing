@@ -81,7 +81,7 @@ export class SandboxRuntime {
   ): Promise<SimpleExecResult> {
     if (options.signal?.aborted) throw abortError();
 
-    const args = ["exec", "-i", "-w", cwd];
+    const args = ["exec", "-i", "-u", "node", "-w", cwd];
     for (const [key, value] of Object.entries(options.env ?? {}))
       args.push("-e", `${key}=${value}`);
     args.push(containerName, "sh", "-lc", command);
