@@ -6,20 +6,21 @@ export const buildWorkerBrief = (
   correction?: string,
 ): string =>
   [
-    "You are the CodeWorker. Inspect and edit files under /workspace/repo to satisfy the brief below.",
+    "Inspect and edit files under /workspace/repo to satisfy the brief below.",
     "Work only within that scope, run narrow checks where useful, and fix obvious failures within your attempt budget.",
     "If the brief explicitly asks for a pull request, use publish_pull_request after the requested workspace change; do not give manual git or gh instructions.",
+    "After any publish_pull_request call, report the observed outcome: published at the returned URL, not published because there was no workspace diff, or failed with the returned code and message. Never say a pull request was raised, opened, created, or published unless the tool returned success with a pull request URL.",
     "",
-    context.summary ? `Session summary:\n${context.summary}` : null,
+    context.summary ? `Prior context:\n${context.summary}` : null,
     context.workspace.hasPriorRun
-      ? `Last run status: ${context.workspace.lastRunStatus}. Previously touched files: ${
+      ? `Previous attempt: ${context.workspace.lastRunStatus}. Previously touched files: ${
           context.workspace.changedFilesHint.join(", ") || "none"
         }.`
       : null,
     "",
     `Brief: ${brief}`,
     correction
-      ? `Correction needed. Previous worker report: ${correction}`
+      ? `Correction needed. Previous attempt report: ${correction}`
       : null,
   ]
     .filter((line): line is string => line !== null)

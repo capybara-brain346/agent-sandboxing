@@ -155,11 +155,16 @@ by the Agent Service:
 - On a clarification turn, the orchestrator answers directly and never invokes
   the worker — the orchestrator never edits code.
 - On a code turn, `buildWorkerBrief` composes a focused brief (session
-  summary + workspace hint + the instruction, not the chat transcript) and
+  prior context + workspace hint + the instruction, not the chat transcript) and
   hands it through the narrow `CodeWorker` contract to `AgentRunner`, which
   returns a compact status plus prose report. The chat harness derives changed
   files from the captured diff, PR state from persisted PR rows, and artifacts
   from the artifact table instead of parsing worker prose.
+- The orchestrator's user-facing answer preserves the worker's reported pull
+  request outcome. It must not claim a PR was raised, opened, created, or
+  published unless the worker reported a published PR URL, and it avoids internal
+  harness labels such as worker reports, summaries, delegation, raw JSON, and
+  tool output unless the user asks about internals.
 - If the worker reports `blocked`, the orchestrator may retry once with a
   narrow correction brief built from the worker's report. A `failed` result is
   terminal and is never delegated again. Failed workers become a thrown

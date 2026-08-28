@@ -126,6 +126,11 @@ When the user explicitly asks to raise or publish a PR, the worker is instructed
 to call this tool after the requested workspace change instead of giving manual
 `git` or `gh` instructions. If there is no diff because the requested state is
 already present, the worker reports that no PR was raised.
+After any `publish_pull_request` call, the worker's final report must state the
+observed tool outcome: published at the returned pull request URL, not published
+because there was no workspace diff, or failed with the returned safe code and
+message. The worker must not claim a pull request was raised, opened, created,
+or published unless the tool returned success with a pull request URL.
 
 ## Runtime boundary
 
@@ -143,7 +148,10 @@ capability. Neither tool group reads secrets from `process.env`; every runtime
 call receives the run signal and either `AGENT_TOOL_TIMEOUT_MS` or
 `AGENT_BASH_TIMEOUT_MS`.
 Worker briefs expose `/workspace/repo` as the only workspace path; fixture and
-repository source references are not included as worker filesystem paths.
+repository source references are not included as worker filesystem paths. Briefs
+use product-facing prior-context wording rather than internal summary/report
+labels so useful memory can reach the worker without encouraging those labels in
+the user-facing answer.
 
 Before creating the registry, AgentRunner asks
 `SandboxService.getAgentToolTarget(sessionId, runId, sandboxId)` for the
