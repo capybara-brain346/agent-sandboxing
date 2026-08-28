@@ -27,6 +27,7 @@
 - [GitHub and PR flow plan](planning/github-pr-flow-plan.md)
 - [GitHub PR flow component 1 plan](planning/github-pr-flow-component-1-plan.md)
 - [GitHub PR flow component 2 plan](planning/github-pr-flow-component-2-plan.md)
+- [GitHub PR flow component 3 plan](planning/github-pr-flow-component-3-plan.md)
 - [Repo-scoped chat session agent harness Phase 0 decisions](planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)
 - [Repo-scoped chat session agent harness plan](planning/repo-scoped-chat-session-agent-harness-plan.md)
 - [Orchestrator and subagent eval plan](planning/orchestrator-subagent-eval-plan.md)

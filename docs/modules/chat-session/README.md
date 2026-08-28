@@ -72,8 +72,11 @@ scoped to that user and do not expose `userId`. Fixture sessions are restricted
 to test, eval, and acceptance use and require `FIXTURE_REPOS_ENABLED=true`;
 production configuration rejects that flag. GitHub sessions persist the chosen
 repository, default branch, selected base branch, and selected base SHA. GitHub
-execution currently fails with the explicit `501 github_clone_unavailable`
-error until sandbox cloning is implemented.
+runs mint a short-lived GitHub App installation token in the control plane and
+provision the selected repository and branch into the session-owned sandbox.
+Provisioning uses the latest head of the selected branch; the persisted base SHA
+is not used for component 3 provisioning. The token is never persisted or
+passed to the Agent Service.
 
 Session creation does not accept an initial message. Send a message separately;
 `startRun` defaults to `true`. A message-only request returns `201`, while a

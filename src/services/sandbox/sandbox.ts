@@ -6,6 +6,7 @@ import { prisma } from "../../db/prisma";
 import type {
   EventType,
   SandboxDiffResult,
+  SandboxProvisioningSource,
   SandboxStatus as SandboxStatusType,
   TaskSandboxInput,
 } from "../../types/sandbox.types";
@@ -80,7 +81,7 @@ export class SandboxService {
     const sandboxId = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
     const containerName = `sandbox-${sandboxId}`;
     const fixtureRepoPath =
-      input.fixtureRepoPath ?? this.config.FIXTURE_REPO_PATH;
+      input.source.source === "fixture" ? input.source.fixtureRepoPath : "";
     const image = input.image ?? this.config.SANDBOX_IMAGE;
     const sandbox = await tx.sandbox.create({
       data: {
@@ -104,6 +105,7 @@ export class SandboxService {
     sessionId: string,
     runId: string,
     sandboxId: string,
+    source?: SandboxProvisioningSource,
   ): Promise<SandboxProvisionResult> {
     const sandbox = await runQuery(
       "get_session_sandbox_for_provision",
@@ -138,7 +140,7 @@ export class SandboxService {
       sandbox.id,
       sandbox.containerName,
       sandbox.image,
-      sandbox.fixtureRepoPath,
+      source ?? { source: "fixture", fixtureRepoPath: sandbox.fixtureRepoPath },
     );
   }
 
@@ -216,7 +218,7 @@ export class SandboxService {
     sandboxId: string,
     containerName: string,
     image: string,
-    fixturePath: string,
+    source: SandboxProvisioningSource,
   ): Promise<SandboxProvisionResult> {
     const startedAt = process.hrtime.bigint();
     logger.debug("sandbox_provision_started", { sessionId, runId, sandboxId });
@@ -230,21 +232,56 @@ export class SandboxService {
         producerId: sandboxId,
         payload: {},
       });
-      await this.emitRun({
-        sessionId,
-        runId,
-        sandboxId,
-        type: "fixture_repo_copy_started",
-        producerService: "sandbox",
-        producerId: sandboxId,
-        payload: { fixture_repo_path: fixturePath },
-      });
+      if (source.source === "fixture")
+        await this.emitRun({
+          sessionId,
+          runId,
+          sandboxId,
+          type: "fixture_repo_copy_started",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: { fixture_repo_path: source.fixtureRepoPath },
+        });
+      if (source.source === "github")
+        await this.emitRun({
+          sessionId,
+          runId,
+          sandboxId,
+          type: "repo_clone_started",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: { owner: source.owner, name: source.name },
+        });
       const provisioned = await this.runtime.provision(
         sandboxId,
         containerName,
         image,
-        fixturePath,
+        source,
       );
+      if (source.source === "github") {
+        await this.emitRun({
+          sessionId,
+          runId,
+          sandboxId,
+          type: "repo_clone_completed",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: { owner: source.owner, name: source.name },
+        });
+        await this.emitRun({
+          sessionId,
+          runId,
+          sandboxId,
+          type: "repo_checkout_completed",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: {
+            owner: source.owner,
+            name: source.name,
+            branch: source.baseBranch,
+          },
+        });
+      }
       const events = await runQuery(
         "mark_session_sandbox_ready",
         { sandboxId },
@@ -258,17 +295,20 @@ export class SandboxService {
                 readyAt: new Date(),
               },
             });
-            const copied = await this.events.appendRunEventInTransaction(tx, {
-              sessionId,
-              runId,
-              sandboxId,
-              type: "fixture_repo_copied",
-              producerService: "sandbox",
-              producerId: sandboxId,
-              correlationId: randomUUID(),
-              domain: "sandbox",
-              payload: { workspace_path: workspaceRoot },
-            });
+            const copied =
+              source.source === "fixture"
+                ? await this.events.appendRunEventInTransaction(tx, {
+                    sessionId,
+                    runId,
+                    sandboxId,
+                    type: "fixture_repo_copied",
+                    producerService: "sandbox",
+                    producerId: sandboxId,
+                    correlationId: randomUUID(),
+                    domain: "sandbox",
+                    payload: { workspace_path: workspaceRoot },
+                  })
+                : null;
             const ready = await this.events.appendRunEventInTransaction(tx, {
               sessionId,
               runId,
@@ -280,7 +320,7 @@ export class SandboxService {
               domain: "sandbox",
               payload: { container_id: provisioned.containerId },
             });
-            return [copied, ready];
+            return copied ? [copied, ready] : [ready];
           }),
       );
       events.forEach((event) => this.publish(event));
@@ -297,6 +337,14 @@ export class SandboxService {
     } catch (error) {
       logQueryFailure("provision_session_sandbox", { sandboxId }, error);
       const safe = safeError(error, "provision");
+      const failure =
+        source.source === "github" && safe.code === "unknown"
+          ? {
+              ...safe,
+              code: "github_provision_failed",
+              message: "GitHub sandbox provisioning failed",
+            }
+          : safe;
       logger.debug("sandbox_provision_failed", {
         sessionId,
         runId,
@@ -304,7 +352,7 @@ export class SandboxService {
         durationMs: Math.round(
           Number(process.hrtime.bigint() - startedAt) / 1e6,
         ),
-        failureCode: safe.code,
+        failureCode: failure.code,
       });
       await runQuery("mark_session_sandbox_failed", { sandboxId }, () =>
         this.prisma.$transaction(async (tx) => {
@@ -313,8 +361,8 @@ export class SandboxService {
             data: {
               status: "failed",
               failedAt: new Date(),
-              failureCode: safe.code,
-              failureMessage: safe.message,
+              failureCode: failure.code,
+              failureMessage: failure.message,
             },
           });
           return this.events.appendRunEventInTransaction(tx, {
@@ -326,13 +374,13 @@ export class SandboxService {
             producerId: sandboxId,
             correlationId: randomUUID(),
             domain: "sandbox",
-            payload: safe,
+            payload: failure,
           });
         }),
       )
         .then((event) => this.publish(event))
         .catch(() => undefined);
-      return { status: "failed", failure: safe };
+      return { status: "failed", failure };
     }
   }
 

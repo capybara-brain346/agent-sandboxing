@@ -40,6 +40,7 @@ describe("GitHubService", () => {
         },
       ]),
       getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
       listInstallationRepositories: vi.fn(async () => [
         {
           id: "1",
@@ -125,6 +126,7 @@ describe("GitHubService", () => {
         accountLogin: "octo",
         accountType: "User",
       })),
+      createInstallationToken: vi.fn(),
     };
     const prisma = {
       user: { findUnique: vi.fn(async () => ({ githubUserId: "42" })) },
@@ -184,6 +186,7 @@ describe("GitHubService", () => {
         },
       ]),
       getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
       listInstallationRepositories: vi.fn(async () => [
         {
           id: "1",
@@ -249,6 +252,7 @@ describe("GitHubService", () => {
         },
       ]),
       getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
       listInstallationRepositories: vi.fn(async () => [
         {
           id: "1",
@@ -290,5 +294,23 @@ describe("GitHubService", () => {
       { name: "main", sha: "abc", protected: false },
     ]);
     expect(api.listBranches).toHaveBeenCalledWith("10", "octo", "repo");
+  });
+
+  it("mints an installation token through the GitHub App seam", async () => {
+    const createInstallationToken = vi.fn(async () => "installation-token");
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken,
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+    };
+    const service = new GitHubService({} as PrismaClient, config, api);
+
+    await expect(service.createInstallationToken("10")).resolves.toBe(
+      "installation-token",
+    );
+    expect(createInstallationToken).toHaveBeenCalledWith("10");
   });
 });

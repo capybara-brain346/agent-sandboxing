@@ -9,8 +9,20 @@ export type SandboxStatus =
 export type CommandStatus =
   "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
 
+export type SandboxProvisioningSource =
+  | { source: "fixture"; fixtureRepoPath: string }
+  | {
+      source: "github";
+      owner: string;
+      name: string;
+      installationId: string;
+      cloneUrl: string;
+      baseBranch: string;
+      token: string;
+    };
+
 export type TaskSandboxInput = {
-  fixtureRepoPath?: string;
+  source: SandboxProvisioningSource;
   image?: string | undefined;
 };
 

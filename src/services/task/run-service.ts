@@ -16,8 +16,18 @@ import { canTransition } from "./task";
 import type { TaskRunner, TaskRunResult } from "./task-runner";
 import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 import type { EvalTraceRunFacts } from "../../types/eval-trace.types";
+import type { SandboxProvisioningSource } from "../../types/sandbox.types";
 
 type PublishEvent = (event: PublicEvent) => void;
+
+type GitHubInstallationTokenProvider = {
+  createInstallationToken(installationId: string): Promise<string>;
+};
+
+type EnsuredSandbox = {
+  sandboxId: string;
+  source?: SandboxProvisioningSource;
+};
 
 type RunExecution = {
   sessionId: string;
@@ -64,6 +74,7 @@ export class RunService {
     private readonly publish: PublishEvent = () => undefined,
     private readonly artifacts: ArtifactRecorder = noopArtifactRecorder,
     private readonly traceRecorder?: EvalTraceRecorderLike,
+    private readonly github?: GitHubInstallationTokenProvider,
   ) {}
 
   createRunForMessage(
@@ -121,18 +132,22 @@ export class RunService {
     try {
       if (await this.waitForCancellation(execution)) return;
 
-      const sandboxId = await this.ensureSandbox(sessionId, runId);
+      const sandbox = await this.ensureSandbox(sessionId, runId);
+      const sandboxId = sandbox.sandboxId;
       execution.sandboxId = sandboxId;
       if (await this.waitForCancellation(execution)) return;
 
       if (!(await this.transitionStatus(runId, "provisioning"))) return;
       if (await this.waitForCancellation(execution)) return;
 
-      const outcome = await this.sandbox.ensureReadyForSession(
-        sessionId,
-        runId,
-        sandboxId,
-      );
+      const outcome = sandbox.source
+        ? await this.sandbox.ensureReadyForSession(
+            sessionId,
+            runId,
+            sandboxId,
+            sandbox.source,
+          )
+        : await this.sandbox.ensureReadyForSession(sessionId, runId, sandboxId);
       if (await this.waitForCancellation(execution)) return;
       if (outcome.status === "failed") {
         await this.failRun(
@@ -263,7 +278,7 @@ export class RunService {
   private async ensureSandbox(
     sessionId: string,
     runId: string,
-  ): Promise<string> {
+  ): Promise<EnsuredSandbox> {
     const session = await runQuery(
       "get_session_for_sandbox",
       { sessionId },
@@ -275,26 +290,87 @@ export class RunService {
             repoSource: true,
             repoRef: true,
             image: true,
-            sandbox: { select: { id: true } },
+            repoOwner: true,
+            repoName: true,
+            repoDefaultBranch: true,
+            repoInstallationId: true,
+            repoBaseBranch: true,
+            sandbox: { select: { id: true, status: true } },
           },
         }),
     );
     if (!session)
       throw notFound("chat_session_not_found", "Chat session was not found");
-    if (session.repoSource === "github")
-      throw new ServiceError(
-        "github_clone_unavailable",
-        "GitHub repository cloning is unavailable until provisioning support is implemented",
-        501,
-      );
-    if (session.sandbox) {
+    const source = async (): Promise<SandboxProvisioningSource> => {
+      if (session.repoSource !== "github")
+        return { source: "fixture", fixtureRepoPath: session.repoRef };
+      const owner = session.repoOwner?.trim();
+      const name = session.repoName?.trim();
+      const installationId = session.repoInstallationId?.trim();
+      const baseBranch =
+        session.repoBaseBranch?.trim() || session.repoDefaultBranch?.trim();
+      if (!baseBranch)
+        throw new ServiceError(
+          "github_base_branch_missing",
+          "A GitHub base branch is required for provisioning",
+          400,
+        );
+      if (
+        !owner ||
+        !name ||
+        !installationId ||
+        !/^\d+$/.test(installationId) ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(owner) ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)
+      )
+        throw new ServiceError(
+          "github_repository_metadata_missing",
+          "GitHub repository metadata is incomplete",
+          400,
+        );
+      if (!this.github)
+        throw new ServiceError(
+          "github_installation_token_failed",
+          "GitHub installation token could not be created",
+          502,
+        );
+      let token: string;
+      try {
+        token = await this.github.createInstallationToken(installationId);
+      } catch {
+        throw new ServiceError(
+          "github_installation_token_failed",
+          "GitHub installation token could not be created",
+          502,
+        );
+      }
+      if (typeof token !== "string" || !token)
+        throw new ServiceError(
+          "github_installation_token_failed",
+          "GitHub installation token could not be created",
+          502,
+        );
+      return {
+        source: "github",
+        owner,
+        name,
+        installationId,
+        cloneUrl: `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}.git`,
+        baseBranch,
+        token,
+      };
+    };
+    if (session.sandbox && session.sandbox.status !== "creating") {
       logger.debug("run_sandbox_reused", {
         sessionId,
         runId,
         sandboxId: session.sandbox.id,
       });
-      return session.sandbox.id;
+      return { sandboxId: session.sandbox.id };
     }
+    const provisioningSource = await source();
+    if (session.sandbox)
+      return { sandboxId: session.sandbox.id, source: provisioningSource };
 
     const created = await runQuery(
       "create_session_sandbox",
@@ -304,7 +380,7 @@ export class RunService {
           const sandbox = await this.sandbox.createForSessionInTransaction(
             tx,
             {
-              fixtureRepoPath: session.repoRef,
+              source: provisioningSource,
               image: session.image ?? undefined,
             },
             { sessionId },
@@ -332,7 +408,10 @@ export class RunService {
       runId,
       sandboxId: created.sandbox.sandboxId,
     });
-    return created.sandbox.sandboxId;
+    return {
+      sandboxId: created.sandbox.sandboxId,
+      source: provisioningSource,
+    };
   }
 
   private async transitionStatus(

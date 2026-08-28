@@ -51,7 +51,10 @@ describe("SandboxService", () => {
 
     const result = await service.createForSessionInTransaction(
       { sandbox: { create } } as unknown as Prisma.TransactionClient,
-      { fixtureRepoPath: "./repo", image: "node:22" },
+      {
+        source: { source: "fixture", fixtureRepoPath: "./repo" },
+        image: "node:22",
+      },
       { sessionId: "chat_1" },
     );
 
@@ -128,7 +131,7 @@ describe("SandboxService", () => {
       "s1",
       "sandbox-s1",
       "node:22",
-      "./repo",
+      { source: "fixture", fixtureRepoPath: "./repo" },
     );
     expect(publish).toHaveBeenCalledTimes(4);
     expect(debug).toHaveBeenCalledWith(
@@ -142,6 +145,65 @@ describe("SandboxService", () => {
       }),
     );
     debug.mockRestore();
+  });
+
+  it("provisions GitHub repositories and publishes repository lifecycle events", async () => {
+    const publish = vi.fn();
+    const runtime = {
+      provision: vi.fn(async () => ({ containerId: "container-1" })),
+    } as unknown as SandboxRuntime;
+    const events = {
+      appendRunEvent: vi.fn(async (input: { type: PublicEvent["type"] }) =>
+        event(input.type, 1),
+      ),
+      appendRunEventInTransaction: vi.fn(
+        async (_tx: unknown, input: { type: PublicEvent["type"] }) =>
+          event(input.type, 1),
+      ),
+    } as unknown as EventStore;
+    const prisma = {
+      sandbox: {
+        findFirst: vi.fn(async () => sandboxRow("creating")),
+      },
+      $transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
+        callback({
+          sandbox: { update: vi.fn(async () => sandboxRow("ready")) },
+        }),
+      ),
+    } as unknown as PrismaClient;
+    const service = new SandboxService(
+      prisma,
+      events,
+      runtime,
+      config,
+      publish,
+    );
+    const source = {
+      source: "github" as const,
+      owner: "octo",
+      name: "repo",
+      installationId: "10",
+      cloneUrl: "https://github.com/octo/repo.git",
+      baseBranch: "main",
+      token: "installation-token",
+    };
+
+    await expect(
+      service.ensureReadyForSession("chat_1", "run_1", "s1", source),
+    ).resolves.toEqual({ status: "ready" });
+    expect(runtime.provision).toHaveBeenCalledWith(
+      "s1",
+      "sandbox-s1",
+      "node:22",
+      source,
+    );
+    expect(publish.mock.calls.map(([published]) => published.type)).toEqual([
+      "sandbox_provisioning_started",
+      "repo_clone_started",
+      "repo_clone_completed",
+      "repo_checkout_completed",
+      "sandbox_ready",
+    ]);
   });
 
   it("requires session ownership and readiness for a session agent target", async () => {

@@ -36,6 +36,9 @@ type Harness = {
   artifacts: ArtifactRecorder & {
     create: ReturnType<typeof vi.fn>;
   };
+  github: {
+    createInstallationToken: ReturnType<typeof vi.fn>;
+  };
   traceRecorder: EvalTraceRecorderLike & {
     finishRun: ReturnType<typeof vi.fn>;
   };
@@ -43,7 +46,13 @@ type Harness = {
 
 const makeHarness = (
   runner: TaskRunner,
-  options: { existingSandboxId?: string | null; repoSource?: string } = {},
+  options: {
+    existingSandboxId?: string | null;
+    repoSource?: string;
+    repoDefaultBranch?: string | null;
+    repoBaseBranch?: string | null;
+    tokenFailure?: boolean;
+  } = {},
 ): Harness => {
   const status = { value: "created" as TaskStatus };
   const session = {
@@ -103,6 +112,21 @@ const makeHarness = (
         repoSource: options.repoSource ?? "fixture",
         repoRef: "./repo",
         image: null,
+        repoOwner: options.repoSource === "github" ? "octo" : null,
+        repoName: options.repoSource === "github" ? "repo" : null,
+        repoDefaultBranch:
+          options.repoDefaultBranch !== undefined
+            ? options.repoDefaultBranch
+            : options.repoSource === "github"
+              ? "main"
+              : null,
+        repoInstallationId: options.repoSource === "github" ? "10" : null,
+        repoBaseBranch:
+          options.repoBaseBranch !== undefined
+            ? options.repoBaseBranch
+            : options.repoSource === "github"
+              ? "feature"
+              : null,
         sandbox: session.sandboxId ? { id: session.sandboxId } : null,
       })),
     },
@@ -195,6 +219,12 @@ const makeHarness = (
       preview: "preview",
     })),
   };
+  const github = {
+    createInstallationToken: vi.fn(async () => {
+      if (options.tokenFailure) throw new Error("token was not minted");
+      return "installation-token";
+    }),
+  };
   const service = new RunService(
     prisma,
     eventStore,
@@ -203,6 +233,7 @@ const makeHarness = (
     publish,
     artifacts,
     traceRecorder,
+    github,
   );
 
   return {
@@ -215,24 +246,105 @@ const makeHarness = (
     publish,
     artifacts,
     traceRecorder,
+    github,
   };
 };
 
 describe("RunService", () => {
-  it("fails GitHub runs before fixture provisioning is attempted", async () => {
-    const runner: TaskRunner = { run: vi.fn() };
+  it("provisions GitHub runs instead of using fixture provisioning", async () => {
+    const runner: TaskRunner = {
+      run: vi.fn(async () => ({ summary: "Provisioned GitHub workspace" })),
+    };
     const harness = makeHarness(runner, { repoSource: "github" });
 
     harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
 
+    await vi.waitFor(() => expect(harness.status.value).toBe("completed"));
+    expect(runner.run).toHaveBeenCalled();
+    expect(harness.sandbox.createForSessionInTransaction).toHaveBeenCalled();
+    expect(harness.sandbox.createForSessionInTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        source: {
+          source: "github",
+          owner: "octo",
+          name: "repo",
+          installationId: "10",
+          cloneUrl: "https://github.com/octo/repo.git",
+          baseBranch: "feature",
+          token: "installation-token",
+        },
+        image: undefined,
+      },
+      { sessionId },
+    );
+    expect(harness.sandbox.ensureReadyForSession).toHaveBeenCalledWith(
+      sessionId,
+      runId,
+      "sbox_new",
+      expect.objectContaining({ source: "github", baseBranch: "feature" }),
+    );
+    expect(harness.events.map((event) => event.type)).toContain(
+      "run_completed",
+    );
+  });
+
+  it("falls back to the GitHub default branch when no base branch is selected", async () => {
+    const harness = makeHarness(
+      { run: vi.fn(async () => ({ summary: "Checked out default" })) },
+      {
+        repoSource: "github",
+        repoBaseBranch: null,
+        repoDefaultBranch: "trunk",
+      },
+    );
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Inspect");
+
+    await vi.waitFor(() => expect(harness.status.value).toBe("completed"));
+    expect(harness.sandbox.ensureReadyForSession).toHaveBeenCalledWith(
+      sessionId,
+      runId,
+      "sbox_new",
+      expect.objectContaining({ baseBranch: "trunk" }),
+    );
+  });
+
+  it("fails safely when the GitHub installation token cannot be minted", async () => {
+    const harness = makeHarness(
+      { run: vi.fn() },
+      { repoSource: "github", tokenFailure: true },
+    );
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Inspect");
+
     await vi.waitFor(() => expect(harness.status.value).toBe("failed"));
-    expect(runner.run).not.toHaveBeenCalled();
     expect(
       harness.sandbox.createForSessionInTransaction,
     ).not.toHaveBeenCalled();
+    expect(harness.sandbox.ensureReadyForSession).not.toHaveBeenCalled();
     expect(harness.events).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "run_failed" })]),
     );
+  });
+
+  it("fails safely when both GitHub branch fields are missing", async () => {
+    const harness = makeHarness(
+      { run: vi.fn() },
+      {
+        repoSource: "github",
+        repoBaseBranch: null,
+        repoDefaultBranch: null,
+      },
+    );
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Inspect");
+
+    await vi.waitFor(() => expect(harness.status.value).toBe("failed"));
+    expect(harness.github.createInstallationToken).not.toHaveBeenCalled();
+    expect(
+      harness.sandbox.createForSessionInTransaction,
+    ).not.toHaveBeenCalled();
   });
 
   it("provisions a session sandbox on first run, runs the worker, and completes without stopping it", async () => {
@@ -264,13 +376,17 @@ describe("RunService", () => {
 
     expect(harness.sandbox.createForSessionInTransaction).toHaveBeenCalledWith(
       expect.anything(),
-      { fixtureRepoPath: "./repo", image: undefined },
+      {
+        source: { source: "fixture", fixtureRepoPath: "./repo" },
+        image: undefined,
+      },
       { sessionId },
     );
     expect(harness.sandbox.ensureReadyForSession).toHaveBeenCalledWith(
       sessionId,
       runId,
       "sbox_new",
+      { source: "fixture", fixtureRepoPath: "./repo" },
     );
     expect(harness.session.activeRunId).toBeNull();
     expect(harness.chatMessages).toEqual([

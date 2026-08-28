@@ -38,6 +38,7 @@ export type GitHubApi = {
   listAppInstallations(): Promise<GitHubAppInstallationRecord[]>;
   listOAuthRepositories(accessToken: string): Promise<GitHubRepositoryRecord[]>;
   getInstallation(installationId: string): Promise<GitHubInstallationRecord>;
+  createInstallationToken(installationId: string): Promise<string>;
   listInstallationRepositories(
     installationId: string,
   ): Promise<GitHubRepositoryRecord[]>;
@@ -134,6 +135,18 @@ class OctokitGitHubApi implements GitHubApi {
     };
   }
 
+  async createInstallationToken(installationId: string): Promise<string> {
+    const octokit = await this.app.getInstallationOctokit(
+      Number(installationId),
+    );
+    const authentication = (await octokit.auth({
+      type: "installation",
+    })) as { token?: unknown };
+    if (typeof authentication.token !== "string" || !authentication.token)
+      throw new Error("GitHub installation token was missing");
+    return authentication.token;
+  }
+
   async listInstallationRepositories(
     installationId: string,
   ): Promise<GitHubRepositoryRecord[]> {
@@ -204,6 +217,27 @@ export class GitHubService {
 
   installUrl(): string {
     return this.config.GITHUB_APP_INSTALL_URL;
+  }
+
+  async createInstallationToken(installationId: string): Promise<string> {
+    if (!/^\d+$/.test(installationId))
+      throw new ServiceError(
+        "github_installation_token_failed",
+        "GitHub installation token could not be created",
+        502,
+      );
+    try {
+      const token = await this.api.createInstallationToken(installationId);
+      if (typeof token !== "string" || !token)
+        throw new Error("GitHub installation token was missing");
+      return token;
+    } catch {
+      throw new ServiceError(
+        "github_installation_token_failed",
+        "GitHub installation token could not be created",
+        502,
+      );
+    }
   }
 
   async saveInstallation(

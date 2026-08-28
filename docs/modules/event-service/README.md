@@ -176,17 +176,17 @@ errors into an event payload.
 The [`EVENT_TYPES`](../../../src/types/event.types.ts) constant is the source
 of truth for allowed event names.
 
-| Area                     | Event types                                                                                                                         | Producer services    |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| Session and messages     | `session_created`, `message_created`, `run_requested`                                                                               | `task`               |
-| Run lifecycle            | `run_created`, `run_completed`, `run_failed`, `run_cancelled`, `run_result_ready`                                                   | `task`               |
-| Task lifecycle           | `task_created`, `task_provisioning_started`, `task_running`, `task_completed`, `task_failed`, `task_cancelled`, `task_result_ready` | `task`               |
-| Sandbox lifecycle        | `sandbox_created`, `sandbox_provisioning_started`, `sandbox_ready`, `sandbox_failed`, `sandbox_stopping`, `sandbox_stopped`         | `sandbox`, `cleanup` |
-| Fixture setup            | `fixture_repo_copy_started`, `fixture_repo_copied`                                                                                  | `sandbox`            |
-| Commands                 | `command_started`, `command_output`, `command_completed`, `command_failed`, `command_timed_out`, `command_cancelled`                | `command`, `runtime` |
-| Diff capture             | `git_diff_requested`, `git_diff_completed`                                                                                          | `sandbox`, `runtime` |
-| Agent tools              | `agent_tool_call`, `agent_tool_result`                                                                                              | `agent`              |
-| Cleanup extension points | `cleanup_started`, `cleanup_completed`                                                                                              | `cleanup`            |
+| Area                     | Event types                                                                                                                                                                                          | Producer services    |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Session and messages     | `session_created`, `message_created`, `run_requested`                                                                                                                                                | `task`               |
+| Run lifecycle            | `run_created`, `run_completed`, `run_failed`, `run_cancelled`, `run_result_ready`                                                                                                                    | `task`               |
+| Task lifecycle           | `task_created`, `task_provisioning_started`, `task_running`, `task_completed`, `task_failed`, `task_cancelled`, `task_result_ready`                                                                  | `task`               |
+| Sandbox lifecycle        | `sandbox_created`, `sandbox_provisioning_started`, `repo_clone_started`, `repo_clone_completed`, `repo_checkout_completed`, `sandbox_ready`, `sandbox_failed`, `sandbox_stopping`, `sandbox_stopped` | `sandbox`, `cleanup` |
+| Fixture setup            | `fixture_repo_copy_started`, `fixture_repo_copied`                                                                                                                                                   | `sandbox`            |
+| Commands                 | `command_started`, `command_output`, `command_completed`, `command_failed`, `command_timed_out`, `command_cancelled`                                                                                 | `command`, `runtime` |
+| Diff capture             | `git_diff_requested`, `git_diff_completed`                                                                                                                                                           | `sandbox`, `runtime` |
+| Agent tools              | `agent_tool_call`, `agent_tool_result`                                                                                                                                                               | `agent`              |
+| Cleanup extension points | `cleanup_started`, `cleanup_completed`                                                                                                                                                               | `cleanup`            |
 
 `command_cancelled`, `cleanup_started`, and `cleanup_completed` are currently
 declared event types without an active producer call site. Add a producer

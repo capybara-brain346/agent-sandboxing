@@ -22,6 +22,7 @@ import { ModelOrchestratorAgent } from "../agent/orchestrator-agent";
 import { SessionContextBuilder } from "./session-context-builder";
 import { ModelSessionSummaryCompactor } from "../agent/session-summary-compactor";
 import { PlaceholderTaskRunner } from "../task/task-runner";
+import { GitHubService } from "../github/github";
 import type { PublicEvent } from "../../types/event.types";
 import type {
   ChatMessage,
@@ -823,6 +824,7 @@ const chatRunService = new RunService(
   publishChatEvent,
   taskServiceArtifacts,
   taskServiceTraceRecorder,
+  new GitHubService(prisma, chatHarnessConfig),
 );
 export const chatSessionService = new ChatSessionService(
   prisma,

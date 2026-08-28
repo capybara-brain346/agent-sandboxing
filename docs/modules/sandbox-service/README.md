@@ -23,11 +23,12 @@ Sandboxes are created only through the chat-session run flow. There are no
 registered `/sandboxes/*` routes. `RunService` provisions the session-owned
 sandbox on the first run of a session and reuses it, unstopped, on later runs.
 
-The service currently uses a local fixture repository and Docker only for
-explicitly enabled non-production test, eval, and acceptance runs. GitHub
-integration, authentication, queues, and a second runtime provider are out of
-scope. The Agent Service owns the control-plane agent loop and uses this
-service only through the narrow session-owned runtime seam.
+The service uses a local fixture repository only for explicitly enabled
+non-production test, eval, and acceptance runs. Product sessions provision
+GitHub repositories with short-lived installation tokens. Authentication,
+queues, and a second runtime provider are out of scope. The Agent Service owns
+the control-plane agent loop and uses this service only through the narrow
+session-owned runtime seam.
 
 The public run response does not expose sandbox or container handles. The run
 event envelope includes `sandboxId` and `commandId` fields for observability;
@@ -42,10 +43,10 @@ operations are:
 - `createForSessionInTransaction(tx, input, { sessionId })` — inserts a
   `creating` sandbox row owned by the session and returns its sandbox ID,
   container name, and workspace path. It does not invoke Docker.
-- `ensureReadyForSession(sessionId, runId, sandboxId)` — returns immediately
-  for an already-ready sandbox, otherwise provisions it: creates and starts
-  the container, copies the fixture into the workspace, and returns `ready` or
-  a structured provisioning failure.
+- `ensureReadyForSession(sessionId, runId, sandboxId, source)` — returns
+  immediately for an already-ready sandbox, otherwise provisions it from the
+  in-memory fixture or GitHub source and returns `ready` or a structured
+  provisioning failure.
 - `getAgentToolTarget(sessionId, runId, sandboxId)` — validates session
   ownership and `ready` status, then returns only the container name and a
   `simpleExec` runtime seam to the Agent Service. It never exposes Docker,
@@ -89,22 +90,25 @@ committed.
 
 ## Provisioning behavior
 
-Provisioning currently:
+Provisioning:
 
-1. Resolves and validates the configured fixture directory, defaulting to
-   `./repo`.
+1. For fixture sources, resolves and validates the configured fixture directory,
+   defaulting to `./repo`.
 2. Creates one named container using `SANDBOX_IMAGE` (default
    `node:22-bookworm`). Repo eval scripts override this with the project-built
    `agent-sandboxing-eval-sandbox:latest` image so the Python fixture can run
    pytest while preserving the sandbox `node` user contract.
 3. Applies the configured memory, CPU, and PID limits.
 4. Starts the container with an idle `sleep infinity` process.
-5. Creates `/workspace/repo` and copies the fixture contents, including
-   `.git`, into it.
-6. Verifies the Git workspace and changes ownership to `node:node`.
+5. For fixture sessions, copies the fixture contents, including `.git`, into
+   `/workspace/repo`. For GitHub sessions, verifies Git, clones the selected
+   repository without checkout, resets `origin` to a token-free HTTPS URL, and
+   checks out the selected base branch or repository default branch.
+6. Verifies the Git workspace, changes ownership to `node:node`, and adds
+   `/workspace/repo` to Git's safe directories as `node`.
 
-The fixture is copied into the container. The container does not receive a
-host fixture bind mount or the Docker socket. Docker is invoked only by
+Fixture contents are copied into the container and GitHub contents are cloned
+there. The container does not receive a host fixture bind mount or the Docker socket. Docker is invoked only by
 [`src/services/sandbox/runtime.ts`](../../../src/services/sandbox/runtime.ts).
 
 The workspace path is `/workspace/repo`. User-supplied command working
@@ -157,6 +161,7 @@ carries the owning `sessionId`/`runId` and is appended to that run's ordered
 `Event` log. Sandbox events that can appear in the stream include:
 
 - sandbox: `sandbox_created`, `sandbox_provisioning_started`,
+  `repo_clone_started`, `repo_clone_completed`, `repo_checkout_completed`,
   `fixture_repo_copy_started`, `fixture_repo_copied`, `sandbox_ready`, and
   `sandbox_failed`
 - agent tools: `agent_tool_call` and `agent_tool_result`, appended by the
@@ -239,6 +244,11 @@ All runtime configuration is loaded and validated by `src/config.ts`:
 - `SANDBOX_PIDS_LIMIT`
 - `SANDBOX_STOP_GRACE_MS`
 - `COMMAND_OUTPUT_MAX_BYTES`
+
+GitHub clone uses `SANDBOX_PROVISION_TIMEOUT_MS`. The sandbox image must
+already include `git`; provisioning does not install packages. GitHub
+installation tokens are held in memory only for the clone command and are
+never stored in sandbox rows, events, logs, artifacts, or remotes.
 
 Agent-facing limits are also validated centrally here so tool implementations do
 not read `process.env` directly:
