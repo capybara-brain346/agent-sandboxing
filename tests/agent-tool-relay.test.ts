@@ -135,7 +135,7 @@ describe("ToolEventRelay", () => {
     ]);
   });
 
-  it("does not persist GitHub pull request bodies or comments", async () => {
+  it("does not persist pull request publication bodies", async () => {
     const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
       makeEvent(input),
     );
@@ -151,21 +151,16 @@ describe("ToolEventRelay", () => {
     await callbacks.onToolExecutionStart(
       startEvent(
         {
-          action: "create",
-          branch: "feature/test",
           title: "Fix it",
           body: "private body",
-          comment: "private comment",
         },
-        "github_pr",
+        "publish_pull_request",
       ),
     );
 
     expect(append.mock.calls[0]?.[0].payload).toEqual({
-      tool_name: "github_pr",
+      tool_name: "publish_pull_request",
       args: {
-        action: "create",
-        branch: "feature/test",
         title: "Fix it",
       },
     });

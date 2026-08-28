@@ -114,6 +114,323 @@ describe("GitHubService", () => {
     expect(update).toHaveBeenCalled();
   });
 
+  it("publishes a workspace diff as a deterministic pull request", async () => {
+    const token = "installation-token";
+    const creating = pullRequestRow({
+      branch: "agent/chat_1/run_1",
+      title: "Fix it",
+    });
+    const create = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+      pullRequestRow(data),
+    );
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+      pullRequestRow({ ...creating, ...data }),
+    );
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(async () => token),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      createPullRequest: vi.fn(async () => ({
+        number: 7,
+        nodeId: "node_7",
+        url: "https://github.com/octo/repo/pull/7",
+        branch: "agent/chat_1/run_1",
+        baseBranch: "main",
+        title: "Fix it",
+        state: "open" as const,
+        draft: true,
+      })),
+    };
+    const prisma = {
+      chatSession: {
+        findUnique: vi.fn(async () => ({
+          repoSource: "github",
+          repoOwner: "octo",
+          repoName: "repo",
+          repoInstallationId: "10",
+          repoBaseBranch: "main",
+          repoDefaultBranch: "main",
+        })),
+      },
+      pullRequest: { findFirst: vi.fn(async () => null) },
+      $transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
+        callback({
+          pullRequest: { create, update, updateMany: vi.fn() },
+        }),
+      ),
+    } as unknown as PrismaClient;
+    const runtime = {
+      simpleExec: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: "https://github.com/octo/repo.git\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: " M file.txt\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        })
+        .mockResolvedValue({
+          stdout: "",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        }),
+    };
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(
+      service.publishPullRequest(
+        "chat_1",
+        "run_1",
+        { runtime, containerName: "sandbox-1" },
+        { title: "Fix it" },
+        { timeoutMs: 300, signal: new AbortController().signal },
+      ),
+    ).resolves.toMatchObject({
+      success: true,
+      action: "publish",
+      pullRequest: {
+        branch: "agent/chat_1/run_1",
+        baseBranch: "main",
+        number: 7,
+        status: "open",
+      },
+    });
+    expect(api.createInstallationToken).toHaveBeenCalledWith("10");
+    expect(api.createPullRequest).toHaveBeenCalledWith(
+      "10",
+      "octo",
+      "repo",
+      expect.objectContaining({
+        branch: "agent/chat_1/run_1",
+        baseBranch: "main",
+        draft: true,
+      }),
+    );
+    const pushCall = runtime.simpleExec.mock.calls.find((call) =>
+      String(call[1]).includes("push --no-verify"),
+    );
+    expect(pushCall?.[1]).toContain("'HEAD:refs/heads/agent/chat_1/run_1'");
+    expect(pushCall?.[1]).not.toContain(token);
+    expect(pushCall?.[3]).toMatchObject({ stdin: token });
+    expect(runtime.simpleExec.mock.calls.at(-1)?.[1]).toBe(
+      "git reset --mixed HEAD~1",
+    );
+  });
+
+  it("refuses to publish without a workspace diff", async () => {
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      createPullRequest: vi.fn(),
+    };
+    const prisma = {
+      chatSession: {
+        findUnique: vi.fn(async () => ({
+          repoSource: "github",
+          repoOwner: "octo",
+          repoName: "repo",
+          repoInstallationId: "10",
+          repoBaseBranch: "main",
+          repoDefaultBranch: "main",
+        })),
+      },
+      $transaction: vi.fn(),
+    } as unknown as PrismaClient;
+    const runtime = {
+      simpleExec: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: "https://github.com/octo/repo.git\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          truncated: false,
+        }),
+    };
+    const service = new GitHubService(prisma, config, api);
+
+    const result = await service.publishPullRequest(
+      "chat_1",
+      "run_1",
+      { runtime, containerName: "sandbox-1" },
+      { title: "Fix it" },
+      { timeoutMs: 300, signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: { code: "no_workspace_diff" },
+    });
+    expect(api.createInstallationToken).not.toHaveBeenCalled();
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses remote mismatch before minting a token", async () => {
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      createPullRequest: vi.fn(),
+    };
+    const prisma = {
+      chatSession: {
+        findUnique: vi.fn(async () => ({
+          repoSource: "github",
+          repoOwner: "octo",
+          repoName: "repo",
+          repoInstallationId: "10",
+          repoBaseBranch: "main",
+          repoDefaultBranch: "main",
+        })),
+      },
+    } as unknown as PrismaClient;
+    const runtime = {
+      simpleExec: vi.fn(async () => ({
+        stdout: "https://github.com/other/repo.git\n",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })),
+    };
+    const service = new GitHubService(prisma, config, api);
+
+    const result = await service.publishPullRequest(
+      "chat_1",
+      "run_1",
+      { runtime, containerName: "sandbox-1" },
+      { title: "Fix it" },
+      { timeoutMs: 300, signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: { code: "git_remote_mismatch" },
+    });
+    expect(api.createInstallationToken).not.toHaveBeenCalled();
+  });
+
+  it("returns a safe publication failure and restores the workspace after push rejection", async () => {
+    const token = "installation-token";
+    const creating = pullRequestRow({
+      branch: "agent/chat_1/run_1",
+      title: "Fix it",
+    });
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+      pullRequestRow({ ...creating, ...data }),
+    );
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(async () => token),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      createPullRequest: vi.fn(),
+    };
+    const prisma = {
+      chatSession: {
+        findUnique: vi.fn(async () => ({
+          repoSource: "github",
+          repoOwner: "octo",
+          repoName: "repo",
+          repoInstallationId: "10",
+          repoBaseBranch: "main",
+          repoDefaultBranch: "main",
+        })),
+      },
+      $transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
+        callback({
+          pullRequest: {
+            create: vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+              pullRequestRow(data),
+            ),
+            update,
+            updateMany: vi.fn(),
+          },
+        }),
+      ),
+    } as unknown as PrismaClient;
+    const ok = {
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      truncated: false,
+    };
+    const runtime = {
+      simpleExec: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ...ok,
+          stdout: "https://github.com/octo/repo.git\n",
+        })
+        .mockResolvedValueOnce({ ...ok, stdout: " M file.txt\n" })
+        .mockResolvedValueOnce(ok)
+        .mockResolvedValueOnce(ok)
+        .mockResolvedValueOnce(ok)
+        .mockResolvedValueOnce({
+          ...ok,
+          stdout: "private installation-token",
+          exitCode: 1,
+        })
+        .mockResolvedValueOnce(ok),
+    };
+    const service = new GitHubService(prisma, config, api);
+
+    const result = await service.publishPullRequest(
+      "chat_1",
+      "run_1",
+      { runtime, containerName: "sandbox-1" },
+      { title: "Fix it" },
+      { timeoutMs: 300, signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      action: "publish",
+      failure: { code: "git_publish_failed" },
+      pullRequest: { status: "failed" },
+    });
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(runtime.simpleExec.mock.calls.at(-1)?.[1]).toBe(
+      "git reset --mixed HEAD~1",
+    );
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "failed", isCurrent: false }),
+      }),
+    );
+  });
+
   it("persists a failed create attempt without exposing GitHub diagnostics", async () => {
     const creating = pullRequestRow({});
     const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>

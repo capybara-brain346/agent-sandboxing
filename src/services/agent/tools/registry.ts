@@ -7,18 +7,10 @@ import { createGrepTool } from "./grep";
 import { createLsTool } from "./ls";
 import { createReadTool } from "./read";
 import { createWriteTool } from "./write";
-import { createGitPushTool } from "./git-push";
-import { createGitHubPrTool } from "./github-pr";
+import { createPublishPullRequestTool } from "./publish-pull-request";
 import type { GitHubService } from "../../github/github";
 
-export type AgentGitHubTools = Pick<
-  GitHubService,
-  | "sessionRepository"
-  | "createInstallationToken"
-  | "currentPullRequest"
-  | "recordGitPushEvent"
-  | "pullRequest"
->;
+export type AgentGitHubTools = Pick<GitHubService, "publishPullRequest">;
 
 export const createToolRegistry = (
   runtime: AgentToolRuntime,
@@ -37,16 +29,9 @@ export const createToolRegistry = (
   ls: createLsTool(runtime, containerName, config, signal),
   ...(context && github
     ? {
-        git_push: createGitPushTool(
+        publish_pull_request: createPublishPullRequestTool(
           runtime,
           containerName,
-          config,
-          signal,
-          context.sessionId,
-          context.runId,
-          github,
-        ),
-        github_pr: createGitHubPrTool(
           config,
           signal,
           context.sessionId,

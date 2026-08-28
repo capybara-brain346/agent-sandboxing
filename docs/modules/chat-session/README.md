@@ -33,11 +33,12 @@ once the message/run/lock transaction commits. `RunService` then:
 - never stops the sandbox on completion, so the next message in the session
   reuses it.
 
-GitHub-backed workers can use the platform-mediated `git_push` and `github_pr`
-capabilities. Pull requests are persisted with history and one current row per
-session; PR failures do not change a completed coding run to a failed run.
-Failed PR create attempts are retained for history but cleared as current so a
-later retry is not blocked by the failed row.
+GitHub-backed workers can use the platform-mediated `publish_pull_request`
+capability. The backend owns branch creation, commit, push, and PR creation.
+Pull requests are persisted with history and one current row per session; PR
+failures do not change a completed coding run to a failed run. Failed publish
+attempts are retained for history but cleared as current so a later retry is not
+blocked by the failed row.
 
 Cancellation aborts the tracked in-flight execution's `AbortSignal` through
 `RunService.requestCancellation` and falls back to a direct terminal-state

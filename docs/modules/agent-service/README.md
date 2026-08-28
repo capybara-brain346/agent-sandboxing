@@ -3,7 +3,7 @@
 The Agent Service owns all model-backed agent behavior. It runs inside the API
 process, uses the AI SDK 7 `generateText` calls with the configured OpenRouter
 model, owns orchestration and summary-compaction decisions, proxies seven tools
-through the session-owned sandbox runtime plus two GitHub-backed tools, relays
+through the session-owned sandbox runtime plus one GitHub-backed publish tool, relays
 tool lifecycle events to the
 shared run event stream, and records model usage for the eval trace layer. It
 does not expose an HTTP route or call the persisted command API.
@@ -116,14 +116,16 @@ fake model or runner.
 The key remains in the control plane. It is not included in sandbox
 environment variables, tool inputs, events, provider error messages, or logs.
 
-`git_push` mints a short-lived installation token, verifies the configured
-GitHub remote, refuses to target the session base/default branch, and pushes the
-current `HEAD` to the requested branch with repository hooks disabled. The token
-is passed over stdin only and is not persisted or returned in tool output.
-`github_pr` performs narrow create, update, comment, close, and reopen
-operations through the backend GitHub App seam and returns compact structured
-results. Failed create attempts are retained in PR history but are not kept as
-the current PR, so a later push and create retry can proceed.
+`publish_pull_request` verifies the configured GitHub remote, refuses empty
+workspace diffs, generates the branch name, commits the sandbox diff, pushes
+`HEAD:refs/heads/<branch>` with a short-lived installation token, creates the
+pull request, and restores the workspace changes so final run diff capture still
+reports the worker's edits. The token is passed over stdin only and is not
+persisted or returned in tool output.
+When the user explicitly asks to raise or publish a PR, the worker is instructed
+to call this tool after the requested workspace change instead of giving manual
+`git` or `gh` instructions. If there is no diff because the requested state is
+already present, the worker reports that no PR was raised.
 
 ## Runtime boundary
 
@@ -133,7 +135,7 @@ an AI SDK 7 `tool({ inputSchema, execute })` object. The registry contains
 exactly these keys:
 
 `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`. GitHub-backed runs
-also expose `git_push` and `github_pr`.
+also expose `publish_pull_request`.
 
 Workspace tools execute in `/workspace/repo` through
 `SandboxRuntime.simpleExec`. GitHub tools use only their injected brokered
@@ -227,12 +229,9 @@ truncated }` output. Its timeout is `AGENT_BASH_TIMEOUT_MS` and its response
   1 is an empty match set.
 - `find({ pattern, path? })` returns matching file paths in `paths`.
 - `ls({ path? })` returns a detailed directory listing in `listing`.
-- `git_push({ branch?, remote? })` pushes the selected or current branch with a
-  short-lived installation credential and returns structured success or failure
-  data.
-- `github_pr({ action, ... })` creates or manages a pull request without
-  staging, committing, branching, or pushing local changes. Pull requests are
-  draft by default on create.
+- `publish_pull_request({ title, body?, draft? })` publishes current workspace
+  changes as a pull request. The backend owns branch naming, commit, push, and
+  PR creation. Pull requests are draft by default.
 
 `grep`, `find`, and `ls` have a fixed 50 KiB UTF-8 response budget and report
 `truncated: true` when the budget is exceeded. All truncation preserves valid

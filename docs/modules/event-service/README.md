@@ -192,6 +192,8 @@ of truth for allowed event names.
 `command_cancelled`, `cleanup_started`, and `cleanup_completed` are currently
 declared event types without an active producer call site. Add a producer
 before treating them as emitted behavior.
+`pull_request_branch_pushed` is emitted by the backend-owned pull request
+publication workflow after its deterministic branch push succeeds.
 
 ## SSE delivery and replay
 

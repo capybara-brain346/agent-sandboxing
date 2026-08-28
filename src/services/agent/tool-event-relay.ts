@@ -52,7 +52,7 @@ const safeToolArgs = (
   toolName: string,
   value: unknown,
 ): Record<string, unknown> =>
-  toolName === "github_pr"
+  toolName === "publish_pull_request"
     ? Object.fromEntries(
         Object.entries(safeArgs(value)).filter(
           ([key]) => key !== "body" && key !== "comment",

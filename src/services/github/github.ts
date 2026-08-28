@@ -17,8 +17,10 @@ import type {
   PullRequestMetadata,
 } from "../../types/github.types";
 import type { PublicEvent } from "../../types/event.types";
+import type { SimpleExecOptions } from "../../types/sandbox.types";
 import { decryptToken } from "../auth/token-crypto";
 import type { EventStore } from "../events/event-store";
+import { workspaceRoot } from "../sandbox/workspace";
 
 export type GitHubRepositoryRecord = {
   id: string;
@@ -65,6 +67,27 @@ export type GitHubPullRequestActionInput = GitHubPullRequestInput & {
   comment?: string;
   number?: number;
   supersedeExisting?: boolean;
+};
+
+export type GitHubPublishPullRequestInput = {
+  title: string;
+  body?: string | undefined;
+  draft?: boolean | undefined;
+};
+
+export type GitHubPublishRuntime = {
+  simpleExec(
+    containerName: string,
+    command: string,
+    cwd: string,
+    options?: SimpleExecOptions,
+  ): Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number | null;
+    timedOut: boolean;
+    truncated: boolean;
+  }>;
 };
 
 type PullRequestRow = {
@@ -410,6 +433,40 @@ const pullRequestRecord = (
 const bounded = (value: string, limit = 300): string =>
   value.length > limit ? `${value.slice(0, limit)}...` : value;
 
+const shellQuote = (value: string): string =>
+  `'${value.replaceAll("'", "'\\''")}'`;
+
+const isExpectedGitHubRemote = (
+  value: string,
+  owner: string,
+  name: string,
+): boolean => {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname.toLowerCase() !== "github.com" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    )
+      return false;
+    const path = decodeURIComponent(url.pathname)
+      .replace(/\/$/, "")
+      .replace(/\.git$/, "");
+    return path.toLowerCase() === `/${owner}/${name}`.toLowerCase();
+  } catch {
+    return false;
+  }
+};
+
+const publishBranch = (sessionId: string, runId: string): string =>
+  `agent/${sessionId}/${runId}`.replace(/[^A-Za-z0-9._/-]/g, "-");
+
+const sameBranch = (left: string | null, right: string): boolean =>
+  left?.toLowerCase() === right.toLowerCase();
+
 const githubFailure = (error: unknown): GitHubResponseFailure => {
   const candidate = error as {
     code?: unknown;
@@ -471,7 +528,7 @@ const operationFailure = (
 });
 
 const operationSuccess = (
-  action: Exclude<GitHubPullRequestToolResult["action"], "push">,
+  action: GitHubPullRequestToolResult["action"],
   pullRequest: PullRequestMetadata,
   github: GitHubResponseFailure | null = null,
 ): GitHubPullRequestToolResult => ({
@@ -633,24 +690,356 @@ export class GitHubService {
     return row ? pullRequestMetadata(row) : null;
   }
 
-  async recordGitPushEvent(
+  async publishPullRequest(
     sessionId: string,
     runId: string,
-    branch: string,
-    failure?: { code: string; message: string },
-  ): Promise<void> {
-    if (!this.events?.appendRunEvent) return;
-    const event = await this.events.appendRunEvent({
+    target: { runtime: GitHubPublishRuntime; containerName: string },
+    input: GitHubPublishPullRequestInput,
+    options: { timeoutMs: number; signal: AbortSignal },
+  ): Promise<GitHubPullRequestToolResult> {
+    const repository = await this.sessionRepository(sessionId);
+    const baseBranch = repository.baseBranch ?? repository.defaultBranch;
+    if (!baseBranch)
+      return operationFailure(
+        "publish",
+        "github_base_branch_missing",
+        "A GitHub base branch is required",
+      );
+    const title = input.title;
+    if (!title)
+      return operationFailure(
+        "publish",
+        "invalid_pull_request_input",
+        "A title is required to publish a pull request",
+      );
+
+    const remote = await this.publishExec(
+      target,
+      "git remote get-url --push origin",
+      options,
+    );
+    if (
+      !remote.success ||
+      !isExpectedGitHubRemote(
+        remote.stdout.trim(),
+        repository.owner,
+        repository.name,
+      )
+    )
+      return operationFailure(
+        "publish",
+        "git_remote_mismatch",
+        "The configured Git remote does not match the session repository",
+      );
+
+    const status = await this.publishExec(
+      target,
+      "git status --porcelain=v1",
+      options,
+    );
+    if (!status.success)
+      return operationFailure("publish", status.code, status.message);
+    if (!status.stdout.trim())
+      return operationFailure(
+        "publish",
+        "no_workspace_diff",
+        "Refusing to publish a pull request without workspace changes",
+      );
+
+    const branch = publishBranch(sessionId, runId);
+    if (
+      sameBranch(repository.baseBranch, branch) ||
+      sameBranch(repository.defaultBranch, branch)
+    )
+      return operationFailure(
+        "publish",
+        "protected_git_branch",
+        "Refusing to publish the session base branch",
+      );
+
+    const creating = await this.prisma.$transaction(async (tx) => {
+      await tx.pullRequest.updateMany({
+        where: { sessionId, isCurrent: true },
+        data: { isCurrent: false },
+      });
+      const row = await tx.pullRequest.create({
+        data: {
+          id: `pr_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
+          sessionId,
+          runId,
+          provider: "github",
+          owner: repository.owner,
+          repo: repository.name,
+          installationId: repository.installationId,
+          branch,
+          baseBranch,
+          title,
+          status: "creating",
+          draft: input.draft !== false,
+          isCurrent: true,
+        },
+      });
+      const event = await this.appendRunEventInTransaction(
+        tx,
+        sessionId,
+        runId,
+        "pull_request_creation_started",
+        row,
+        { pull_request: pullRequestMetadata(row) },
+      );
+      return { row, event };
+    });
+    if (creating.event) this.publish(creating.event);
+
+    const checkout = await this.publishExec(
+      target,
+      `git checkout -B ${shellQuote(branch)} ${shellQuote(`origin/${baseBranch}`)} || git checkout -B ${shellQuote(branch)} ${shellQuote(baseBranch)}`,
+      options,
+    );
+    if (!checkout.success)
+      return this.failPublishingPullRequest(
+        sessionId,
+        runId,
+        creating.row,
+        checkout.code,
+        checkout.message,
+      );
+
+    const add = await this.publishExec(target, "git add -A", options);
+    if (!add.success) {
+      await this.resetWorkspaceIndex(target, options);
+      return this.failPublishingPullRequest(
+        sessionId,
+        runId,
+        creating.row,
+        add.code,
+        add.message,
+      );
+    }
+
+    const commit = await this.publishExec(
+      target,
+      `git -c user.name=${shellQuote("Agent Sandbox")} -c user.email=${shellQuote("agent-sandbox@example.invalid")} -c core.hooksPath=/dev/null commit --no-verify -m ${shellQuote(title)}`,
+      options,
+    );
+    if (!commit.success) {
+      await this.resetWorkspaceIndex(target, options);
+      return this.failPublishingPullRequest(
+        sessionId,
+        runId,
+        creating.row,
+        commit.code,
+        commit.message,
+      );
+    }
+
+    const failAfterCommit = async (
+      code: string,
+      message: string,
+      github: GitHubResponseFailure | null = null,
+    ) => {
+      await this.resetPublishedCommit(target, options);
+      return this.failPublishingPullRequest(
+        sessionId,
+        runId,
+        creating.row,
+        code,
+        message,
+        github,
+      );
+    };
+
+    let token: string;
+    try {
+      token = await this.createInstallationToken(repository.installationId);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      return failAfterCommit(
+        error instanceof ServiceError
+          ? error.code
+          : "github_installation_token_failed",
+        error instanceof ServiceError
+          ? error.message
+          : "GitHub installation token could not be created",
+      );
+    }
+    const pushed = await this.publishExec(
+      target,
+      `token=$(cat) && export GITHUB_TOKEN="$token" GIT_TERMINAL_PROMPT=0 && git -c core.hooksPath=/dev/null -c credential.helper= -c ${shellQuote('credential.helper=!f() { echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f')} push --no-verify origin ${shellQuote(`HEAD:refs/heads/${branch}`)}`,
+      { ...options, stdin: token },
+    );
+    if (!pushed.success) return failAfterCommit(pushed.code, pushed.message);
+
+    const pushedEvent = await this.events?.appendRunEvent({
       sessionId,
       runId,
-      type: failure ? "pull_request_failed" : "pull_request_branch_pushed",
+      type: "pull_request_branch_pushed",
       producerService: "github",
-      producerId: runId,
+      producerId: creating.row.id,
       correlationId: randomUUID(),
       domain: "pull_request",
-      payload: failure ? { action: "push", branch, failure } : { branch },
+      payload: { branch },
     });
-    this.publish(event);
+    if (pushedEvent) this.publish(pushedEvent);
+
+    if (!this.api.createPullRequest)
+      return failAfterCommit(
+        "github_api_unavailable",
+        "GitHub pull request API is unavailable",
+      );
+
+    let created: GitHubPullRequestRecord;
+    try {
+      created = await this.api.createPullRequest(
+        repository.installationId,
+        repository.owner,
+        repository.name,
+        {
+          title,
+          branch,
+          baseBranch,
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          draft: input.draft !== false,
+        },
+      );
+    } catch (error) {
+      const github = githubFailure(error);
+      return failAfterCommit(
+        "github_pull_request_failed",
+        "GitHub pull request creation failed",
+        github,
+      );
+    }
+
+    await this.resetPublishedCommit(target, options);
+    const next = await this.persistPullRequestUpdate(
+      sessionId,
+      runId,
+      creating.row,
+      {
+        number: created.number,
+        nodeId: created.nodeId,
+        url: created.url,
+        branch: created.branch || branch,
+        baseBranch: created.baseBranch || baseBranch,
+        title: created.title || title,
+        status: "open",
+        draft: created.draft,
+        failureCode: null,
+        failureMessage: null,
+        closedAt: null,
+        openedAt: new Date(),
+      },
+      "pull_request_created",
+    );
+    return operationSuccess("publish", pullRequestMetadata(next));
+  }
+
+  private async publishExec(
+    target: { runtime: GitHubPublishRuntime; containerName: string },
+    command: string,
+    options: { timeoutMs: number; signal: AbortSignal; stdin?: string },
+  ): Promise<
+    | { success: true; stdout: string }
+    | { success: false; code: string; message: string }
+  > {
+    if (options.signal.aborted) {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    }
+    try {
+      const result = await target.runtime.simpleExec(
+        target.containerName,
+        command,
+        workspaceRoot,
+        {
+          timeoutMs: options.timeoutMs,
+          signal: options.signal,
+          ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
+        },
+      );
+      if (options.signal.aborted) {
+        const error = new Error("The operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      }
+      if (result.timedOut)
+        return {
+          success: false,
+          code: "git_publish_timed_out",
+          message: "Git publication timed out",
+        };
+      if (result.exitCode !== 0)
+        return {
+          success: false,
+          code: "git_publish_failed",
+          message: "Git publication could not be completed",
+        };
+      return { success: true, stdout: result.stdout };
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      return {
+        success: false,
+        code: "git_publish_failed",
+        message: "Git publication could not be completed",
+      };
+    }
+  }
+
+  private async resetPublishedCommit(
+    target: { runtime: GitHubPublishRuntime; containerName: string },
+    options: { timeoutMs: number; signal: AbortSignal },
+  ): Promise<void> {
+    await this.publishExec(target, "git reset --mixed HEAD~1", options).catch(
+      () => undefined,
+    );
+  }
+
+  private async resetWorkspaceIndex(
+    target: { runtime: GitHubPublishRuntime; containerName: string },
+    options: { timeoutMs: number; signal: AbortSignal },
+  ): Promise<void> {
+    await this.publishExec(target, "git reset --mixed HEAD", options).catch(
+      () => undefined,
+    );
+  }
+
+  private async failPublishingPullRequest(
+    sessionId: string,
+    runId: string,
+    row: PullRequestRow,
+    code: string,
+    message: string,
+    github: GitHubResponseFailure | null = null,
+  ): Promise<GitHubPullRequestToolResult> {
+    const next = await this.persistPullRequestUpdate(
+      sessionId,
+      runId,
+      row,
+      {
+        number: null,
+        nodeId: null,
+        url: null,
+        branch: row.branch,
+        baseBranch: row.baseBranch,
+        title: row.title,
+        status: "failed",
+        draft: row.draft,
+        isCurrent: false,
+        failureCode: code,
+        failureMessage: message,
+        closedAt: null,
+      },
+      "pull_request_failed",
+    );
+    return operationFailure(
+      "publish",
+      code,
+      message,
+      pullRequestMetadata(next),
+      github,
+    );
   }
 
   async pullRequest(

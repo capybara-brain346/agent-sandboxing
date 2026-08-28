@@ -53,6 +53,9 @@ operations are:
   Prisma, or unrelated runtime methods.
 - `diffForSession(sessionId, runId, sandboxId)` — reads `git diff --binary`
   from the session workspace.
+- GitHub pull request publication may temporarily commit and push the sandbox
+  diff through the same runtime seam, then resets that commit so the workspace
+  changes remain available for `diffForSession`.
 
 The sandbox is never stopped by a completed run; it is reused by later runs in
 the same session for as long as the session lives.

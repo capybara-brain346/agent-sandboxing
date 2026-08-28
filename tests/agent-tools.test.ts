@@ -7,10 +7,10 @@ import { createEditTool } from "../src/services/agent/tools/edit";
 import { createFindTool } from "../src/services/agent/tools/find";
 import { createGrepTool } from "../src/services/agent/tools/grep";
 import { createLsTool } from "../src/services/agent/tools/ls";
+import { createPublishPullRequestTool } from "../src/services/agent/tools/publish-pull-request";
 import { createReadTool } from "../src/services/agent/tools/read";
 import { createToolRegistry } from "../src/services/agent/tools/registry";
 import { createWriteTool } from "../src/services/agent/tools/write";
-import { createGitPushTool } from "../src/services/agent/tools/git-push";
 import type { SimpleExecResult } from "../src/types/sandbox.types";
 
 const config = {
@@ -68,174 +68,60 @@ describe("sandbox-proxied agent tools", () => {
     ]);
   });
 
-  it("pushes with an installation token scoped to the push command", async () => {
-    const token = "installation-token";
-    const fake = runtime(
-      success("feature/test\n"),
-      success("https://github.com/octo/repo.git\n"),
-      success(token, token),
-    );
-    const github = {
-      sessionRepository: vi.fn(async () => ({
-        owner: "octo",
-        name: "repo",
-        installationId: "10",
-        baseBranch: "main",
-        defaultBranch: "main",
-      })),
-      createInstallationToken: vi.fn(async () => token),
-      currentPullRequest: vi.fn(async () => null),
-      recordGitPushEvent: vi.fn(async () => undefined),
-    };
-
-    const result = await execute(
-      createGitPushTool(
-        fake,
-        "sandbox-1",
-        config,
-        signal,
-        "chat_1",
-        "run_1",
-        github,
-      ),
-      {},
-    );
-
-    expect(result).toMatchObject({ success: true, action: "push" });
-    expect(fake.simpleExec).toHaveBeenNthCalledWith(
-      3,
+  it("registers one backend-owned GitHub publication tool", () => {
+    const tools = createToolRegistry(
+      runtime(success()),
       "sandbox-1",
-      expect.not.stringContaining(token),
-      "/workspace/repo",
-      expect.objectContaining({ stdin: token }),
+      config,
+      signal,
+      { sessionId: "chat_1", runId: "run_1" },
+      { publishPullRequest: vi.fn() },
     );
-    expect(fake.simpleExec.mock.calls[2]?.[1]).toContain("push --no-verify");
-    expect(fake.simpleExec.mock.calls[2]?.[1]).toContain(
-      "'HEAD:refs/heads/feature/test'",
+
+    expect(Object.keys(tools)).toEqual([
+      "read",
+      "write",
+      "edit",
+      "bash",
+      "grep",
+      "find",
+      "ls",
+      "publish_pull_request",
+    ]);
+  });
+
+  it("delegates pull request publication without branch or remote input", async () => {
+    const fake = runtime(success());
+    const github = {
+      publishPullRequest: vi.fn(async () => ({
+        success: true,
+        action: "publish" as const,
+        pullRequest: null,
+        failure: null,
+        github: null,
+      })),
+    };
+
+    const result = await execute(
+      createPublishPullRequestTool(
+        fake,
+        "sandbox-1",
+        config,
+        signal,
+        "chat_1",
+        "run_1",
+        github,
+      ),
+      { title: "Fix it", body: "Details", draft: false },
     );
-    expect(JSON.stringify(result)).not.toContain(token);
-    expect(github.recordGitPushEvent).toHaveBeenCalledWith(
+
+    expect(result).toMatchObject({ success: true, action: "publish" });
+    expect(github.publishPullRequest).toHaveBeenCalledWith(
       "chat_1",
       "run_1",
-      "feature/test",
-    );
-  });
-
-  it("refuses to push the session base branch", async () => {
-    const fake = runtime(success("main\n"));
-    const github = {
-      sessionRepository: vi.fn(async () => ({
-        owner: "octo",
-        name: "repo",
-        installationId: "10",
-        baseBranch: "main",
-        defaultBranch: "main",
-      })),
-      createInstallationToken: vi.fn(async () => "installation-token"),
-      currentPullRequest: vi.fn(async () => null),
-      recordGitPushEvent: vi.fn(async () => undefined),
-    };
-
-    const result = await execute(
-      createGitPushTool(
-        fake,
-        "sandbox-1",
-        config,
-        signal,
-        "chat_1",
-        "run_1",
-        github,
-      ),
-      {},
-    );
-
-    expect(result).toMatchObject({
-      success: false,
-      failure: { code: "protected_git_branch" },
-    });
-    expect(github.createInstallationToken).not.toHaveBeenCalled();
-    expect(fake.simpleExec).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects a remote that does not match the session repository before minting a token", async () => {
-    const fake = runtime(
-      success("feature/test\n"),
-      success("https://github.com/other/repo.git\n"),
-    );
-    const github = {
-      sessionRepository: vi.fn(async () => ({
-        owner: "octo",
-        name: "repo",
-        installationId: "10",
-        baseBranch: "main",
-        defaultBranch: "main",
-      })),
-      createInstallationToken: vi.fn(async () => "installation-token"),
-      currentPullRequest: vi.fn(async () => null),
-      recordGitPushEvent: vi.fn(async () => undefined),
-    };
-
-    const result = await execute(
-      createGitPushTool(
-        fake,
-        "sandbox-1",
-        config,
-        signal,
-        "chat_1",
-        "run_1",
-        github,
-      ),
-      {},
-    );
-
-    expect(result).toMatchObject({
-      success: false,
-      failure: { code: "git_remote_mismatch" },
-    });
-    expect(github.createInstallationToken).not.toHaveBeenCalled();
-  });
-
-  it("returns a safe push failure and emits the failure event", async () => {
-    const fake = runtime(success("https://github.com/octo/repo.git\n"), {
-      ...success("private installation-token", "private installation-token"),
-      exitCode: 1,
-    });
-    const github = {
-      sessionRepository: vi.fn(async () => ({
-        owner: "octo",
-        name: "repo",
-        installationId: "10",
-        baseBranch: "main",
-        defaultBranch: "main",
-      })),
-      createInstallationToken: vi.fn(async () => "installation-token"),
-      currentPullRequest: vi.fn(async () => null),
-      recordGitPushEvent: vi.fn(async () => undefined),
-    };
-
-    const result = await execute(
-      createGitPushTool(
-        fake,
-        "sandbox-1",
-        config,
-        signal,
-        "chat_1",
-        "run_1",
-        github,
-      ),
-      { branch: "feature/test" },
-    );
-
-    expect(result).toMatchObject({
-      success: false,
-      failure: { code: "git_push_rejected" },
-    });
-    expect(JSON.stringify(result)).not.toContain("installation-token");
-    expect(github.recordGitPushEvent).toHaveBeenCalledWith(
-      "chat_1",
-      "run_1",
-      "feature/test",
-      { code: "git_push_rejected", message: "GitHub rejected the Git push" },
+      { runtime: fake, containerName: "sandbox-1" },
+      { title: "Fix it", body: "Details", draft: false },
+      { timeoutMs: 300, signal },
     );
   });
 
