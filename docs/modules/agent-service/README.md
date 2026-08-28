@@ -117,9 +117,9 @@ The key remains in the control plane. It is not included in sandbox
 environment variables, tool inputs, events, provider error messages, or logs.
 
 `git_push` mints a short-lived installation token, verifies the configured
-GitHub remote, and passes the token over stdin only to the push command with
-repository hooks disabled. The token is not persisted or returned in tool
-output.
+GitHub remote, refuses to target the session base/default branch, and pushes the
+current `HEAD` to the requested branch with repository hooks disabled. The token
+is passed over stdin only and is not persisted or returned in tool output.
 `github_pr` performs narrow create, update, comment, close, and reopen
 operations through the backend GitHub App seam and returns compact structured
 results. Failed create attempts are retained in PR history but are not kept as

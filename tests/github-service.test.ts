@@ -130,7 +130,10 @@ describe("GitHubService", () => {
         throw Object.assign(new Error("private token"), {
           response: {
             status: 422,
-            data: { message: "Validation failed" },
+            data: {
+              message: "Validation failed",
+              errors: [{ message: "No commits between main and feature/test" }],
+            },
           },
         });
       }),
@@ -174,7 +177,11 @@ describe("GitHubService", () => {
         status: "failed",
         failure: { code: "github_pull_request_failed" },
       },
-      github: { status: 422, message: "Validation failed" },
+      github: {
+        status: 422,
+        message: "Validation failed",
+        errors: ["No commits between main and feature/test"],
+      },
     });
     expect(JSON.stringify(result)).not.toContain("private token");
     expect(update).toHaveBeenCalledWith(

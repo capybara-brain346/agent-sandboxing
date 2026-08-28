@@ -415,11 +415,28 @@ const githubFailure = (error: unknown): GitHubResponseFailure => {
     code?: unknown;
     response?: {
       status?: unknown;
-      data?: { message?: unknown; code?: unknown };
+      data?: { message?: unknown; code?: unknown; errors?: unknown };
     };
     message?: unknown;
   };
   const response = candidate.response;
+  const errors = Array.isArray(response?.data?.errors)
+    ? response.data.errors.flatMap((item) => {
+        if (typeof item === "string") return [bounded(item)];
+        if (typeof item !== "object" || item === null || Array.isArray(item))
+          return [];
+        const record = item as Record<string, unknown>;
+        const parts = [
+          record.resource,
+          record.field,
+          record.code,
+          record.message,
+        ].filter(
+          (part): part is string => typeof part === "string" && part.length > 0,
+        );
+        return parts.length ? [bounded(parts.join(": "))] : [];
+      })
+    : [];
   return {
     status:
       typeof response?.status === "number" && Number.isInteger(response.status)
@@ -435,6 +452,7 @@ const githubFailure = (error: unknown): GitHubResponseFailure => {
       typeof response?.data?.message === "string"
         ? bounded(response.data.message)
         : "GitHub API request failed",
+    ...(errors.length ? { errors } : {}),
   };
 };
 

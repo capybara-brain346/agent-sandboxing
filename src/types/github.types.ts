@@ -56,6 +56,7 @@ export type GitHubResponseFailure = {
   status: number | null;
   code: string | null;
   message: string;
+  errors?: string[];
 };
 
 export type GitHubPullRequestRecord = {

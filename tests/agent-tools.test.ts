@@ -110,12 +110,51 @@ describe("sandbox-proxied agent tools", () => {
       expect.objectContaining({ stdin: token }),
     );
     expect(fake.simpleExec.mock.calls[2]?.[1]).toContain("push --no-verify");
+    expect(fake.simpleExec.mock.calls[2]?.[1]).toContain(
+      "'HEAD:refs/heads/feature/test'",
+    );
     expect(JSON.stringify(result)).not.toContain(token);
     expect(github.recordGitPushEvent).toHaveBeenCalledWith(
       "chat_1",
       "run_1",
       "feature/test",
     );
+  });
+
+  it("refuses to push the session base branch", async () => {
+    const fake = runtime(success("main\n"));
+    const github = {
+      sessionRepository: vi.fn(async () => ({
+        owner: "octo",
+        name: "repo",
+        installationId: "10",
+        baseBranch: "main",
+        defaultBranch: "main",
+      })),
+      createInstallationToken: vi.fn(async () => "installation-token"),
+      currentPullRequest: vi.fn(async () => null),
+      recordGitPushEvent: vi.fn(async () => undefined),
+    };
+
+    const result = await execute(
+      createGitPushTool(
+        fake,
+        "sandbox-1",
+        config,
+        signal,
+        "chat_1",
+        "run_1",
+        github,
+      ),
+      {},
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: { code: "protected_git_branch" },
+    });
+    expect(github.createInstallationToken).not.toHaveBeenCalled();
+    expect(fake.simpleExec).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a remote that does not match the session repository before minting a token", async () => {

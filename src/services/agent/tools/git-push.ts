@@ -82,6 +82,9 @@ const success = (
   github: null,
 });
 
+const sameBranch = (left: string | null, right: string): boolean =>
+  left?.toLowerCase() === right.toLowerCase();
+
 export const createGitPushTool = (
   runtime: AgentToolRuntime,
   containerName: string,
@@ -146,6 +149,15 @@ export const createGitPushTool = (
       let repository;
       try {
         repository = await github.sessionRepository(sessionId);
+        if (
+          sameBranch(repository.baseBranch, branch) ||
+          sameBranch(repository.defaultBranch, branch)
+        )
+          return failed(
+            "protected_git_branch",
+            "Refusing to push the session base branch",
+            branch,
+          );
         const configuredRemote = await runtime.simpleExec(
           containerName,
           `git remote get-url --push ${shellQuote(remote)}`,
@@ -171,7 +183,7 @@ export const createGitPushTool = (
         );
         const result = await runtime.simpleExec(
           containerName,
-          `token=$(cat) && export GITHUB_TOKEN="$token" GIT_TERMINAL_PROMPT=0 && git -c core.hooksPath=/dev/null -c credential.helper= -c ${shellQuote('credential.helper=!f() { echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f')} push --no-verify ${shellQuote(remote)} ${shellQuote(branch)}`,
+          `token=$(cat) && export GITHUB_TOKEN="$token" GIT_TERMINAL_PROMPT=0 && git -c core.hooksPath=/dev/null -c credential.helper= -c ${shellQuote('credential.helper=!f() { echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f')} push --no-verify ${shellQuote(remote)} ${shellQuote(`HEAD:refs/heads/${branch}`)}`,
           workspaceRoot,
           {
             timeoutMs: config.AGENT_TOOL_TIMEOUT_MS,
