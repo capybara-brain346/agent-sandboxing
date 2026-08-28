@@ -315,14 +315,7 @@ export class RunService {
           "A GitHub base branch is required for provisioning",
           400,
         );
-      if (
-        !owner ||
-        !name ||
-        !installationId ||
-        !/^\d+$/.test(installationId) ||
-        !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(owner) ||
-        !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)
-      )
+      if (!owner || !name || !installationId || !/^\d+$/.test(installationId))
         throw new ServiceError(
           "github_repository_metadata_missing",
           "GitHub repository metadata is incomplete",

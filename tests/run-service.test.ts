@@ -49,6 +49,9 @@ const makeHarness = (
   options: {
     existingSandboxId?: string | null;
     repoSource?: string;
+    repoOwner?: string;
+    repoName?: string;
+    repoInstallationId?: string | null;
     repoDefaultBranch?: string | null;
     repoBaseBranch?: string | null;
     tokenFailure?: boolean;
@@ -112,15 +115,20 @@ const makeHarness = (
         repoSource: options.repoSource ?? "fixture",
         repoRef: "./repo",
         image: null,
-        repoOwner: options.repoSource === "github" ? "octo" : null,
-        repoName: options.repoSource === "github" ? "repo" : null,
+        repoOwner:
+          options.repoOwner ??
+          (options.repoSource === "github" ? "octo" : null),
+        repoName:
+          options.repoName ?? (options.repoSource === "github" ? "repo" : null),
         repoDefaultBranch:
           options.repoDefaultBranch !== undefined
             ? options.repoDefaultBranch
             : options.repoSource === "github"
               ? "main"
               : null,
-        repoInstallationId: options.repoSource === "github" ? "10" : null,
+        repoInstallationId:
+          options.repoInstallationId ??
+          (options.repoSource === "github" ? "10" : null),
         repoBaseBranch:
           options.repoBaseBranch !== undefined
             ? options.repoBaseBranch
@@ -286,6 +294,23 @@ describe("RunService", () => {
     );
     expect(harness.events.map((event) => event.type)).toContain(
       "run_completed",
+    );
+  });
+
+  it("accepts valid GitHub repository names with leading punctuation", async () => {
+    const harness = makeHarness(
+      { run: vi.fn(async () => ({ summary: "Provisioned repository" })) },
+      { repoSource: "github", repoName: "_repo" },
+    );
+
+    harness.service.createRunForMessage(sessionId, runId, messageId, "Fix it");
+
+    await vi.waitFor(() => expect(harness.status.value).toBe("completed"));
+    expect(harness.sandbox.ensureReadyForSession).toHaveBeenCalledWith(
+      sessionId,
+      runId,
+      "sbox_new",
+      expect.objectContaining({ source: "github", name: "_repo" }),
     );
   });
 
