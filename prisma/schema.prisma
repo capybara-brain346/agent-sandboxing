@@ -39,6 +39,13 @@ enum ChatMessageRole {
   system
 }
 
+enum PullRequestStatus {
+  creating
+  open
+  closed
+  failed
+}
+
 model ChatSession {
   title                               String?
   id                                  String        @id
@@ -67,6 +74,7 @@ model ChatSession {
   sandbox                             Sandbox?      @relation("SessionSandbox")
   artifacts                           Artifact[]    @relation("SessionArtifacts")
   events                              Event[]       @relation("SessionEvents")
+  pullRequests                        PullRequest[] @relation("SessionPullRequests")
   user                                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, updatedAt])
@@ -199,11 +207,43 @@ model Task {
   runEvents Event[]       @relation("RunEvents")
   messages  ChatMessage[] @relation("RunMessages")
   artifacts Artifact[]    @relation("RunArtifacts")
+  pullRequests PullRequest[] @relation("RunPullRequests")
 
   @@index([status, createdAt])
   @@index([createdAt])
   @@index([sessionId, createdAt])
   @@map("tasks")
+}
+
+model PullRequest {
+  id             String            @id
+  sessionId      String            @map("session_id")
+  runId          String?           @map("run_id")
+  provider       String
+  owner          String
+  repo           String
+  installationId String            @map("installation_id")
+  number         Int?
+  nodeId         String?           @map("node_id")
+  url            String?
+  branch         String
+  baseBranch     String            @map("base_branch")
+  title          String
+  status         PullRequestStatus
+  draft          Boolean
+  isCurrent      Boolean           @default(true) @map("is_current")
+  failureCode    String?           @map("failure_code")
+  failureMessage String?           @map("failure_message")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  openedAt       DateTime?         @map("opened_at")
+  closedAt       DateTime?         @map("closed_at")
+  session        ChatSession       @relation("SessionPullRequests", fields: [sessionId], references: [id], onDelete: Cascade)
+  run            Task?             @relation("RunPullRequests", fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, isCurrent, createdAt])
+  @@index([runId])
+  @@map("pull_requests")
 }
 
 model Artifact {

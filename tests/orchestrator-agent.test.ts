@@ -20,10 +20,6 @@ vi.mock("ai", async (importOriginal) => {
 const workerResult = (overrides: Partial<WorkerResult> = {}): WorkerResult => ({
   status: "completed",
   summary: "Did the work",
-  changedFiles: [],
-  testsRun: [],
-  blockers: [],
-  suggestedNextStep: "",
   ...overrides,
 });
 
@@ -105,7 +101,7 @@ describe("ModelOrchestratorAgent", () => {
 
   it("hard-stops delegation at MAX_DELEGATIONS_PER_TURN without calling delegate again", async () => {
     const delegate = vi.fn(async () =>
-      workerResult({ status: "blocked", blockers: ["still stuck"] }),
+      workerResult({ status: "blocked", summary: "still stuck" }),
     );
     aiMocks.generateText.mockImplementationOnce(async (options) => {
       const tool = options.tools.delegate_to_code_worker;
@@ -117,15 +113,15 @@ describe("ModelOrchestratorAgent", () => {
     const agent = new ModelOrchestratorAgent({} as LanguageModel);
     const decision = await agent.decide(baseInput({ delegate }));
     expect(delegate).toHaveBeenCalledTimes(MAX_DELEGATIONS_PER_TURN);
-    expect(decision.delegations.at(-1)?.blockers).toEqual([
-      "max_delegations_reached",
-    ]);
+    expect(decision.delegations.at(-1)?.summary).toBe(
+      "Delegation budget for this turn is exhausted.",
+    );
   });
 
   it("does not retry a failed delegation", async () => {
     const failed = workerResult({
       status: "failed",
-      blockers: ["the attempt failed"],
+      summary: "the attempt failed",
     });
     const delegate = vi.fn(async () => failed);
     aiMocks.generateText.mockImplementationOnce(async (options) => {

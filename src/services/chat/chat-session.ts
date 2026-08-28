@@ -12,6 +12,7 @@ import {
   taskServiceArtifacts,
   taskServiceTraceRecorder,
   taskServiceWorker,
+  taskServiceGithub,
 } from "../task/task";
 import { resolveAgentModel } from "../agent/model";
 import { RunService } from "../task/run-service";
@@ -22,7 +23,6 @@ import { ModelOrchestratorAgent } from "../agent/orchestrator-agent";
 import { SessionContextBuilder } from "./session-context-builder";
 import { ModelSessionSummaryCompactor } from "../agent/session-summary-compactor";
 import { PlaceholderTaskRunner } from "../task/task-runner";
-import { GitHubService } from "../github/github";
 import type { PublicEvent } from "../../types/event.types";
 import type {
   ChatMessage,
@@ -39,6 +39,8 @@ import type {
   UpdateChatSessionRequest,
 } from "../../types/chat.types";
 import type { TaskFailure, TaskStatus } from "../../types/task.types";
+import type { PullRequestMetadata } from "../../types/github.types";
+import type { GitHubService } from "../github/github";
 
 type RunRow = {
   id: string;
@@ -197,7 +199,10 @@ const messageView = (message: {
   createdAt: message.createdAt.toISOString(),
 });
 
-const runResult = (run: RunRow): RunResult => {
+const runResult = (
+  run: RunRow,
+  pullRequest: PullRequestMetadata | null,
+): RunResult => {
   const completed = terminalAt(run);
   if (!completed)
     throw new ServiceError(
@@ -235,6 +240,7 @@ const runResult = (run: RunRow): RunResult => {
     agentSummary: run.agentSummary,
     exitReason,
     failure: failure(run),
+    pullRequest,
     createdAt: run.createdAt.toISOString(),
     completedAt: completed.toISOString(),
   };
@@ -250,6 +256,10 @@ export class ChatSessionService {
       prisma,
     ),
     private readonly fixtureReposEnabled = false,
+    private readonly github?: Pick<
+      GitHubService,
+      "currentPullRequest" | "validateRepository"
+    >,
   ) {}
 
   async createSession(
@@ -262,6 +272,15 @@ export class ChatSessionService {
         "Fixture repositories are not available in the product path",
         403,
       );
+    if (input.repo.source === "github") {
+      if (!this.github)
+        throw new ServiceError(
+          "github_repository_not_found",
+          "Repository was not found",
+          404,
+        );
+      await this.github.validateRepository(userId, input.repo);
+    }
 
     const sessionId = id("chat");
     const result = await runQuery("create_chat_session", { sessionId }, () =>
@@ -683,7 +702,10 @@ export class ChatSessionService {
         "Run result is not available until the run is terminal",
         409,
       );
-    return runResult(run);
+    return runResult(
+      run,
+      this.github ? await this.github.currentPullRequest(sessionId) : null,
+    );
   }
 
   async cancelRun(
@@ -824,7 +846,7 @@ const chatRunService = new RunService(
   publishChatEvent,
   taskServiceArtifacts,
   taskServiceTraceRecorder,
-  new GitHubService(prisma, chatHarnessConfig),
+  taskServiceGithub,
 );
 export const chatSessionService = new ChatSessionService(
   prisma,
@@ -833,4 +855,5 @@ export const chatSessionService = new ChatSessionService(
   chatRunService,
   taskServiceArtifacts,
   chatHarnessConfig.FIXTURE_REPOS_ENABLED,
+  taskServiceGithub,
 );

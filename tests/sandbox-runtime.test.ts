@@ -15,6 +15,7 @@ type FakeStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
 type FakeChild = EventEmitter & {
   stdout: FakeStream;
   stderr: FakeStream;
+  stdin: { end: ReturnType<typeof vi.fn> };
   kill: ReturnType<typeof vi.fn>;
 };
 
@@ -28,6 +29,7 @@ const fakeChild = (): FakeChild => {
   const child = new EventEmitter() as FakeChild;
   child.stdout = fakeStream();
   child.stderr = fakeStream();
+  child.stdin = { end: vi.fn() };
   child.kill = vi.fn();
   return child;
 };
@@ -87,7 +89,7 @@ describe("SandboxRuntime.simpleExec", () => {
         "-lc",
         "printf hello",
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      { stdio: ["pipe", "pipe", "pipe"] },
     );
   });
 
@@ -108,6 +110,23 @@ describe("SandboxRuntime.simpleExec", () => {
       exitCode: 7,
       timedOut: false,
     });
+  });
+
+  it("passes stdin through the Docker pipe without adding it to process arguments", async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = runtime().simpleExec(
+      "sandbox-1",
+      "cat",
+      "/workspace/repo",
+      { stdin: "secret-token" },
+    );
+    child.emit("close", 0);
+
+    await expect(resultPromise).resolves.toMatchObject({ exitCode: 0 });
+    expect(child.stdin.end).toHaveBeenCalledWith("secret-token");
+    expect(spawn.mock.calls[0]?.[1]).not.toContain("secret-token");
   });
 
   it("truncates combined output at a valid UTF-8 boundary", async () => {

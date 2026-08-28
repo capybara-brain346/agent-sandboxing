@@ -14,6 +14,7 @@ import { EvalTraceRecorder } from "../eval/eval-trace-recorder";
 import { LangfuseTraceSink } from "../eval/langfuse-trace-sink";
 import { LocalTraceSink } from "../eval/local-trace-sink";
 import type { EvalTraceSink } from "../../types/eval-trace.types";
+import { GitHubService } from "../github/github";
 
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   created: ["provisioning", "failed", "cancelled"],
@@ -46,16 +47,19 @@ export const taskServiceTraceRecorder = new EvalTraceRecorder(
     tags: [`environment:${taskServiceConfig.NODE_ENV}`, "source:chat-session"],
   },
 );
+export const taskServiceGithub = new GitHubService(
+  prisma,
+  taskServiceConfig,
+  undefined,
+  taskServiceEvents,
+  publishTaskEvent,
+);
 export const shutdownTaskServiceTracing = (): Promise<void> =>
   taskServiceLangfuseSink.shutdown();
 const placeholderWorker: CodeWorker = {
   run: async () => ({
     status: "completed",
     summary: "",
-    changedFiles: [],
-    testsRun: [],
-    blockers: [],
-    suggestedNextStep: "",
   }),
 };
 
@@ -70,4 +74,5 @@ export const taskServiceWorker: CodeWorker =
         publish: publishTaskEvent,
         artifacts: taskServiceArtifacts,
         traceRecorder: taskServiceTraceRecorder,
+        github: taskServiceGithub,
       });

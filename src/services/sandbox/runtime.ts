@@ -132,7 +132,7 @@ export class SandboxRuntime {
 
       try {
         child = spawn("docker", args, {
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
         });
       } catch (error) {
         rejectWith(error);
@@ -149,6 +149,7 @@ export class SandboxRuntime {
         if (!timedOut) rejectWith(error);
       });
       child.once("close", (code) => resolveResult(code));
+      child.stdin?.end(options.stdin);
 
       if (options.signal) {
         options.signal.addEventListener("abort", onAbort, { once: true });

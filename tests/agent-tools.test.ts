@@ -10,6 +10,7 @@ import { createLsTool } from "../src/services/agent/tools/ls";
 import { createReadTool } from "../src/services/agent/tools/read";
 import { createToolRegistry } from "../src/services/agent/tools/registry";
 import { createWriteTool } from "../src/services/agent/tools/write";
+import { createGitPushTool } from "../src/services/agent/tools/git-push";
 import type { SimpleExecResult } from "../src/types/sandbox.types";
 
 const config = {
@@ -65,6 +66,138 @@ describe("sandbox-proxied agent tools", () => {
       "find",
       "ls",
     ]);
+  });
+
+  it("pushes with an installation token scoped to the push command", async () => {
+    const token = "installation-token";
+    const fake = runtime(
+      success("feature/test\n"),
+      success("https://github.com/octo/repo.git\n"),
+      success(token, token),
+    );
+    const github = {
+      sessionRepository: vi.fn(async () => ({
+        owner: "octo",
+        name: "repo",
+        installationId: "10",
+        baseBranch: "main",
+        defaultBranch: "main",
+      })),
+      createInstallationToken: vi.fn(async () => token),
+      currentPullRequest: vi.fn(async () => null),
+      recordGitPushEvent: vi.fn(async () => undefined),
+    };
+
+    const result = await execute(
+      createGitPushTool(
+        fake,
+        "sandbox-1",
+        config,
+        signal,
+        "chat_1",
+        "run_1",
+        github,
+      ),
+      {},
+    );
+
+    expect(result).toMatchObject({ success: true, action: "push" });
+    expect(fake.simpleExec).toHaveBeenNthCalledWith(
+      3,
+      "sandbox-1",
+      expect.not.stringContaining(token),
+      "/workspace/repo",
+      expect.objectContaining({ stdin: token }),
+    );
+    expect(fake.simpleExec.mock.calls[2]?.[1]).toContain("push --no-verify");
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(github.recordGitPushEvent).toHaveBeenCalledWith(
+      "chat_1",
+      "run_1",
+      "feature/test",
+    );
+  });
+
+  it("rejects a remote that does not match the session repository before minting a token", async () => {
+    const fake = runtime(
+      success("feature/test\n"),
+      success("https://github.com/other/repo.git\n"),
+    );
+    const github = {
+      sessionRepository: vi.fn(async () => ({
+        owner: "octo",
+        name: "repo",
+        installationId: "10",
+        baseBranch: "main",
+        defaultBranch: "main",
+      })),
+      createInstallationToken: vi.fn(async () => "installation-token"),
+      currentPullRequest: vi.fn(async () => null),
+      recordGitPushEvent: vi.fn(async () => undefined),
+    };
+
+    const result = await execute(
+      createGitPushTool(
+        fake,
+        "sandbox-1",
+        config,
+        signal,
+        "chat_1",
+        "run_1",
+        github,
+      ),
+      {},
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: { code: "git_remote_mismatch" },
+    });
+    expect(github.createInstallationToken).not.toHaveBeenCalled();
+  });
+
+  it("returns a safe push failure and emits the failure event", async () => {
+    const fake = runtime(success("https://github.com/octo/repo.git\n"), {
+      ...success("private installation-token", "private installation-token"),
+      exitCode: 1,
+    });
+    const github = {
+      sessionRepository: vi.fn(async () => ({
+        owner: "octo",
+        name: "repo",
+        installationId: "10",
+        baseBranch: "main",
+        defaultBranch: "main",
+      })),
+      createInstallationToken: vi.fn(async () => "installation-token"),
+      currentPullRequest: vi.fn(async () => null),
+      recordGitPushEvent: vi.fn(async () => undefined),
+    };
+
+    const result = await execute(
+      createGitPushTool(
+        fake,
+        "sandbox-1",
+        config,
+        signal,
+        "chat_1",
+        "run_1",
+        github,
+      ),
+      { branch: "feature/test" },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: { code: "git_push_rejected" },
+    });
+    expect(JSON.stringify(result)).not.toContain("installation-token");
+    expect(github.recordGitPushEvent).toHaveBeenCalledWith(
+      "chat_1",
+      "run_1",
+      "feature/test",
+      { code: "git_push_rejected", message: "GitHub rejected the Git push" },
+    );
   });
 
   it("reads bounded UTF-8 content with the task tool timeout", async () => {

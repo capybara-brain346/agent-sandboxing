@@ -120,9 +120,7 @@ export class RunOrchestrator implements TaskRunner {
     if (lastResult?.status === "failed")
       throw new ServiceError(
         "worker_failed",
-        lastResult.blockers.length
-          ? lastResult.blockers.join("; ")
-          : lastResult.summary || "CodeWorker failed",
+        lastResult.summary || "CodeWorker failed",
         502,
         { workerReport },
       );

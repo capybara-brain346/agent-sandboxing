@@ -22,15 +22,16 @@ import { useEventStream } from "@/api/useEventStream";
 import type {
   ChatMessage,
   ChatSession,
+  PullRequestMetadata,
   RunResult,
   RunSnapshot,
 } from "@/api/types";
 import { TERMINAL_STATUSES } from "@/api/types";
 import {
-  ApprovalCard,
   DiffTable,
   MessageBubble,
   parseDiff,
+  PullRequestCard,
   PromptBar,
   StatusPill,
   TaskRow,
@@ -50,6 +51,76 @@ const SESSION_REFRESH_EVENT_TYPES = new Set([
   "run_cancelled",
   "run_result_ready",
 ]);
+
+const PR_EVENT_TYPES = new Set([
+  "pull_request_creation_started",
+  "pull_request_created",
+  "pull_request_updated",
+  "pull_request_closed",
+  "pull_request_reopened",
+  "pull_request_failed",
+]);
+
+const pullRequestFailure = (value: unknown): PullRequestMetadata["failure"] => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.code === "string" &&
+    typeof candidate.message === "string"
+    ? { code: candidate.code, message: candidate.message }
+    : null;
+};
+
+const applyPullRequestFailure = (
+  pullRequest: PullRequestMetadata | null,
+  failure: NonNullable<PullRequestMetadata["failure"]>,
+): PullRequestMetadata | null =>
+  pullRequest ? { ...pullRequest, failure } : null;
+
+const pullRequestFromEvents = (
+  events: ReturnType<typeof useEventStream>["events"],
+): PullRequestMetadata | null => {
+  let current: PullRequestMetadata | null = null;
+  for (const event of events) {
+    if (!PR_EVENT_TYPES.has(event.type)) continue;
+    const eventFailure =
+      event.type === "pull_request_failed"
+        ? pullRequestFailure(event.payload.failure)
+        : null;
+    const candidate = event.payload.pull_request;
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      Array.isArray(candidate)
+    ) {
+      if (eventFailure)
+        current = applyPullRequestFailure(current, eventFailure);
+      continue;
+    }
+    const value = candidate as Record<string, unknown>;
+    if (
+      value.provider !== "github" ||
+      typeof value.branch !== "string" ||
+      typeof value.baseBranch !== "string" ||
+      typeof value.title !== "string" ||
+      typeof value.status !== "string" ||
+      typeof value.draft !== "boolean"
+    )
+      continue;
+    const failure = pullRequestFailure(value.failure) ?? eventFailure;
+    current = {
+      provider: "github",
+      url: typeof value.url === "string" ? value.url : null,
+      number: typeof value.number === "number" ? value.number : null,
+      branch: value.branch,
+      baseBranch: value.baseBranch,
+      title: value.title,
+      status: value.status as PullRequestMetadata["status"],
+      draft: value.draft,
+      failure,
+    };
+  }
+  return current;
+};
 
 const TABS = [
   { id: "timeline", label: "Timeline" },
@@ -119,6 +190,7 @@ const RunPanel = ({
   events,
   connectionError,
   result,
+  pullRequest,
   resultError,
   cancelling,
   onCancel,
@@ -128,6 +200,7 @@ const RunPanel = ({
   events: ReturnType<typeof useEventStream>["events"];
   connectionError: boolean;
   result: RunResult | null;
+  pullRequest: PullRequestMetadata | null;
   resultError: string | null;
   cancelling: boolean;
   onCancel: () => void;
@@ -287,12 +360,12 @@ const RunPanel = ({
         </Tabs.Content>
 
         <Tabs.Content value="pr" className="h-full overflow-y-auto p-3">
-          <ApprovalCard
+          <PullRequestCard
+            pullRequest={pullRequest}
             baseBranch={baseBranch}
             filesChanged={files.length}
             additions={totals.additions}
             deletions={totals.deletions}
-            reason="Pull request creation isn't wired up yet — changes stay in this session's sandbox until the GitHub integration ships."
           />
         </Tabs.Content>
       </div>
@@ -349,6 +422,8 @@ export const ChatWorkspacePage = () => {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [latestPullRequest, setLatestPullRequest] =
+    useState<PullRequestMetadata | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [resultError, setResultError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -364,6 +439,16 @@ export const ChatWorkspacePage = () => {
   const run = session?.latestRun ?? null;
   const { events: runEvents, connectionError: runConnectionError } =
     useEventStream(run?.eventsUrl ?? null);
+  const eventPullRequest = useMemo(
+    () => pullRequestFromEvents(runEvents),
+    [runEvents],
+  );
+  const pullRequest =
+    eventPullRequest ?? runResult?.pullRequest ?? latestPullRequest;
+
+  useEffect(() => {
+    if (eventPullRequest) setLatestPullRequest(eventPullRequest);
+  }, [eventPullRequest]);
 
   useEffect(() => {
     if (session) {
@@ -389,6 +474,7 @@ export const ChatWorkspacePage = () => {
     setSession(null);
     setMessages([]);
     setRunResult(null);
+    setLatestPullRequest(null);
     setLoadError(null);
     lastHandledSequence.current = 0;
 
@@ -427,6 +513,7 @@ export const ChatWorkspacePage = () => {
     getRunResult(sessionId, runId)
       .then((result) => {
         if (!cancelled) setRunResult(result);
+        if (!cancelled) setLatestPullRequest(result.pullRequest);
       })
       .catch((caught) => {
         if (!cancelled)
@@ -582,6 +669,7 @@ export const ChatWorkspacePage = () => {
                 events={runEvents}
                 connectionError={runConnectionError}
                 result={runResult}
+                pullRequest={pullRequest}
                 resultError={resultError}
                 cancelling={cancelling}
                 onCancel={() => void onCancel()}

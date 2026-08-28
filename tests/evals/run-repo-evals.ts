@@ -5,10 +5,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LanguageModel } from "ai";
-import {
-  workerResultSchema,
-  type WorkerResult,
-} from "../../src/types/harness.types";
+import type { WorkerResult } from "../../src/types/harness.types";
 import type { ArtifactContent } from "../../src/types/artifact.types";
 import type {
   ChatMessage,
@@ -35,6 +32,7 @@ import {
 import { runSubjectiveJudge, subjectiveScoreSummary } from "./subjective-judge";
 import {
   repoCaseSchema,
+  workerResultSchema,
   type RepoCase,
   type RepoEvalResult,
   type RepoObserved,
@@ -324,7 +322,17 @@ const toolEventsFrom = (events: PublicEvent[]): RepoToolEvent[] =>
       toolName,
       correlationId: event.correlationId,
     } as const;
-    if (event.type === "agent_tool_call") return [base];
+    if (event.type === "agent_tool_call") {
+      const args = event.payload.args;
+      const command =
+        typeof args === "object" &&
+        args !== null &&
+        !Array.isArray(args) &&
+        typeof (args as Record<string, unknown>).command === "string"
+          ? ((args as Record<string, unknown>).command as string)
+          : undefined;
+      return [{ ...base, ...(command ? { command } : {}) }];
+    }
     const exitCode =
       typeof event.payload.exit_code === "number" ||
       event.payload.exit_code === null
@@ -493,8 +501,16 @@ const runRepoCase = async (
       if (report) {
         observed.delegationCount += 1;
         observed.workerReports.push(report);
-        observed.testsRun.push(...report.testsRun.map((test) => test.command));
       }
+      observed.testsRun.push(
+        ...observed.toolEvents.flatMap((event) =>
+          event.type === "agent_tool_call" &&
+          event.toolName === "bash" &&
+          event.command
+            ? [event.command]
+            : [],
+        ),
+      );
       observed.assistantMessages.push(
         assistant?.content ?? result.agentSummary ?? "",
       );

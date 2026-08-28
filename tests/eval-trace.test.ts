@@ -16,10 +16,6 @@ import type { WorkerResult } from "../src/types/harness.types";
 const workerResult: WorkerResult = {
   status: "completed",
   summary: "Updated the file",
-  changedFiles: ["/workspace/repo/a.ts"],
-  testsRun: [],
-  blockers: [],
-  suggestedNextStep: "",
 };
 
 const event = (

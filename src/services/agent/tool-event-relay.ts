@@ -48,6 +48,18 @@ const safeSerialize = (value: unknown): string => {
 const safeArgs = (value: unknown): Record<string, unknown> =>
   isRecord(value) ? value : {};
 
+const safeToolArgs = (
+  toolName: string,
+  value: unknown,
+): Record<string, unknown> =>
+  toolName === "github_pr"
+    ? Object.fromEntries(
+        Object.entries(safeArgs(value)).filter(
+          ([key]) => key !== "body" && key !== "comment",
+        ),
+      )
+    : safeArgs(value);
+
 const integerOrNull = (value: unknown): number | null =>
   typeof value === "number" && Number.isInteger(value) ? value : null;
 
@@ -79,7 +91,7 @@ export class ToolEventRelay {
     await this.appendAndPublish(
       this.eventInput(context, correlationId, "agent_tool_call", {
         tool_name: event.toolCall.toolName,
-        args: safeArgs(event.toolCall.input),
+        args: safeToolArgs(event.toolCall.toolName, event.toolCall.input),
       }),
     );
   }

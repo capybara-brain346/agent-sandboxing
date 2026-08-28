@@ -155,10 +155,6 @@ describe("message -> run -> worker -> assistant message -> summary update", () =
         return {
           status: "completed",
           summary: "Fixed the bug in src/x.ts",
-          changedFiles: ["src/x.ts"],
-          testsRun: [],
-          blockers: [],
-          suggestedNextStep: "",
         };
       }),
     };

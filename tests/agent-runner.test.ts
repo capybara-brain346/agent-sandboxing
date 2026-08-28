@@ -99,32 +99,13 @@ describe("AgentRunner", () => {
   const workerOutput = {
     status: "completed" as const,
     summary: "completed work",
-    changedFiles: [],
-    testsRun: [],
-    blockers: [],
-    suggestedNextStep: "",
   };
 
-  it("resolves the owned target and submits a structured result in the tool loop", async () => {
-    aiMocks.generateText.mockImplementationOnce(async (options) => {
-      const tools = options.tools as Record<
-        string,
-        { execute: (...args: never[]) => Promise<unknown> }
-      >;
-      const finishCall = {
-        callId: "finish_call",
-        toolCall: { toolName: "finish", input: workerOutput },
-      };
-      await options.onToolExecutionStart(finishCall);
-      await tools.finish.execute(workerOutput as never, {} as never);
-      await options.onToolExecutionEnd({
-        ...finishCall,
-        toolExecutionMs: 1,
-        toolOutput: { type: "tool-result", output: { accepted: true } },
-      });
+  it("resolves the owned target and returns the model report text", async () => {
+    aiMocks.generateText.mockImplementationOnce(async () => {
       return {
         text: "completed work",
-        toolCalls: [{ toolName: "finish", input: workerOutput }],
+        toolCalls: [],
         response: {
           messages: [{ role: "assistant", content: "completed work" }],
         },
@@ -142,7 +123,7 @@ describe("AgentRunner", () => {
       "task_1",
       "sbox_1",
     );
-    expect(aiMocks.isStepCount).toHaveBeenCalledWith(5);
+    expect(aiMocks.isStepCount).toHaveBeenCalledWith(4);
     expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
 
     const toolLoopOptions = aiMocks.generateText.mock.calls[0]?.[0];
@@ -151,7 +132,7 @@ describe("AgentRunner", () => {
       system: expect.stringContaining("/workspace/repo"),
       messages: [{ role: "user", content: "Update the greeting" }],
       abortSignal: expect.any(AbortSignal),
-      stopWhen: [expect.any(Function), "step-count-5"],
+      stopWhen: "step-count-4",
     });
     expect(toolLoopOptions.output).toBeUndefined();
     expect(Object.keys(toolLoopOptions.tools)).toEqual([
@@ -162,7 +143,6 @@ describe("AgentRunner", () => {
       "grep",
       "find",
       "ls",
-      "finish",
     ]);
     expect(harness.events.append).not.toHaveBeenCalled();
     expect(harness.traceRecorder.recordUsage).toHaveBeenCalledWith(
@@ -176,9 +156,7 @@ describe("AgentRunner", () => {
         sandboxId: "sbox_1",
         durationMs: expect.any(Number),
         status: "completed",
-        finishSubmitted: true,
-        toolCallCount: 1,
-        changedFileCount: 0,
+        toolCallCount: 0,
       }),
     );
     expect(debug).not.toHaveBeenCalledWith(
@@ -188,94 +166,17 @@ describe("AgentRunner", () => {
     debug.mockRestore();
   });
 
-  it("does not stop on an invalid finish call before accepting a valid result", async () => {
-    aiMocks.generateText.mockImplementationOnce(async (options) => {
-      const tools = options.tools as Record<
-        string,
-        { execute: (...args: never[]) => Promise<unknown> }
-      >;
-      const stopWhen = options.stopWhen as Array<
-        (options: { steps: unknown[] }) => boolean
-      >;
-      const stopOnSubmittedResult = stopWhen[0];
-      if (!stopOnSubmittedResult)
-        throw new Error("Missing finish stop condition");
-      const invalidInput = { ...workerOutput, status: "invalid" };
-
-      await expect(
-        tools.finish.execute(invalidInput as never, {} as never),
-      ).rejects.toThrow();
-      expect(
-        stopOnSubmittedResult({
-          steps: [{ toolCalls: [{ toolName: "finish", input: invalidInput }] }],
-        }),
-      ).toBe(false);
-
-      await tools.finish.execute(workerOutput as never, {} as never);
-      expect(
-        stopOnSubmittedResult({
-          steps: [{ toolCalls: [{ toolName: "finish", input: workerOutput }] }],
-        }),
-      ).toBe(true);
-
-      return {
-        text: "completed work",
-        toolCalls: [{ toolName: "finish", input: workerOutput }],
-        response: { messages: [] },
-      };
-    });
-
-    await expect(makeRunner().runner.run(makeContext())).resolves.toEqual(
-      workerOutput,
-    );
-  });
-
-  it("derives changedFiles deterministically from write/edit tool calls, overriding the model's own list", async () => {
-    aiMocks.generateText.mockImplementationOnce(async (options) => {
-      const tools = options.tools as Record<
-        string,
-        { execute: (...args: never[]) => Promise<unknown> }
-      >;
-      await tools.finish.execute(
-        { ...workerOutput, changedFiles: ["should be overridden"] } as never,
-        {} as never,
-      );
-      return {
-        text: "done",
-        toolCalls: [
-          { toolName: "read", input: { path: "/workspace/repo/a.txt" } },
-          { toolName: "write", input: { path: "/workspace/repo/b.txt" } },
-          { toolName: "edit", input: { path: "/workspace/repo/c.txt" } },
-          { toolName: "write", input: { path: "/workspace/repo/b.txt" } },
-          {
-            toolName: "finish",
-            input: { ...workerOutput, changedFiles: ["should be overridden"] },
-          },
-        ],
-        response: { messages: [] },
-      };
-    });
-    const harness = makeRunner();
-
-    const result = await harness.runner.run(makeContext());
-    expect(result.changedFiles).toEqual([
-      "/workspace/repo/b.txt",
-      "/workspace/repo/c.txt",
-    ]);
-  });
-
-  it("returns a blocked result when the worker does not submit a finish result", async () => {
+  it("uses a safe report when the worker returns no text", async () => {
     aiMocks.generateText.mockResolvedValueOnce({
-      text: "still working",
+      text: "",
       toolCalls: [],
       response: { messages: [] },
     });
 
     await expect(makeRunner().runner.run(makeContext())).resolves.toMatchObject(
       {
-        status: "blocked",
-        summary: "Worker did not submit a structured result.",
-        blockers: ["worker_result_not_submitted"],
+        status: "completed",
+        summary: "Worker completed without a final report.",
       },
     );
     expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
@@ -348,10 +249,9 @@ describe("AgentRunner", () => {
           {} as never,
         ),
       ]);
-      await tools.finish.execute(workerOutput as never, {} as never);
       return {
         text: "",
-        toolCalls: [{ toolName: "finish", input: workerOutput }],
+        toolCalls: [],
         response: { messages: [] },
       };
     });

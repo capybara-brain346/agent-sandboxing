@@ -71,6 +71,7 @@ export type RuntimeResult = {
 export type SimpleExecOptions = {
   timeoutMs?: number;
   env?: Record<string, string>;
+  stdin?: string;
   signal?: AbortSignal;
 };
 

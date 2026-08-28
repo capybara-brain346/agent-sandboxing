@@ -51,18 +51,6 @@ const safeArgs = (value: unknown): Record<string, unknown> => {
 const safeWorkerResult = (result: WorkerResult): WorkerResult => ({
   status: result.status,
   summary: safeText(result.summary),
-  changedFiles: result.changedFiles
-    .slice(0, TOOL_ARGS_MAX_ENTRIES)
-    .map((file) => safeText(file, 500)),
-  testsRun: result.testsRun.slice(0, TOOL_ARGS_MAX_ENTRIES).map((test) => ({
-    command: safeText(test.command, 500),
-    status: test.status,
-    outputSummary: safeText(test.outputSummary, RESULT_MAX_BYTES),
-  })),
-  blockers: result.blockers
-    .slice(0, TOOL_ARGS_MAX_ENTRIES)
-    .map((blocker) => safeText(blocker)),
-  suggestedNextStep: safeText(result.suggestedNextStep),
 });
 
 const safeSnapshot = (

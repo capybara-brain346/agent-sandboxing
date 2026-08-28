@@ -1,19 +1,9 @@
 import type { OrchestratorContext } from "../../types/harness.types";
 
-export type WorkerCorrection = {
-  blockers: string[];
-  suggestedNextStep: string;
-};
-
-/**
- * Builds the focused brief the CodeWorker receives. Deliberately excludes
- * chat history: only the durable session summary and a workspace hint are
- * carried over, plus the current delegation brief and any narrow correction.
- */
 export const buildWorkerBrief = (
   context: Pick<OrchestratorContext, "summary" | "workspace">,
   brief: string,
-  correction?: WorkerCorrection,
+  correction?: string,
 ): string =>
   [
     "You are the CodeWorker. Inspect and edit files under /workspace/repo to satisfy the brief below.",
@@ -28,11 +18,7 @@ export const buildWorkerBrief = (
     "",
     `Brief: ${brief}`,
     correction
-      ? `Correction needed. The previous attempt was blocked by: ${
-          correction.blockers.join("; ") || "unspecified issues"
-        }. Suggested next step: ${
-          correction.suggestedNextStep || "re-attempt with a narrower scope"
-        }.`
+      ? `Correction needed. Previous worker report: ${correction}`
       : null,
   ]
     .filter((line): line is string => line !== null)

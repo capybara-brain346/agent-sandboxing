@@ -1,8 +1,15 @@
 import { z } from "zod";
-import { workerResultSchema } from "../../src/types/harness.types";
+import type { WorkerResult } from "../../src/types/harness.types";
 import type { TaskStatus } from "../../src/types/task.types";
 
 const stringList = z.array(z.string().trim().min(1));
+export const workerResultSchema: z.ZodType<WorkerResult> = z
+  .object({
+    status: z.enum(["completed", "blocked", "failed"]),
+    summary: z.string(),
+  })
+  .passthrough()
+  .transform((result) => ({ status: result.status, summary: result.summary }));
 
 const chatMessageSchema = z
   .object({
@@ -58,7 +65,7 @@ export type DatasetCase = z.output<typeof datasetCaseSchema>;
 
 export type DatasetObserved = {
   reply: string;
-  delegations: z.output<typeof workerResultSchema>[];
+  delegations: WorkerResult[];
   briefs: string[];
   error?: string;
 };
@@ -176,6 +183,7 @@ export type RepoToolEvent = {
   truncated?: boolean;
   durationMs?: number;
   resultSnippet?: string;
+  command?: string;
 };
 
 export type RepoPostRunCheck = {
@@ -198,7 +206,7 @@ export type RepoObserved = {
   diff: string;
   testsRun: string[];
   postRunChecks: RepoPostRunCheck[];
-  workerReports: z.output<typeof workerResultSchema>[];
+  workerReports: WorkerResult[];
   toolEvents: RepoToolEvent[];
   runIds: string[];
   finalMessage: string;

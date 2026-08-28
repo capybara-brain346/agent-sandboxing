@@ -5,6 +5,7 @@ import {
   Box,
   ChevronRight,
   Cpu,
+  GitPullRequest,
   Terminal,
   Trash2,
   type LucideIcon,
@@ -22,6 +23,7 @@ const ICON_BY_PRODUCER: Record<string, LucideIcon> = {
   runtime: Cpu,
   cleanup: Trash2,
   agent: Bot,
+  github: GitPullRequest,
 };
 
 const describeDetail = (event: PublicChatEvent): string | null => {
@@ -44,6 +46,18 @@ const describeDetail = (event: PublicChatEvent): string | null => {
       return [payload.tool_name, payload.result_snippet]
         .filter((value) => typeof value === "string")
         .join(": ");
+    case "pull_request_creation_started":
+    case "pull_request_created":
+    case "pull_request_updated":
+    case "pull_request_closed":
+    case "pull_request_reopened":
+      return typeof payload.pull_request === "object"
+        ? JSON.stringify(payload.pull_request)
+        : null;
+    case "pull_request_failed":
+      return typeof payload.failure === "object"
+        ? JSON.stringify(payload.failure)
+        : null;
     default:
       return null;
   }

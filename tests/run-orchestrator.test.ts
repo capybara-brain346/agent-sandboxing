@@ -44,10 +44,6 @@ const runContext = (instructions: string): TaskRunContext => ({
 const workerResult = (overrides: Partial<WorkerResult> = {}): WorkerResult => ({
   status: "completed",
   summary: "Did the work",
-  changedFiles: [],
-  testsRun: [],
-  blockers: [],
-  suggestedNextStep: "",
   ...overrides,
 });
 
@@ -166,7 +162,7 @@ describe("RunOrchestrator", () => {
     const contextBuilder = {
       build: vi.fn(async () => context),
     } as unknown as SessionContextBuilder;
-    const result = workerResult({ changedFiles: ["a.ts"] });
+    const result = workerResult({ summary: "Fixed a.ts" });
     const worker: CodeWorker = { run: vi.fn(async () => result) };
     const agent: OrchestratorAgent = {
       decide: vi.fn(async (input) => {
@@ -210,16 +206,14 @@ describe("RunOrchestrator", () => {
     const { orchestrator } = makeHarness({
       decision: {
         reply: "Fixed it",
-        delegations: [
-          workerResult({ summary: "Fixed it", changedFiles: ["a.ts"] }),
-        ],
+        delegations: [workerResult({ summary: "Fixed it" })],
       },
     });
     const result = await orchestrator.run(runContext("fix the bug"));
     expect(result.summary).toBe("Fixed it");
     expect(JSON.parse(result.workerReport ?? "{}")).toMatchObject({
       status: "completed",
-      changedFiles: ["a.ts"],
+      summary: "Fixed it",
     });
   });
 
@@ -228,7 +222,7 @@ describe("RunOrchestrator", () => {
       decision: {
         reply: "it failed",
         delegations: [
-          workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
+          workerResult({ status: "failed", summary: "unrecoverable error" }),
         ],
       },
     });
@@ -242,7 +236,7 @@ describe("RunOrchestrator", () => {
       decision: {
         reply: "it failed",
         delegations: [
-          workerResult({ status: "failed", blockers: ["unrecoverable error"] }),
+          workerResult({ status: "failed", summary: "unrecoverable error" }),
         ],
       },
     });

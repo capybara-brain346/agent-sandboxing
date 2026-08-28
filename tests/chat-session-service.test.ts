@@ -163,9 +163,18 @@ describe("ChatSessionService", () => {
         event("chat_1", "session"),
       ),
     };
+    const validateRepository = vi.fn(async () => undefined);
     const service = new ChatSessionService(
       prisma,
       events as unknown as EventStore,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      {
+        currentPullRequest: vi.fn(async () => null),
+        validateRepository,
+      },
     );
 
     await expect(
@@ -180,6 +189,10 @@ describe("ChatSessionService", () => {
     ).resolves.toMatchObject({
       repo: { baseBranch: "feature", baseSha: "abc123" },
     });
+    expect(validateRepository).toHaveBeenCalledWith(
+      userId,
+      expect.objectContaining({ baseBranch: "feature", baseSha: "abc123" }),
+    );
   });
 
   it("persists a message, run, lock, and both scoped event streams together", async () => {

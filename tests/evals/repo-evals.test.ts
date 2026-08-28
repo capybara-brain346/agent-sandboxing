@@ -40,10 +40,6 @@ vi.mock("ai", async (importOriginal) => {
 const workerReport: WorkerResult = {
   status: "completed",
   summary: "Updated README.md",
-  changedFiles: ["README.md"],
-  testsRun: [],
-  blockers: [],
-  suggestedNextStep: "",
 };
 
 const subjectiveScores = {

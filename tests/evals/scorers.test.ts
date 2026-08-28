@@ -86,13 +86,6 @@ describe("dataset eval suite", () => {
       workerReports: [
         workerResult({
           status: "completed",
-          testsRun: [
-            {
-              command: "python -m pytest tests/test_cli.py",
-              status: "passed",
-              outputSummary: "1 passed",
-            },
-          ],
         }),
       ],
       toolEvents: [],
@@ -124,7 +117,7 @@ describe("dataset eval suite", () => {
       workerReports: [
         workerResult({
           status: "blocked",
-          blockers: ["missing_token"],
+          summary: "missing_token",
         }),
       ],
       toolEvents: [],

@@ -11,6 +11,7 @@ import {
   type TaskStatus,
 } from "./task.types";
 import type { ArtifactPointer } from "./artifact.types";
+import type { PullRequestMetadata } from "./github.types";
 
 export type { ArtifactPointer } from "./artifact.types";
 
@@ -126,6 +127,7 @@ export type RunResult = {
   agentSummary: string | null;
   exitReason: (typeof TASK_EXIT_REASONS)[number];
   failure: TaskFailure | null;
+  pullRequest: PullRequestMetadata | null;
   createdAt: string;
   completedAt: string;
 };

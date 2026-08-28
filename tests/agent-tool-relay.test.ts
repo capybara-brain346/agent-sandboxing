@@ -4,14 +4,17 @@ import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
 import { ToolEventRelay } from "../src/services/agent/tool-event-relay";
 
-const startEvent = (input: unknown): ToolExecutionStartEvent =>
+const startEvent = (
+  input: unknown,
+  toolName = "bash",
+): ToolExecutionStartEvent =>
   ({
     callId: "call_42",
     messages: [],
     toolCall: {
       type: "tool-call",
       toolCallId: "tool-call-42",
-      toolName: "bash",
+      toolName,
       input,
     },
     toolContext: undefined,
@@ -20,6 +23,7 @@ const startEvent = (input: unknown): ToolExecutionStartEvent =>
 const endEvent = (
   toolOutput: Record<string, unknown>,
   toolExecutionMs = 12.4,
+  toolName = "bash",
 ): ToolExecutionEndEvent =>
   ({
     callId: "call_42",
@@ -27,7 +31,7 @@ const endEvent = (
     toolCall: {
       type: "tool-call",
       toolCallId: "tool-call-42",
-      toolName: "bash",
+      toolName,
       input: { command: "pwd" },
     },
     toolContext: undefined,
@@ -129,6 +133,42 @@ describe("ToolEventRelay", () => {
       "call_42:2",
       "call_42:2",
     ]);
+  });
+
+  it("does not persist GitHub pull request bodies or comments", async () => {
+    const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      makeEvent(input),
+    );
+    const relay = new ToolEventRelay({
+      events: { append } as unknown as Pick<EventStore, "append">,
+      publish: vi.fn(),
+    });
+    const callbacks = relay.callbacks({
+      taskId: "task_1",
+      sandboxId: "sbox_1",
+    });
+
+    await callbacks.onToolExecutionStart(
+      startEvent(
+        {
+          action: "create",
+          branch: "feature/test",
+          title: "Fix it",
+          body: "private body",
+          comment: "private comment",
+        },
+        "github_pr",
+      ),
+    );
+
+    expect(append.mock.calls[0]?.[0].payload).toEqual({
+      tool_name: "github_pr",
+      args: {
+        action: "create",
+        branch: "feature/test",
+        title: "Fix it",
+      },
+    });
   });
 
   it("bounds results on UTF-8 boundaries and sanitizes tool errors", async () => {

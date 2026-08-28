@@ -62,7 +62,9 @@ access. `SandboxRuntime.simpleExec(containerName, command, cwd, options)` runs a
 single command and captures bounded `stdout` and `stderr` asynchronously. It
 returns non-zero exit codes as normal results, reports a killed timeout with
 `timedOut: true`, and rejects cancellation with an `AbortError`. Environment
-variables and an `AbortSignal` are optional inputs. Tool code remains
+variables, command stdin, and an `AbortSignal` are optional inputs. Secret
+stdin is used for one-shot credential handoff without placing values in Docker
+process arguments. Tool code remains
 responsible for workspace path validation and command allowlisting.
 
 ## Sandbox lifecycle

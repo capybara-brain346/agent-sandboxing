@@ -61,8 +61,6 @@ const workerOutput = (results: WorkerResult[]): unknown => {
     ? {
         status: result.status,
         summary: result.summary,
-        changedFiles: result.changedFiles,
-        blockers: result.blockers,
       }
     : undefined;
 };

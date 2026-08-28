@@ -27,6 +27,26 @@ export type TaskFailure = {
   message: string;
 };
 
+export const PULL_REQUEST_STATUSES = [
+  "creating",
+  "open",
+  "closed",
+  "failed",
+] as const;
+export type PullRequestStatus = (typeof PULL_REQUEST_STATUSES)[number];
+
+export type PullRequestMetadata = {
+  provider: "github";
+  url: string | null;
+  number: number | null;
+  branch: string;
+  baseBranch: string;
+  title: string;
+  status: PullRequestStatus;
+  draft: boolean;
+  failure: TaskFailure | null;
+};
+
 export const REPO_SOURCES = ["fixture", "github"] as const;
 export type RepoSource = (typeof REPO_SOURCES)[number];
 
@@ -121,6 +141,7 @@ export type RunResult = {
   agentSummary: string | null;
   exitReason: TaskExitReason;
   failure: TaskFailure | null;
+  pullRequest: PullRequestMetadata | null;
   createdAt: string;
   completedAt: string;
 };
@@ -214,6 +235,14 @@ export const EVENT_TYPES = [
   "command_cancelled",
   "agent_tool_call",
   "agent_tool_result",
+  "pull_request_creation_started",
+  "pull_request_branch_pushed",
+  "pull_request_created",
+  "pull_request_updated",
+  "pull_request_closed",
+  "pull_request_reopened",
+  "pull_request_commented",
+  "pull_request_failed",
   "artifact_created",
   "git_diff_requested",
   "git_diff_completed",

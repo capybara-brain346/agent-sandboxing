@@ -3,16 +3,17 @@
 The Agent Service owns all model-backed agent behavior. It runs inside the API
 process, uses the AI SDK 7 `generateText` calls with the configured OpenRouter
 model, owns orchestration and summary-compaction decisions, proxies seven tools
-through the session-owned sandbox runtime, relays tool lifecycle events to the
+through the session-owned sandbox runtime plus two GitHub-backed tools, relays
+tool lifecycle events to the
 shared run event stream, and records model usage for the eval trace layer. It
 does not expose an HTTP route or call the persisted command API.
 
 `RunService` remains responsible for run lifecycle transitions, terminal
 results, cancellation, and diff capture; the sandbox is never stopped by a
-completed run. AgentRunner returns a schema-validated `WorkerResult` or throws;
+completed run. AgentRunner returns the worker's final prose report or throws;
 it does not mutate run state. The retired generic `TaskRunner` runtime has a
 small composition adapter for compatibility, but the chat harness receives the
-typed worker result directly — see the [Chat Session Service](../chat-session/README.md#phase-5-orchestrator-worker-harness).
+typed worker status and report directly — see the [Chat Session Service](../chat-session/README.md#phase-5-orchestrator-worker-harness).
 
 ## Read first
 
@@ -115,6 +116,15 @@ fake model or runner.
 The key remains in the control plane. It is not included in sandbox
 environment variables, tool inputs, events, provider error messages, or logs.
 
+`git_push` mints a short-lived installation token, verifies the configured
+GitHub remote, and passes the token over stdin only to the push command with
+repository hooks disabled. The token is not persisted or returned in tool
+output.
+`github_pr` performs narrow create, update, comment, close, and reopen
+operations through the backend GitHub App seam and returns compact structured
+results. Failed create attempts are retained in PR history but are not kept as
+the current PR, so a later push and create retry can proceed.
+
 ## Runtime boundary
 
 Each factory receives a `Pick<SandboxRuntime, "simpleExec">`, the sandbox's
@@ -122,12 +132,14 @@ container name, loaded `Config`, and the run `AbortSignal`. The factory returns
 an AI SDK 7 `tool({ inputSchema, execute })` object. The registry contains
 exactly these keys:
 
-`read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`.
+`read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`. GitHub-backed runs
+also expose `git_push` and `github_pr`.
 
-The tools execute in `/workspace/repo` through `SandboxRuntime.simpleExec`.
-They do not access Prisma, `SandboxService`, Docker, the event store, or
-`process.env` directly. Every runtime call receives the run signal and either
-`AGENT_TOOL_TIMEOUT_MS` or `AGENT_BASH_TIMEOUT_MS`.
+Workspace tools execute in `/workspace/repo` through
+`SandboxRuntime.simpleExec`. GitHub tools use only their injected brokered
+capability. Neither tool group reads secrets from `process.env`; every runtime
+call receives the run signal and either `AGENT_TOOL_TIMEOUT_MS` or
+`AGENT_BASH_TIMEOUT_MS`.
 Worker briefs expose `/workspace/repo` as the only workspace path; fixture and
 repository source references are not included as worker filesystem paths.
 
@@ -141,23 +153,13 @@ details enter the Agent Service.
 
 AgentRunner checks the run signal before target lookup and before the model
 call. It calls `generateText` with one user message containing the worker
-brief, the system prompt, all seven workspace tools, and an internal `finish`
-tool. The same `abortSignal` is passed through, with a stop condition that
-requires a validated finish result and
-`isStepCount(config.AGENT_MAX_STEPS + 1)`. The `finish` input is validated with
-`workerResultSchema` during that same tool loop, so the accepted result is the
-authoritative worker result.
-The extra step reserves room for the terminal `finish` call without reducing
-the existing work budget. Tool executions are serialized per run because the
-AI SDK may request multiple tools concurrently while the tools share one
-workspace. The `finish` input is validated with `workerResultSchema` during
-that same tool loop; invalid finish input does not satisfy the stop condition,
-so the worker can retry with a valid result. The accepted result is merged with
-the tool-derived changed-file list and returned as the typed `WorkerResult`.
-`finish` is an internal control tool and is not persisted as a user-visible
-tool event. If the worker reaches the step limit without submitting a valid
-result, AgentRunner returns a blocked result instead of making a second model
-call.
+brief, the system prompt, the workspace tools, and the optional GitHub tools.
+The same `abortSignal` is passed through, with a stop condition of
+`isStepCount(config.AGENT_MAX_STEPS)`. Tool executions are serialized per run
+because the AI SDK may request multiple tools concurrently while the tools share
+one workspace. The model's final text becomes the worker report; changed files,
+pull request state, artifacts, and terminal run state are derived by the
+harness from the workspace and persisted backend records.
 
 An `AbortError` is re-thrown so `RunService`'s existing cancellation path owns
 the terminal `cancelled` state. Other provider/model failures become the safe
@@ -225,6 +227,12 @@ truncated }` output. Its timeout is `AGENT_BASH_TIMEOUT_MS` and its response
   1 is an empty match set.
 - `find({ pattern, path? })` returns matching file paths in `paths`.
 - `ls({ path? })` returns a detailed directory listing in `listing`.
+- `git_push({ branch?, remote? })` pushes the selected or current branch with a
+  short-lived installation credential and returns structured success or failure
+  data.
+- `github_pr({ action, ... })` creates or manages a pull request without
+  staging, committing, branching, or pushing local changes. Pull requests are
+  draft by default on create.
 
 `grep`, `find`, and `ls` have a fixed 50 KiB UTF-8 response budget and report
 `truncated: true` when the budget is exceeded. All truncation preserves valid

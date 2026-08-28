@@ -114,10 +114,6 @@ export const workerResult = (
 ): WorkerResult => ({
   status: "blocked",
   summary: "No configured worker result was available.",
-  changedFiles: [],
-  testsRun: [],
-  blockers: ["missing_configured_worker_result"],
-  suggestedNextStep: "Add a worker result to the dataset case.",
   ...overrides,
 });
 
@@ -144,12 +140,8 @@ const requiredTestsPassed = (
   requiredTests: string[],
 ): boolean =>
   requiredTests.every((required) =>
-    observed.workerReports.some((report) =>
-      report.testsRun.some(
-        (test) =>
-          test.status === "passed" &&
-          test.command.toLowerCase().includes(required.toLowerCase()),
-      ),
+    observed.testsRun.some((command) =>
+      command.toLowerCase().includes(required.toLowerCase()),
     ),
   );
 
@@ -178,10 +170,7 @@ const responseMentionsBlocker = (
   response: string,
   observed: RepoObserved,
 ): boolean => {
-  const blockerTerms = observed.workerReports.flatMap((report) => [
-    ...report.blockers,
-    report.suggestedNextStep,
-  ]);
+  const blockerTerms = observed.workerReports.map((report) => report.summary);
   return (
     containsAny(
       response,

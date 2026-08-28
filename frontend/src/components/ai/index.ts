@@ -10,7 +10,7 @@ export { DiffTable, parseDiff } from "./DiffTable";
 export type { DiffFile } from "./DiffTable";
 export { StatusPill } from "./StatusPill";
 export { ContextCard } from "./ContextCard";
-export { ApprovalCard } from "./ApprovalCard";
+export { PullRequestCard } from "./PullRequestCard";
 export {
   Skeleton,
   SkeletonText,

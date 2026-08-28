@@ -33,6 +33,12 @@ once the message/run/lock transaction commits. `RunService` then:
 - never stops the sandbox on completion, so the next message in the session
   reuses it.
 
+GitHub-backed workers can use the platform-mediated `git_push` and `github_pr`
+capabilities. Pull requests are persisted with history and one current row per
+session; PR failures do not change a completed coding run to a failed run.
+Failed PR create attempts are retained for history but cleared as current so a
+later retry is not blocked by the failed row.
+
 Cancellation aborts the tracked in-flight execution's `AbortSignal` through
 `RunService.requestCancellation` and falls back to a direct terminal-state
 transition (`RunService.cancelDirectly`) for a run with no tracked execution
@@ -70,7 +76,9 @@ source and requires application cookie authentication. Sessions belong to the
 authenticated user; all reads, writes, event streams, runs, and artifacts are
 scoped to that user and do not expose `userId`. Fixture sessions are restricted
 to test, eval, and acceptance use and require `FIXTURE_REPOS_ENABLED=true`;
-production configuration rejects that flag. GitHub sessions persist the chosen
+production configuration rejects that flag. GitHub session creation revalidates
+the selected repository, installation, and branch against the authenticated
+user's current GitHub access before persistence. Sessions persist the chosen
 repository, default branch, selected base branch, and selected base SHA. GitHub
 runs mint a short-lived GitHub App installation token in the control plane and
 provision the selected repository and branch into the session-owned sandbox.
@@ -118,6 +126,11 @@ delivery contract.
 Lifecycle state changes and their events are persisted in one transaction. The
 `SseHub` receives events only after commit.
 
+Terminal run results include compact current pull request metadata: provider,
+URL, number, branch, base branch, title, status, draft state, and safe failure
+details. The result reads the current session PR, so a later run's current PR
+is visible from an earlier run result.
+
 ## Phase 5: orchestrator-worker harness
 
 `RunService` no longer hands the raw user message straight to the agent tool
@@ -143,16 +156,14 @@ by the Agent Service:
 - On a code turn, `buildWorkerBrief` composes a focused brief (session
   summary + workspace hint + the instruction, not the chat transcript) and
   hands it through the narrow `CodeWorker` contract to `AgentRunner`, which
-  returns a schema-validated `WorkerResult` (`status`, `summary`,
-  `changedFiles`, `testsRun`, `blockers`, `suggestedNextStep`) directly. The
-  chat harness does not serialize and reparse the worker result.
-- If the worker reports `blocked`, the orchestrator retries once with a
-  narrow correction brief built from the worker's blockers/suggested next
-  step (`DEFAULT_MAX_WORKER_ATTEMPTS`, currently 2). A `failed` result is
-  terminal and is never delegated again. If the worker is still blocked after
-  the attempt budget, `blocked` becomes an actionable assistant message and
-  `failed` becomes a thrown `ServiceError` so `RunService` marks the run failed
-  instead of silently completing it.
+  returns a compact status plus prose report. The chat harness derives changed
+  files from the captured diff, PR state from persisted PR rows, and artifacts
+  from the artifact table instead of parsing worker prose.
+- If the worker reports `blocked`, the orchestrator may retry once with a
+  narrow correction brief built from the worker's report. A `failed` result is
+  terminal and is never delegated again. Failed workers become a thrown
+  `ServiceError` so `RunService` marks the run failed instead of silently
+  completing it.
 - When the context builder reaches the compaction interval, the injected
   `SessionSummaryCompactor` rewrites (not appends to) the session's bounded
   `ChatSession.summary`: `Objective` is set once and carried forward,

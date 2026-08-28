@@ -26,3 +26,67 @@ export type GitHubRepositoriesResponse = {
   repositories: GitHubRepositoryView[];
   installUrl: string;
 };
+
+export const PULL_REQUEST_STATUSES = [
+  "creating",
+  "open",
+  "closed",
+  "failed",
+] as const;
+export type PullRequestStatus = (typeof PULL_REQUEST_STATUSES)[number];
+
+export type PullRequestFailure = {
+  code: string;
+  message: string;
+};
+
+export type PullRequestMetadata = {
+  provider: "github";
+  url: string | null;
+  number: number | null;
+  branch: string;
+  baseBranch: string;
+  title: string;
+  status: PullRequestStatus;
+  draft: boolean;
+  failure: PullRequestFailure | null;
+};
+
+export type GitHubResponseFailure = {
+  status: number | null;
+  code: string | null;
+  message: string;
+};
+
+export type GitHubPullRequestRecord = {
+  number: number;
+  nodeId: string | null;
+  url: string | null;
+  branch: string;
+  baseBranch: string;
+  title: string;
+  state: "open" | "closed";
+  draft: boolean;
+};
+
+export type GitHubCommentRecord = {
+  id: string;
+  nodeId: string | null;
+  url: string | null;
+};
+
+export type GitHubPullRequestInput = {
+  title?: string;
+  body?: string;
+  branch?: string;
+  baseBranch?: string;
+  draft?: boolean;
+};
+
+export type GitHubPullRequestToolResult = {
+  success: boolean;
+  action: "create" | "update" | "comment" | "close" | "reopen" | "push";
+  pullRequest: PullRequestMetadata | null;
+  failure: PullRequestFailure | null;
+  github: GitHubResponseFailure | null;
+};
