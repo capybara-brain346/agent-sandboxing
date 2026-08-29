@@ -124,7 +124,7 @@ export const getCurrentPullRequest = (
 export const getSessionResult = (sessionId: string): Promise<SessionResult> =>
   request(`/chat-sessions/${sessionId}/result`);
 
-export const cancelCurrentMessage = (
+export const cancelSession = (
   sessionId: string,
 ): Promise<MessageCancellationResponse> =>
   request(`/chat-sessions/${sessionId}/cancel`, { method: "POST" });

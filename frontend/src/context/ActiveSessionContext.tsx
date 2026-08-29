@@ -5,10 +5,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { ChatMessage, RepoScope } from "../api/types";
+import type { ChatMessage, ChatSession, RepoScope } from "../api/types";
 
 export type ActiveSessionInfo = {
   repo: RepoScope;
+  status: ChatSession["status"];
   message: ChatMessage | null;
 } | null;
 

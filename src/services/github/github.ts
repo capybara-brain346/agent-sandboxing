@@ -463,6 +463,9 @@ const bounded = (value: string, limit = 300): string =>
 const shellQuote = (value: string): string =>
   `'${value.replaceAll("'", "'\\''")}'`;
 
+const authenticatedGit = (command: string): string =>
+  `token=$(cat) && export GITHUB_TOKEN="$token" GIT_TERMINAL_PROMPT=0 && git -c core.hooksPath=/dev/null -c credential.helper= -c ${shellQuote('credential.helper=!f() { echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f')} ${command}`;
+
 const isExpectedGitHubRemote = (
   value: string,
   owner: string,
@@ -858,50 +861,156 @@ export class GitHubService {
         "Refusing to publish a pull request without workspace changes",
       );
 
-    const creating = await this.prisma.$transaction(async (tx) => {
-      await tx.pullRequest.updateMany({
-        where: { sessionId, isCurrent: true },
-        data: { isCurrent: false },
-      });
-      const row = await tx.pullRequest.create({
-        data: {
-          id: `pr_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
+    const current = await this.prisma.pullRequest.findFirst({
+      where: { sessionId, isCurrent: true },
+      orderBy: { createdAt: "desc" },
+    });
+    const existing =
+      current && current.number !== null
+        ? { ...current, number: current.number }
+        : null;
+    if (existing && !sameGitBranch(existing.branch, branch))
+      return operationFailure(
+        "publish",
+        "pull_request_branch_mismatch",
+        "The current pull request is not attached to the session branch",
+        pullRequestMetadata(existing),
+      );
+
+    let token: string | undefined;
+    if (existing) {
+      try {
+        token = await this.createInstallationToken(repository.installationId);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        return this.failUpdatingPullRequest(
           sessionId,
           messageId,
-          provider: "github",
-          owner: repository.owner,
-          repo: repository.name,
-          installationId: repository.installationId,
-          branch,
-          baseBranch,
-          title,
-          status: "creating",
-          draft: input.draft !== false,
-          isCurrent: true,
-        },
-      });
-      const event = await this.appendSessionEventInTransaction(
-        tx,
-        sessionId,
-        messageId,
-        "pull_request_creation_started",
-        row,
-        { pull_request: pullRequestMetadata(row) },
+          existing,
+          error instanceof ServiceError
+            ? error.code
+            : "github_installation_token_failed",
+          error instanceof ServiceError
+            ? error.message
+            : "GitHub installation token could not be created",
+        );
+      }
+      const fetched = await this.publishExec(
+        target,
+        authenticatedGit(
+          `fetch --no-tags origin ${shellQuote(`refs/heads/${branch}`)}`,
+        ),
+        { ...options, stdin: token },
       );
-      return { row, event };
-    });
-    if (creating.event) this.publish(creating.event);
+      if (!fetched.success)
+        return this.failUpdatingPullRequest(
+          sessionId,
+          messageId,
+          existing,
+          fetched.code,
+          fetched.message,
+        );
+      const aligned = await this.publishExec(
+        target,
+        "git reset --mixed FETCH_HEAD",
+        options,
+      );
+      if (!aligned.success)
+        return this.failUpdatingPullRequest(
+          sessionId,
+          messageId,
+          existing,
+          aligned.code,
+          aligned.message,
+        );
+      const syncedStatus = await this.publishExec(
+        target,
+        "git status --porcelain=v1",
+        options,
+      );
+      if (!syncedStatus.success)
+        return this.failUpdatingPullRequest(
+          sessionId,
+          messageId,
+          existing,
+          syncedStatus.code,
+          syncedStatus.message,
+        );
+      if (!syncedStatus.stdout.trim())
+        return operationFailure(
+          "publish",
+          "no_workspace_diff",
+          "Refusing to publish a pull request without workspace changes",
+          pullRequestMetadata(existing),
+        );
+    }
+
+    let row: PullRequestRow;
+    if (existing) row = existing;
+    else {
+      const creating = await this.prisma.$transaction(async (tx) => {
+        await tx.pullRequest.updateMany({
+          where: { sessionId, isCurrent: true },
+          data: { isCurrent: false },
+        });
+        const created = await tx.pullRequest.create({
+          data: {
+            id: `pr_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
+            sessionId,
+            messageId,
+            provider: "github",
+            owner: repository.owner,
+            repo: repository.name,
+            installationId: repository.installationId,
+            branch,
+            baseBranch,
+            title,
+            status: "creating",
+            draft: input.draft !== false,
+            isCurrent: true,
+          },
+        });
+        const event = await this.appendSessionEventInTransaction(
+          tx,
+          sessionId,
+          messageId,
+          "pull_request_creation_started",
+          created,
+          { pull_request: pullRequestMetadata(created) },
+        );
+        return { row: created, event };
+      });
+      if (creating.event) this.publish(creating.event);
+      row = creating.row;
+    }
+
+    const fail = (
+      code: string,
+      message: string,
+      github: GitHubResponseFailure | null = null,
+    ): Promise<GitHubPullRequestToolResult> =>
+      existing
+        ? this.failUpdatingPullRequest(
+            sessionId,
+            messageId,
+            row,
+            code,
+            message,
+            github,
+          )
+        : this.failPublishingPullRequest(
+            sessionId,
+            messageId,
+            row,
+            code,
+            message,
+            github,
+          );
 
     const add = await this.publishExec(target, "git add -A", options);
     if (!add.success) {
       await this.resetWorkspaceIndex(target, options);
-      return this.failPublishingPullRequest(
-        sessionId,
-        messageId,
-        creating.row,
-        add.code,
-        add.message,
-      );
+      return fail(add.code, add.message);
     }
 
     const commit = await this.publishExec(
@@ -911,13 +1020,7 @@ export class GitHubService {
     );
     if (!commit.success) {
       await this.resetWorkspaceIndex(target, options);
-      return this.failPublishingPullRequest(
-        sessionId,
-        messageId,
-        creating.row,
-        commit.code,
-        commit.message,
-      );
+      return fail(commit.code, commit.message);
     }
 
     const failAfterCommit = async (
@@ -926,33 +1029,29 @@ export class GitHubService {
       github: GitHubResponseFailure | null = null,
     ) => {
       await this.resetPublishedCommit(target, options);
-      return this.failPublishingPullRequest(
-        sessionId,
-        messageId,
-        creating.row,
-        code,
-        message,
-        github,
-      );
+      return fail(code, message, github);
     };
 
-    let token: string;
-    try {
-      token = await this.createInstallationToken(repository.installationId);
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") throw error;
-      return failAfterCommit(
-        error instanceof ServiceError
-          ? error.code
-          : "github_installation_token_failed",
-        error instanceof ServiceError
-          ? error.message
-          : "GitHub installation token could not be created",
-      );
+    if (!token) {
+      try {
+        token = await this.createInstallationToken(repository.installationId);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        return failAfterCommit(
+          error instanceof ServiceError
+            ? error.code
+            : "github_installation_token_failed",
+          error instanceof ServiceError
+            ? error.message
+            : "GitHub installation token could not be created",
+        );
+      }
     }
     const pushed = await this.publishExec(
       target,
-      `token=$(cat) && export GITHUB_TOKEN="$token" GIT_TERMINAL_PROMPT=0 && git -c core.hooksPath=/dev/null -c credential.helper= -c ${shellQuote('credential.helper=!f() { echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f')} push --no-verify origin ${shellQuote(`HEAD:refs/heads/${branch}`)}`,
+      authenticatedGit(
+        `push --no-verify origin ${shellQuote(`HEAD:refs/heads/${branch}`)}`,
+      ),
       { ...options, stdin: token },
     );
     if (!pushed.success) return failAfterCommit(pushed.code, pushed.message);
@@ -962,12 +1061,31 @@ export class GitHubService {
       messageId,
       type: "pull_request_branch_pushed",
       producerService: "github",
-      producerId: creating.row.id,
+      producerId: row.id,
       correlationId: randomUUID(),
       domain: "pull_request",
       payload: { branch },
     });
     if (pushedEvent) this.publish(pushedEvent);
+
+    if (existing) {
+      let updated: GitHubPullRequestToolResult;
+      try {
+        updated = await this.pullRequest(sessionId, messageId, {
+          action: "update",
+          number: existing.number,
+          title,
+          baseBranch,
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          ...(input.draft !== undefined ? { draft: input.draft } : {}),
+        });
+      } catch (error) {
+        await this.resetPublishedCommit(target, options);
+        throw error;
+      }
+      await this.resetPublishedCommit(target, options);
+      return { ...updated, action: "publish" };
+    }
 
     if (!this.api.createPullRequest)
       return failAfterCommit(
@@ -1002,7 +1120,7 @@ export class GitHubService {
     const next = await this.persistPullRequestUpdate(
       sessionId,
       messageId,
-      creating.row,
+      row,
       {
         number: created.number,
         nodeId: created.nodeId,
@@ -1119,6 +1237,32 @@ export class GitHubService {
         closedAt: null,
       },
       "pull_request_failed",
+    );
+    return operationFailure(
+      "publish",
+      code,
+      message,
+      pullRequestMetadata(next),
+      github,
+    );
+  }
+
+  private async failUpdatingPullRequest(
+    sessionId: string,
+    messageId: string,
+    row: PullRequestRow,
+    code: string,
+    message: string,
+    github: GitHubResponseFailure | null = null,
+  ): Promise<GitHubPullRequestToolResult> {
+    const next = await this.persistPullRequestFailure(
+      sessionId,
+      messageId,
+      "update",
+      row,
+      code,
+      message,
+      github,
     );
     return operationFailure(
       "publish",

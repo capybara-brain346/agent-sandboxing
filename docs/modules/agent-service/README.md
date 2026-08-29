@@ -60,8 +60,8 @@ and command environments are not persisted.
 
 Pull request tools receive only injected session capabilities. The backend owns
 repository identity, branch `agent/<sessionId>`, commit, push, and pull request
-creation. Agents cannot supply tokens, remotes, or shell-based provider
-commands.
+creation or update. Agents cannot supply tokens, remotes, or shell-based
+provider commands.
 
 ## Configuration and verification
 

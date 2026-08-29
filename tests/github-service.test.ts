@@ -411,6 +411,116 @@ describe("GitHubService", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it("updates the current pull request on the session branch", async () => {
+    const token = "installation-token";
+    const existing = pullRequestRow({
+      number: 7,
+      nodeId: "node_7",
+      url: "https://github.com/octo/repo/pull/7",
+      branch: "agent/chat_1",
+      status: "open",
+      draft: true,
+    });
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+      pullRequestRow({ ...existing, ...data }),
+    );
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(async () => token),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      createPullRequest: vi.fn(),
+      updatePullRequest: vi.fn(async () => ({
+        number: 7,
+        nodeId: "node_7",
+        url: "https://github.com/octo/repo/pull/7",
+        branch: "agent/chat_1",
+        baseBranch: "main",
+        title: "Update it",
+        status: "open" as const,
+        state: "open" as const,
+        draft: true,
+      })),
+    };
+    const prisma = {
+      chatSession: {
+        findUnique: vi.fn(async () => ({
+          repoSource: "github",
+          repoOwner: "octo",
+          repoName: "repo",
+          repoInstallationId: "10",
+          repoBaseBranch: "main",
+          repoDefaultBranch: "main",
+        })),
+      },
+      pullRequest: { findFirst: vi.fn(async () => existing) },
+      $transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
+        callback({ pullRequest: { update } }),
+      ),
+    } as unknown as PrismaClient;
+    const ok = {
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      truncated: false,
+    };
+    const runtime = {
+      simpleExec: vi.fn(async (_container: string, command: string) => {
+        if (command === "git remote get-url --push origin")
+          return { ...ok, stdout: "https://github.com/octo/repo.git\n" };
+        if (command === "git branch --show-current")
+          return { ...ok, stdout: "agent/chat_1\n" };
+        if (command === "git status --porcelain=v1")
+          return { ...ok, stdout: " M file.txt\n" };
+        return ok;
+      }),
+    };
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(
+      service.publishPullRequest(
+        "chat_1",
+        "msg_2",
+        { runtime, containerName: "sandbox-1" },
+        { title: "Update it", body: "Updated body" },
+        { timeoutMs: 300, signal: new AbortController().signal },
+      ),
+    ).resolves.toMatchObject({
+      success: true,
+      action: "publish",
+      pullRequest: { number: 7, title: "Update it", status: "open" },
+    });
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(api.updatePullRequest).toHaveBeenCalledWith(
+      "10",
+      "octo",
+      "repo",
+      7,
+      expect.objectContaining({
+        title: "Update it",
+        body: "Updated body",
+        baseBranch: "main",
+      }),
+    );
+    const fetchCall = runtime.simpleExec.mock.calls.find((call) =>
+      String(call[1]).includes("fetch --no-tags"),
+    );
+    expect(fetchCall?.[1]).toContain("'refs/heads/agent/chat_1'");
+    expect(fetchCall?.[1]).not.toContain(token);
+    expect(fetchCall?.[3]).toMatchObject({ stdin: token });
+    const pushCall = runtime.simpleExec.mock.calls.find((call) =>
+      String(call[1]).includes("push --no-verify"),
+    );
+    expect(pushCall?.[1]).toContain("'HEAD:refs/heads/agent/chat_1'");
+    expect(pushCall?.[3]).toMatchObject({ stdin: token });
+    expect(runtime.simpleExec.mock.calls.at(-1)?.[1]).toBe(
+      "git reset --mixed HEAD~1",
+    );
+  });
+
   it("refuses remote mismatch before minting a token", async () => {
     const api: GitHubApi = {
       listAppInstallations: vi.fn(),
@@ -560,6 +670,7 @@ describe("GitHubService", () => {
           repoDefaultBranch: "main",
         })),
       },
+      pullRequest: { findFirst: vi.fn(async () => null) },
       $transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
         callback({
           pullRequest: {

@@ -74,6 +74,18 @@ after commit.
 direct terminal cancellation after a restart. Both paths attempt diff capture,
 persist cancellation events, and release the session lock.
 
+## Pull request publishing
+
+For GitHub-backed sessions, `publish_pull_request` verifies the configured
+remote and session branch, refuses an empty workspace, commits the changes, and
+pushes `HEAD:refs/heads/agent/<sessionId>`. It creates the session's pull
+request on the first publication and updates that current pull request on later
+publications, always targeting the session base branch. The local commit is
+reset after publication so the message result can retain its workspace diff;
+later publications synchronize the session branch from its remote pull request
+branch before committing new changes. GitHub and Git failures are persisted as
+safe pull request metadata and session events.
+
 ## Agent and artifacts
 
 The chat service injects Agent Service collaborators and contains no provider

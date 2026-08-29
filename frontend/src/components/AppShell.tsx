@@ -229,7 +229,10 @@ const RepoBranchSwitcher = () => {
 
 const ProcessingStatusPill = () => {
   const { activeSession } = useActiveSession();
-  const status = activeSession?.message?.processingStatus;
+  const status =
+    activeSession?.status === "working"
+      ? "working"
+      : activeSession?.message?.processingStatus;
   if (!status) return null;
 
   return (

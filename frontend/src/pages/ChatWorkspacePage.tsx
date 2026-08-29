@@ -12,7 +12,7 @@ import { Tabs } from "radix-ui";
 import { GripVertical, Ban } from "lucide-react";
 import {
   ApiError,
-  cancelCurrentMessage,
+  cancelSession,
   getChatSession,
   getCurrentPullRequest,
   getSessionResult,
@@ -463,12 +463,16 @@ export const ChatWorkspacePage = () => {
   const { setActiveSession } = useActiveSession();
 
   const processingMessage =
-    messages
-      .filter(
-        (message) =>
-          message.role === "user" && message.processingStatus !== null,
-      )
-      .at(-1) ?? null;
+    (session?.activeMessageId
+      ? messages.find(
+          (message) => message.messageId === session.activeMessageId,
+        )
+      : messages
+          .filter(
+            (message) =>
+              message.role === "user" && message.processingStatus !== null,
+          )
+          .at(-1)) ?? null;
   const eventPullRequest = useMemo(
     () => pullRequestFromEvents(sessionEvents),
     [sessionEvents],
@@ -487,7 +491,11 @@ export const ChatWorkspacePage = () => {
 
   useEffect(() => {
     if (session) {
-      setActiveSession({ repo: session.repo, message: processingMessage });
+      setActiveSession({
+        repo: session.repo,
+        status: session.status,
+        message: processingMessage,
+      });
     }
   }, [processingMessage, session, setActiveSession]);
 
@@ -623,7 +631,7 @@ export const ChatWorkspacePage = () => {
     setCancelling(true);
     setCancelError(null);
     try {
-      await cancelCurrentMessage(sessionId);
+      await cancelSession(sessionId);
       await refresh();
     } catch (caught) {
       setCancelError(
@@ -636,7 +644,9 @@ export const ChatWorkspacePage = () => {
     }
   };
 
-  const processingActive = processingMessage !== null && !processingIsTerminal;
+  const processingActive =
+    Boolean(session?.activeMessageId) ||
+    (processingMessage !== null && !processingIsTerminal);
   const composerDisabled = sending || processingActive;
   const composerHint = processingActive
     ? "The agent is processing the previous message. Wait for it to finish or cancel it."
