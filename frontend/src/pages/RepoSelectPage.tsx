@@ -166,7 +166,7 @@ export const RepoSelectPage = () => {
     setSelectedBranch("");
     setBranches([]);
     try {
-      setConnection(await getGitHubRepositories());
+      setConnection(await getGitHubRepositories({ forceRefresh: true }));
     } catch (caught) {
       if (isSessionAuthFailure(caught)) {
         navigate("/login", { replace: true });

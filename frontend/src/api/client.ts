@@ -61,8 +61,27 @@ export const getAuthMe = (): Promise<AuthMe> => request("/auth/me");
 export const logout = (): Promise<void> =>
   request("/auth/logout", { method: "POST" });
 
-export const getGitHubRepositories = (): Promise<GitHubRepositoriesResponse> =>
-  request("/github/repositories");
+let githubRepositoriesRequest: Promise<GitHubRepositoriesResponse> | null =
+  null;
+
+export const getGitHubRepositories = ({
+  forceRefresh = false,
+}: { forceRefresh?: boolean } = {}): Promise<GitHubRepositoriesResponse> => {
+  if (!forceRefresh && githubRepositoriesRequest) {
+    return githubRepositoriesRequest;
+  }
+
+  const nextRequest = request<GitHubRepositoriesResponse>(
+    "/github/repositories",
+  );
+  githubRepositoriesRequest = nextRequest;
+  void nextRequest.catch(() => {
+    if (githubRepositoriesRequest === nextRequest) {
+      githubRepositoriesRequest = null;
+    }
+  });
+  return nextRequest;
+};
 
 export const getGitHubBranches = (repoId: string): Promise<GitHubBranch[]> =>
   request(`/github/repositories/${repoId}/branches`);
