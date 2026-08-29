@@ -58,8 +58,8 @@ input is strict. Fixture repositories are restricted to explicitly enabled
 test, evaluation, and acceptance environments; GitHub repository branch lookup
 uses the selected repository's owner, name, and installation metadata. The
 backend checks installation ownership locally before making the direct branch
-request. GitHub session creation retains its existing live repository and branch
-validation until the later chat-creation optimization phase.
+request. GitHub session creation validates the selected metadata and installation
+ownership locally; repository and branch access are exercised during provisioning.
 
 Messages contain user, assistant, or system content plus processing metadata.
 Operational output stays in session events and artifacts. A message result

@@ -122,11 +122,14 @@ describe("ChatSessionService", () => {
           ...data,
           repoSource: "github",
           repoBaseBranch: "feature",
-          repoBaseSha: "abc123",
+          repoBaseSha: "abcdef1234567",
         })),
       },
     };
     const prisma = {
+      gitHubInstallation: {
+        findUnique: vi.fn(async () => ({ installationId: "10" })),
+      },
       $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) =>
         callback(tx),
       ),
@@ -134,7 +137,6 @@ describe("ChatSessionService", () => {
     const events = {
       appendSessionEventInTransaction: vi.fn(async () => event("chat_1")),
     };
-    const validateRepository = vi.fn(async () => undefined);
     const service = new ChatSessionService(
       prisma,
       events as unknown as EventStore,
@@ -144,7 +146,6 @@ describe("ChatSessionService", () => {
       false,
       {
         currentPullRequest: vi.fn(async () => null),
-        validateRepository,
       },
     );
 
@@ -152,18 +153,117 @@ describe("ChatSessionService", () => {
       service.createSession(userId, {
         repo: {
           source: "github",
-          ref: "github:octo/repo",
+          ref: "github:tampered/repo",
+          provider: "github",
+          owner: "octo",
+          name: "repo",
+          repoId: "1",
+          defaultBranch: "main",
+          installationId: "10",
           baseBranch: "feature",
-          baseSha: "abc123",
+          baseSha: "abcdef1234567",
         },
       }),
     ).resolves.toMatchObject({
-      repo: { baseBranch: "feature", baseSha: "abc123" },
+      repo: { baseBranch: "feature", baseSha: "abcdef1234567" },
     });
-    expect(validateRepository).toHaveBeenCalledWith(
-      userId,
-      expect.objectContaining({ baseBranch: "feature", baseSha: "abc123" }),
+    expect(prisma.gitHubInstallation.findUnique).toHaveBeenCalledWith({
+      where: {
+        userId_installationId: { userId, installationId: "10" },
+      },
+      select: { installationId: true },
+    });
+    expect(tx.chatSession.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          repoRef: "github:octo/repo",
+          repoBaseSha: "abcdef1234567",
+        }),
+      }),
     );
+  });
+
+  it("rejects malformed GitHub SHA metadata without querying the database", async () => {
+    const findUnique = vi.fn();
+    const service = new ChatSessionService(
+      { gitHubInstallation: { findUnique } } as unknown as PrismaClient,
+      {} as EventStore,
+    );
+
+    await expect(
+      service.createSession(userId, {
+        repo: {
+          source: "github",
+          ref: "github:octo/repo",
+          provider: "github",
+          owner: "octo",
+          name: "repo",
+          repoId: "1",
+          defaultBranch: "main",
+          installationId: "10",
+          baseBranch: "main",
+          baseSha: "not-a-sha",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "github_repository_metadata_invalid",
+      status: 400,
+    });
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it("rejects incomplete GitHub metadata without querying the database", async () => {
+    const findUnique = vi.fn();
+    const service = new ChatSessionService(
+      { gitHubInstallation: { findUnique } } as unknown as PrismaClient,
+      {} as EventStore,
+    );
+
+    await expect(
+      service.createSession(userId, {
+        repo: {
+          source: "github",
+          ref: "github:octo/repo",
+          provider: "github",
+          owner: "octo",
+          name: "repo",
+          repoId: "1",
+          defaultBranch: "main",
+          installationId: "10",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "github_repository_metadata_invalid",
+      status: 400,
+    });
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it("rejects GitHub sessions for installations not owned by the user", async () => {
+    const findUnique = vi.fn(async () => null);
+    const service = new ChatSessionService(
+      { gitHubInstallation: { findUnique } } as unknown as PrismaClient,
+      {} as EventStore,
+    );
+
+    await expect(
+      service.createSession(userId, {
+        repo: {
+          source: "github",
+          ref: "github:octo/repo",
+          provider: "github",
+          owner: "octo",
+          name: "repo",
+          repoId: "1",
+          defaultBranch: "main",
+          installationId: "10",
+          baseBranch: "main",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "github_repository_not_found",
+      status: 404,
+    });
   });
 
   it("persists a queued message, lock, and session events together", async () => {
@@ -288,7 +388,7 @@ describe("ChatSessionService", () => {
       undefined,
       undefined,
       false,
-      { currentPullRequest, validateRepository: vi.fn() },
+      { currentPullRequest },
     );
 
     await expect(

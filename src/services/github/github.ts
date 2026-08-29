@@ -64,7 +64,7 @@ export type GitHubRepositorySelection = {
   baseSha?: string | null | undefined;
 };
 
-const isGitHubPathComponent = (
+export const isGitHubPathComponent = (
   value: string | null | undefined,
 ): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
@@ -717,50 +717,6 @@ export class GitHubService {
       baseBranch: session.repoBaseBranch,
       defaultBranch: session.repoDefaultBranch,
     };
-  }
-
-  async validateRepository(
-    userId: string,
-    selection: GitHubRepositorySelection,
-  ): Promise<void> {
-    const visible = await this.repositories(userId);
-    const repository = visible.repositories.find(
-      (candidate) =>
-        candidate.installationId === selection.installationId &&
-        (selection.repoId === undefined ||
-          selection.repoId === null ||
-          candidate.repoId === selection.repoId) &&
-        candidate.owner.toLowerCase() === selection.owner?.toLowerCase() &&
-        candidate.name.toLowerCase() === selection.name?.toLowerCase(),
-    );
-    if (!repository)
-      throw new ServiceError(
-        "github_repository_not_found",
-        "Repository was not found",
-        404,
-      );
-    if (selection.baseBranch || selection.baseSha) {
-      const baseBranch = selection.baseBranch ?? repository.defaultBranch;
-      const branch = (
-        await this.branches(userId, {
-          repoId: repository.repoId,
-          owner: repository.owner,
-          name: repository.name,
-          installationId: repository.installationId,
-        })
-      ).find((candidate) => candidate.name === baseBranch);
-      if (
-        !branch ||
-        (selection.baseSha !== undefined &&
-          selection.baseSha !== null &&
-          branch.sha !== selection.baseSha)
-      )
-        throw new ServiceError(
-          "github_branch_not_found",
-          "Branch was not found",
-          404,
-        );
-    }
   }
 
   async currentPullRequest(
