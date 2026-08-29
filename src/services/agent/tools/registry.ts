@@ -21,7 +21,7 @@ export const createToolRegistry = (
   containerName: string,
   config: AgentToolConfig,
   signal: AbortSignal,
-  context?: { sessionId: string; runId: string },
+  context?: { sessionId: string; messageId: string },
   github?: AgentGitHubTools,
 ) => ({
   read: createReadTool(runtime, containerName, config, signal),
@@ -39,13 +39,13 @@ export const createToolRegistry = (
           config,
           signal,
           context.sessionId,
-          context.runId,
+          context.messageId,
           github,
         ),
         pull_request: createPullRequestTool(
           signal,
           context.sessionId,
-          context.runId,
+          context.messageId,
           github,
         ),
       }

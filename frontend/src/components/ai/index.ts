@@ -2,7 +2,7 @@ export { PromptBar } from "./PromptBar";
 export { MessageBubble } from "./MessageBubble";
 export { StreamingText } from "./StreamingText";
 export { ThinkingBlock } from "./ThinkingBlock";
-export { TaskRow } from "./TaskRow";
+export { TimelineRow } from "./TimelineRow";
 export { ToolChip } from "./ToolChip";
 export type { ToolChipState } from "./ToolChip";
 export { CodeBlock } from "./CodeBlock";
@@ -15,5 +15,5 @@ export {
   Skeleton,
   SkeletonText,
   SkeletonMessage,
-  SkeletonTaskRow,
+  SkeletonTimelineRow,
 } from "./Skeleton";

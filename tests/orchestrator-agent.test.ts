@@ -30,13 +30,13 @@ const baseInput = (
   recentMessages: [],
   recentToolActivity: [],
   workspace: {
-    hasPriorRun: false,
-    lastRunStatus: null,
-    lastRunSummary: null,
+    hasPriorProcessing: false,
+    lastProcessingStatus: null,
+    lastProcessingSummary: null,
     changedFilesHint: [],
   },
   message: "fix the bug",
-  runId: "run_1",
+  messageId: "msg_1",
   signal: new AbortController().signal,
   delegate: vi.fn(async () => workerResult()),
   ...overrides,
@@ -73,7 +73,7 @@ describe("ModelOrchestratorAgent", () => {
 
     expect(recorder.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({
-        runId: "run_1",
+        messageId: "msg_1",
         stage: "orchestrator",
         usage: expect.objectContaining({
           inputTokens: 4,

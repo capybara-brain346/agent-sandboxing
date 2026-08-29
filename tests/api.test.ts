@@ -10,10 +10,7 @@ vi.mock("../src/db/prisma", () => ({
 }));
 
 const { createApp } = await import("../src/server");
-const testConfig = loadConfig({
-  NODE_ENV: "test",
-  DATABASE_URL: "postgresql://test",
-});
+const testConfig = loadConfig();
 const authCookie = `${AUTH_COOKIE_NAME}=${await signSessionToken(
   {
     sub: "user_1",
@@ -39,7 +36,7 @@ describe("HTTP wiring", () => {
     const response = await request(app)
       .post("/chat-sessions")
       .set("Cookie", authCookie)
-      .set("Origin", "http://localhost:3000")
+      .set("Origin", new URL(testConfig.APP_BASE_URL).origin)
       .send({
         repo: { source: "fixture", ref: "./repo" },
         unexpected: true,

@@ -9,9 +9,9 @@ export type WorkerResult = {
 export type MessageIntent = "clarification" | "code";
 
 export type WorkspaceSnapshot = {
-  hasPriorRun: boolean;
-  lastRunStatus: string | null;
-  lastRunSummary: string | null;
+  hasPriorProcessing: boolean;
+  lastProcessingStatus: string | null;
+  lastProcessingSummary: string | null;
   changedFilesHint: string[];
 };
 

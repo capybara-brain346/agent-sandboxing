@@ -41,21 +41,24 @@ const endEvent = (
 
 const makeEvent = (input: { type: PublicEvent["type"] }): PublicEvent => ({
   id: `evt_${input.type}`,
-  streamId: "task_1",
-  taskId: "task_1",
+  streamId: "chat_1",
+  streamScope: "session",
+  domain: "agent",
+  sessionId: "chat_1",
+  messageId: "msg_1",
   sandboxId: "sbox_1",
   commandId: null,
   sequence: 1,
   type: input.type,
   producerService: "agent",
-  producerId: "task_1",
+  producerId: "msg_1",
   correlationId: "call_42",
   payload: {},
   createdAt: "2026-01-01T00:00:00.000Z",
 });
 
 describe("ToolEventRelay", () => {
-  it("appends task-scoped call and result events with correlation IDs", async () => {
+  it("appends session-scoped call and result events with correlation IDs", async () => {
     const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
       makeEvent(input),
     );
@@ -65,8 +68,9 @@ describe("ToolEventRelay", () => {
       publish,
     });
     const callbacks = relay.callbacks({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
     });
 
     await callbacks.onToolExecutionStart(startEvent({ command: "pwd" }));
@@ -82,10 +86,11 @@ describe("ToolEventRelay", () => {
       "agent_tool_result",
     ]);
     expect(append.mock.calls[0]?.[0]).toMatchObject({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
       producerService: "agent",
-      producerId: "task_1",
+      producerId: "msg_1",
       correlationId: "call_42",
       payload: { tool_name: "bash", args: { command: "pwd" } },
     });
@@ -114,8 +119,9 @@ describe("ToolEventRelay", () => {
       publish: vi.fn(),
     });
     const callbacks = relay.callbacks({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
     });
 
     await callbacks.onToolExecutionStart(startEvent({ command: "pwd" }));
@@ -144,8 +150,9 @@ describe("ToolEventRelay", () => {
       publish: vi.fn(),
     });
     const callbacks = relay.callbacks({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
     });
 
     await callbacks.onToolExecutionStart(
@@ -175,8 +182,9 @@ describe("ToolEventRelay", () => {
       publish: vi.fn(),
     });
     const callbacks = relay.callbacks({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
     });
 
     await callbacks.onToolExecutionEnd(
@@ -220,7 +228,7 @@ describe("ToolEventRelay", () => {
     });
 
     await relay.onToolExecutionStart(
-      { taskId: "task_1", sandboxId: "sbox_1" },
+      { messageId: "msg_1", sandboxId: "sbox_1", sessionId: "chat_1" },
       startEvent({}),
     );
     expect(publish).toHaveBeenCalledWith(event);
@@ -229,7 +237,7 @@ describe("ToolEventRelay", () => {
     append.mockRejectedValueOnce(failure);
     await expect(
       relay.onToolExecutionStart(
-        { taskId: "task_1", sandboxId: "sbox_1" },
+        { messageId: "msg_1", sandboxId: "sbox_1", sessionId: "chat_1" },
         startEvent({}),
       ),
     ).rejects.toBe(failure);
@@ -255,7 +263,7 @@ describe("ToolEventRelay", () => {
       artifacts: { create },
     });
     const callbacks = relay.callbacks({
-      taskId: "run_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
       sessionId: "chat_1",
     });
@@ -270,7 +278,7 @@ describe("ToolEventRelay", () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "chat_1",
-        runId: "run_1",
+        messageId: "msg_1",
         kind: "tool_output",
       }),
     );
@@ -291,7 +299,7 @@ describe("ToolEventRelay", () => {
       artifacts: { create },
     });
     const callbacks = relay.callbacks({
-      taskId: "run_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
       sessionId: "chat_1",
     });

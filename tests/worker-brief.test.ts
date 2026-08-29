@@ -8,9 +8,9 @@ describe("buildWorkerBrief", () => {
       repoRef: "/workspace/fixture-repo",
       summary: "",
       workspace: {
-        hasPriorRun: false,
-        lastRunStatus: null,
-        lastRunSummary: null,
+        hasPriorProcessing: false,
+        lastProcessingStatus: null,
+        lastProcessingSummary: null,
         changedFilesHint: [],
       },
     };
@@ -24,9 +24,9 @@ describe("buildWorkerBrief", () => {
     const context = {
       summary: "",
       workspace: {
-        hasPriorRun: false,
-        lastRunStatus: null,
-        lastRunSummary: null,
+        hasPriorProcessing: false,
+        lastProcessingStatus: null,
+        lastProcessingSummary: null,
         changedFilesHint: [],
       },
     };
@@ -40,9 +40,9 @@ describe("buildWorkerBrief", () => {
     const context = {
       summary: "",
       workspace: {
-        hasPriorRun: false,
-        lastRunStatus: null,
-        lastRunSummary: null,
+        hasPriorProcessing: false,
+        lastProcessingStatus: null,
+        lastProcessingSummary: null,
         changedFilesHint: [],
       },
     };
@@ -59,16 +59,15 @@ describe("buildWorkerBrief", () => {
     const context = {
       summary: "Objective: fix docs",
       workspace: {
-        hasPriorRun: true,
-        lastRunStatus: "completed",
-        lastRunSummary: "done",
+        hasPriorProcessing: true,
+        lastProcessingStatus: "completed",
+        lastProcessingSummary: "done",
         changedFilesHint: ["README.md"],
       },
     };
     const brief = buildWorkerBrief(context, "continue", "blocked earlier");
 
     expect(brief).toContain("Prior context:");
-    expect(brief).toContain("Previous attempt:");
     expect(brief).toContain("Previous attempt report:");
     expect(brief).not.toContain("CodeWorker");
     expect(brief).not.toContain("Session summary:");

@@ -33,7 +33,7 @@ export const redact = (
 
 export type CreateArtifactInput = {
   sessionId: string;
-  runId?: string | null;
+  messageId?: string | null;
   kind: string;
   contentType: string;
   content: string;
@@ -64,13 +64,17 @@ export class ArtifactStore implements ArtifactRecorder {
 
     await runQuery(
       "create_artifact",
-      { sessionId: input.sessionId, runId: input.runId, kind: input.kind },
+      {
+        sessionId: input.sessionId,
+        messageId: input.messageId,
+        kind: input.kind,
+      },
       () =>
         this.prisma.artifact.create({
           data: {
             id,
             sessionId: input.sessionId,
-            runId: input.runId ?? null,
+            messageId: input.messageId ?? null,
             kind: input.kind,
             contentType: input.contentType,
             content: bounded.value,
@@ -102,7 +106,7 @@ export class ArtifactStore implements ArtifactRecorder {
     return {
       artifactId: row.id,
       sessionId: row.sessionId,
-      runId: row.runId,
+      messageId: row.messageId,
       kind: row.kind,
       contentType: row.contentType,
       content: row.content,

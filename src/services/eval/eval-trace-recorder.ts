@@ -6,7 +6,7 @@ import type { WorkerResult } from "../../types/harness.types";
 import type {
   EvalTrace,
   EvalTraceContextSnapshot,
-  EvalTraceRunFacts,
+  EvalTraceMessageFacts,
   EvalTraceSink,
   EvalTraceToolEvent,
   ModelUsage,
@@ -67,9 +67,9 @@ const safeSnapshot = (
     .slice(0, TOOL_ARGS_MAX_ENTRIES)
     .map((activity) => safeText(activity)),
   workspace: {
-    hasPriorRun: snapshot.workspace.hasPriorRun,
-    lastRunStatus: snapshot.workspace.lastRunStatus
-      ? safeText(snapshot.workspace.lastRunStatus, 200)
+    hasPriorProcessing: snapshot.workspace.hasPriorProcessing,
+    lastProcessingStatus: snapshot.workspace.lastProcessingStatus
+      ? safeText(snapshot.workspace.lastProcessingStatus, 200)
       : null,
     changedFilesHint: snapshot.workspace.changedFilesHint
       .slice(0, TOOL_ARGS_MAX_ENTRIES)
@@ -134,7 +134,7 @@ export const normalizeToolEvents = (
 
 type TraceState = {
   sessionId: string;
-  runId: string;
+  messageId: string;
   userPrompt: string;
   contextSummary?: EvalTrace["orchestrator"]["contextSummary"];
   contextSnapshot?: EvalTraceContextSnapshot;
@@ -143,7 +143,7 @@ type TraceState = {
   usage: Array<{ stage: EvalTraceStage; usage: ModelUsage }>;
   reply?: string;
   delegated: boolean;
-  run?: EvalTraceRunFacts;
+  processing?: EvalTraceMessageFacts;
 };
 
 export type EvalTraceRecorderOptions = {
@@ -153,17 +153,17 @@ export type EvalTraceRecorderOptions = {
 
 export type EvalTraceRecorderLike = Pick<
   EvalTraceRecorder,
-  | "startRun"
+  | "startProcessing"
   | "recordOrchestratorContext"
   | "recordWorkerBrief"
   | "recordWorkerResult"
   | "recordOrchestratorReply"
   | "recordUsage"
-  | "finishRun"
+  | "finishProcessing"
 >;
 
 export class EvalTraceRecorder implements EvalTraceRecorderLike {
-  private readonly runs = new Map<string, TraceState>();
+  private readonly traces = new Map<string, TraceState>();
   private readonly tags: string[];
 
   constructor(
@@ -173,77 +173,77 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
     this.tags = options.tags?.slice() ?? [];
   }
 
-  startRun(input: {
+  startProcessing(input: {
     sessionId: string;
-    runId: string;
+    messageId: string;
     userPrompt: string;
   }): void {
-    this.runs.set(input.runId, {
+    this.traces.set(input.messageId, {
       sessionId: input.sessionId,
-      runId: input.runId,
+      messageId: input.messageId,
       userPrompt: safeText(input.userPrompt),
       workerBriefs: [],
       workerResults: [],
       usage: [],
       delegated: false,
     });
-    this.callSink("startRun", input);
+    this.callSink("startProcessing", input);
   }
 
   recordOrchestratorContext(input: {
-    runId: string;
+    messageId: string;
     contextSummary: EvalTraceContextSummary;
     contextSnapshot?: EvalTraceContextSnapshot;
   }): void {
-    const state = this.state(input.runId);
+    const state = this.state(input.messageId);
     state.contextSummary = input.contextSummary;
     if (this.options.includeContextSnapshot && input.contextSnapshot)
       state.contextSnapshot = safeSnapshot(input.contextSnapshot);
     this.callSink("recordOrchestratorContext", input);
   }
 
-  recordWorkerBrief(input: { runId: string; brief: string }): void {
-    const state = this.state(input.runId);
+  recordWorkerBrief(input: { messageId: string; brief: string }): void {
+    const state = this.state(input.messageId);
     state.workerBriefs.push(safeText(input.brief));
     state.delegated = true;
     this.callSink("recordWorkerBrief", input);
   }
 
-  recordWorkerResult(input: { runId: string; result: WorkerResult }): void {
-    const state = this.state(input.runId);
+  recordWorkerResult(input: { messageId: string; result: WorkerResult }): void {
+    const state = this.state(input.messageId);
     state.workerResults.push(safeWorkerResult(input.result));
     state.delegated = true;
     this.callSink("recordWorkerResult", input);
   }
 
   recordOrchestratorReply(input: {
-    runId: string;
+    messageId: string;
     reply: string;
     delegated: boolean;
   }): void {
-    const state = this.state(input.runId);
+    const state = this.state(input.messageId);
     state.reply = safeText(input.reply);
     state.delegated = input.delegated;
     this.callSink("recordOrchestratorReply", input);
   }
 
   recordUsage(input: {
-    runId: string;
+    messageId: string;
     stage: EvalTraceStage;
     usage: ModelUsage;
   }): void {
-    const state = this.state(input.runId);
+    const state = this.state(input.messageId);
     state.usage.push({ stage: input.stage, usage: { ...input.usage } });
     this.callSink("recordUsage", input);
   }
 
-  async finishRun(input: {
-    runId: string;
-    terminal: EvalTraceRunFacts;
+  async finishProcessing(input: {
+    messageId: string;
+    terminal: EvalTraceMessageFacts;
     events: PublicEvent[];
   }): Promise<void> {
-    const state = this.state(input.runId);
-    state.run = {
+    const state = this.state(input.messageId);
+    state.processing = {
       ...input.terminal,
       ...(input.terminal.finalMessage
         ? { finalMessage: safeText(input.terminal.finalMessage) }
@@ -251,20 +251,22 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
     };
     const lastWorker = state.workerResults.at(-1);
     const trace: EvalTrace = {
-      traceId: state.runId,
-      runId: state.runId,
+      traceId: state.messageId,
+      messageId: state.messageId,
       sessionId: state.sessionId,
-      name: "chat_run",
+      name: "chat_message",
       input: state.userPrompt,
-      ...(state.run.finalMessage ? { output: state.run.finalMessage } : {}),
-      tags: [...this.tags, `status:${state.run.status}`],
+      ...(state.processing.finalMessage
+        ? { output: state.processing.finalMessage }
+        : {}),
+      tags: [...this.tags, `status:${state.processing.status}`],
       metadata: {
-        runId: state.runId,
+        messageId: state.messageId,
         sessionId: state.sessionId,
-        status: state.run.status,
-        exitReason: state.run.exitReason,
-        diffBytes: state.run.diffBytes,
-        diffPresent: state.run.diffPresent,
+        status: state.processing.status,
+        exitReason: state.processing.exitReason,
+        diffBytes: state.processing.diffBytes,
+        diffPresent: state.processing.diffPresent,
         delegated: state.delegated,
         workerResultCount: state.workerResults.length,
         toolEventCount: normalizeToolEvents(input.events).length,
@@ -284,25 +286,25 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
       usage: state.usage,
       tools: normalizeToolEvents(input.events),
       ...(lastWorker ? { worker: lastWorker } : {}),
-      run: state.run,
+      processing: state.processing,
     };
-    await this.callSinkAsync("finishRun", trace);
-    this.runs.delete(input.runId);
+    await this.callSinkAsync("finishProcessing", trace);
+    this.traces.delete(input.messageId);
   }
 
-  private state(runId: string): TraceState {
-    const existing = this.runs.get(runId);
+  private state(messageId: string): TraceState {
+    const existing = this.traces.get(messageId);
     if (existing) return existing;
     const state: TraceState = {
       sessionId: "",
-      runId,
+      messageId,
       userPrompt: "",
       workerBriefs: [],
       workerResults: [],
       usage: [],
       delegated: false,
     };
-    this.runs.set(runId, state);
+    this.traces.set(messageId, state);
     return state;
   }
 
@@ -324,7 +326,7 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
   }
 
   private async callSinkAsync(
-    method: "finishRun",
+    method: "finishProcessing",
     input: EvalTrace,
   ): Promise<void> {
     try {

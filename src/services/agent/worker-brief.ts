@@ -12,8 +12,8 @@ export const buildWorkerBrief = (
     "After any publish_pull_request call, report the observed outcome: published at the returned URL, not published because there was no workspace diff, or failed with the returned code and message. Never say a pull request was raised, opened, created, or published unless the tool returned success with a pull request URL.",
     "",
     context.summary ? `Prior context:\n${context.summary}` : null,
-    context.workspace.hasPriorRun
-      ? `Previous attempt: ${context.workspace.lastRunStatus}. Previously touched files: ${
+    context.workspace.hasPriorProcessing
+      ? `Previous attempt: ${context.workspace.lastProcessingStatus}. Previously touched files: ${
           context.workspace.changedFilesHint.join(", ") || "none"
         }.`
       : null,

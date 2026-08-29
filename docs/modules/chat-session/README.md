@@ -3,65 +3,36 @@
 ## Purpose
 
 The Chat Session Service is the session-first public boundary for repo-scoped
-chat workspaces. It owns session metadata, durable user-facing messages, the
-transitional `Task` rows used as task runs, and session/run event publication.
-It is implemented in
-[`src/services/chat/chat-session.ts`](../../../src/services/chat/chat-session.ts)
-and exposed by
-[`src/routes/chat-session.routes.ts`](../../../src/routes/chat-session.routes.ts).
+chat. It owns sessions, durable messages, message processing, session events,
+artifacts, and the current GitHub pull request view.
 
-Phase 3 provides the REST and SSE contract. It creates sessions without a
-sandbox, persists a user message and a `created` run in one transaction when
-execution is requested, and enforces one active run per session.
+Implementation:
 
-Phase 4 adds run-owned execution against a session-owned sandbox. It is
-implemented in
-[`src/services/task/run-service.ts`](../../../src/services/task/run-service.ts)
-and the session-scoped additions to
-[`src/services/sandbox/sandbox.ts`](../../../src/services/sandbox/sandbox.ts).
-`ChatSessionService.appendMessage` starts `RunService.createRunForMessage`
-once the message/run/lock transaction commits. `RunService` then:
+- [`chat-session.ts`](../../../src/services/chat/chat-session.ts) owns the
+  public session and message operations.
+- [`message-processing.ts`](../../../src/services/chat/message-processing.ts)
+  owns asynchronous processing, cancellation, sandbox coordination, and
+  terminal result persistence.
+- [`message-orchestrator.ts`](../../../src/services/chat/message-orchestrator.ts)
+  owns context, delegation, and user-facing response construction.
 
-- provisions the session's sandbox on the first run
-  (`SandboxService.createForSessionInTransaction` + `ensureReadyForSession`)
-  and reuses it unchanged on later fixture runs;
-- runs the worker (`AgentRunner`/`TaskRunner`) against that sandbox with
-  `sessionId`, `runId`, and `messageId` in its context, so agent tool events
-  land on the run's event stream instead of the legacy task stream;
-- captures a diff (`diffForSession`), writes the assistant chat message, marks
-  the run terminal, and releases the session lock;
-- never stops the sandbox on completion, so the next message in the session
-  reuses it.
+## Processing flow
 
-GitHub-backed workers can use platform-mediated PR capabilities. The backend
-checks out `agent/<sessionId>/<runId>` before the worker runs, then
-`publish_pull_request` commits, pushes, creates the PR, and restores the diff for
-final run capture. `pull_request` can read or modify only PRs already associated
-with the current session. Pull requests are persisted with history and one
-current row per session; PR failures do not change a completed coding run to a
-failed run.
-Failed publish attempts are retained for history but cleared as current so a
-later retry is not blocked by the failed row. Current PR reads refresh the
-persisted snapshot from GitHub when a PR number is available, so externally
-changed draft, closed, reopened, and merged state can be reflected in the UI.
-Reused GitHub sandboxes are currently rejected before worker execution instead
-of being reused.
+`POST /chat-sessions/:sessionId/messages` creates a queued user message and
+publishes its lifecycle events in the same transaction. The processor then:
 
-Cancellation aborts the tracked in-flight execution's `AbortSignal` through
-`RunService.requestCancellation` and falls back to a direct terminal-state
-transition (`RunService.cancelDirectly`) for a run with no tracked execution
-(for example, after a process restart). Either path performs a best-effort
-diff capture, marks the run `cancelled`, and releases the session lock without
-stopping the sandbox.
+1. Claims the session's active message lock.
+2. Creates or reuses the session sandbox and makes it ready.
+3. Checks out the deterministic GitHub branch `agent/<sessionId>` when needed.
+4. Invokes the Agent Service with the message and session-owned runtime.
+5. Captures the diff and artifacts, writes the assistant message, and marks the
+   user message completed or failed.
+6. Clears the active message lock without stopping the session sandbox.
 
-The Phase 3 schema additions are in
-[`20260818020000_repo_scoped_chat_session_phase3_api`](../../../prisma/migrations/20260818020000_repo_scoped_chat_session_phase3_api/migration.sql).
-Phase 4 reuses that schema; the session-owned `Sandbox` row and the `Task`
-row's transitional `sessionId`/`runId` event scoping were already in place.
+Processing statuses are `queued`, `working`, `completed`, `failed`, and
+`cancelled`. Only one message can be processed per session at a time.
 
 ## Public API
-
-The primary routes are:
 
 ```text
 POST   /chat-sessions
@@ -69,217 +40,50 @@ GET    /chat-sessions
 GET    /chat-sessions/:sessionId
 PATCH  /chat-sessions/:sessionId
 GET    /chat-sessions/:sessionId/messages
-GET    /chat-sessions/:sessionId/pull-request
 POST   /chat-sessions/:sessionId/messages
-GET    /chat-sessions/:sessionId/runs
-GET    /chat-sessions/:sessionId/runs/:runId
-GET    /chat-sessions/:sessionId/runs/:runId/result
-DELETE /chat-sessions/:sessionId/runs/:runId
+GET    /chat-sessions/:sessionId/result
+POST   /chat-sessions/:sessionId/cancel
 GET    /chat-sessions/:sessionId/events
-GET    /chat-sessions/:sessionId/runs/:runId/events
+GET    /chat-sessions/:sessionId/pull-request
 GET    /chat-sessions/:sessionId/artifacts/:artifactId
 ```
 
-Session creation accepts a strict `repo` object with a `fixture` or `github`
-source and requires application cookie authentication. Sessions belong to the
-authenticated user; all reads, writes, event streams, runs, and artifacts are
-scoped to that user and do not expose `userId`. Fixture sessions are restricted
-to test, eval, and acceptance use and require `FIXTURE_REPOS_ENABLED=true`;
-production configuration rejects that flag. GitHub session creation revalidates
-the selected repository, installation, and branch against the authenticated
-user's current GitHub access before persistence. Sessions persist the chosen
-repository, default branch, selected base branch, and selected base SHA. GitHub
-runs mint a short-lived GitHub App installation token in the control plane and
-provision the selected repository and branch into the session-owned sandbox.
-Provisioning uses the latest head of the selected branch; the persisted base SHA
-is not used for component 3 provisioning. The token is never persisted or
-passed to the Agent Service. GitHub provisioning leaves the workspace on the
-selected base branch, then run setup switches to the deterministic run branch
-before the worker can edit.
+Session creation and all reads are scoped to the authenticated user. Repository
+input is strict. Fixture repositories are restricted to explicitly enabled
+test, evaluation, and acceptance environments; GitHub repositories are
+revalidated against the authenticated user's current access.
 
-Session creation does not accept an initial message. Send a message separately;
-`startRun` defaults to `true`. A message-only request returns `201`, while a
-message that creates a run returns `202` with both resources.
+Messages contain user, assistant, or system content plus processing metadata.
+Operational output stays in session events and artifacts. A message result
+contains the diff, artifact pointers, assistant summary, exit reason, failure,
+and current pull request metadata.
 
-Messages are the chat history API. Command output, tool traces, Docker output,
-and other operational data remain run events or artifacts and are not copied
-into message content.
+## Events and cancellation
 
-## Run lock and ownership
+The session event stream is the only public event stream. It uses numeric
+sequence cursors and supports both `after` and `Last-Event-ID` replay. State
+changes and lifecycle events commit together; live publication happens only
+after commit.
 
-The session `activeRunId` is claimed transactionally before a run row is
-returned. A second mutating message returns `409 session_run_in_progress` with
-the active run identifier and event URL. Nested run routes filter by both
-session and run identifier, so a run from another session returns
-`404 run_not_found`.
+`POST /chat-sessions/:sessionId/cancel` aborts tracked processing or performs a
+direct terminal cancellation after a restart. Both paths attempt diff capture,
+persist cancellation events, and release the session lock.
 
-Cancellation marks the transitional run `cancelled`, clears the session lock,
-and writes session and run cancellation/result events after the transaction
-commits.
+## Agent and artifacts
 
-## Debug logging
+The chat service injects Agent Service collaborators and contains no provider
+calls. The Agent Service owns model resolution, prompts, tool execution,
+delegation, and summary compaction.
 
-The chat boundary emits structured debug logs for session creation, message and
-run scheduling, and cancellation mode selection. Logs carry session, message,
-and run IDs plus event counts; message content and run instructions are not
-logged. Run execution, sandbox, agent, and SSE logs provide the lower-level
-diagnostic details described in their module guides. Backend logs are JSON-only.
-`LOG_LEVEL` controls emission, and `LOG_COLOR` can color JSON lines for TTY
-readability; non-TTY output remains clean JSON by default.
-
-## Event streams
-
-The session SSE route replays the ordered `session` stream. The nested run SSE
-route replays the ordered `run` stream. Both use numeric `after` cursors or the
-`Last-Event-ID` header and share the Event Service subscribe-before-replay
-delivery contract.
-
-Lifecycle state changes and their events are persisted in one transaction. The
-`SseHub` receives events only after commit.
-
-Terminal run results include compact current pull request metadata: provider,
-URL, number, branch, base branch, title, status, draft state, and safe failure
-details. The result reads the current session PR, so a later run's current PR
-is visible from an earlier run result. `GET /chat-sessions/:sessionId/pull-request`
-returns the same current PR metadata for the PR tab and refreshes the cached row
-from GitHub before responding when possible.
-
-## Phase 5: orchestrator-worker harness
-
-`RunService` no longer hands the raw user message straight to the agent tool
-loop. It hands the `RunOrchestrator`
-([`src/services/chat/run-orchestrator.ts`](../../../src/services/chat/run-orchestrator.ts)),
-which implements the same `TaskRunner` interface so it drops into `RunService`
-unchanged. `RunOrchestrator` owns chat context, worker delegation, summary
-persistence, and run-facing behavior; all model-backed collaborators are owned
-by the Agent Service:
-
-- `SessionContextBuilder` loads a bounded, explicitly-selected context: repo
-  identity, the durable session summary, the last `RECENT_MESSAGE_LIMIT` chat
-  messages, and a compact workspace snapshot (last run status + changed-file
-  hints parsed from its diff). It never reads raw event/command history.
-- `OrchestratorAgent` is injected by the Agent Service. Its production
-  implementation uses the versioned
-  [`prompts/orchestrator.yaml`](../../../prompts/orchestrator.yaml) prompt and
-  may answer directly or delegate through the CodeWorker callback. Harness
-  tests inject a collaborator directly instead of using a second production
-  policy.
-- On a clarification turn, the orchestrator answers directly and never invokes
-  the worker — the orchestrator never edits code.
-- On a code turn, `buildWorkerBrief` composes a focused brief (session
-  prior context + workspace hint + the instruction, not the chat transcript) and
-  hands it through the narrow `CodeWorker` contract to `AgentRunner`, which
-  returns a compact status plus prose report. The chat harness derives changed
-  files from the captured diff, PR state from persisted PR rows, and artifacts
-  from the artifact table instead of parsing worker prose.
-- The orchestrator's user-facing answer preserves the worker's reported pull
-  request outcome. It must not claim a PR was raised, opened, created, or
-  published unless the worker reported a published PR URL, and it avoids internal
-  harness labels such as worker reports, summaries, delegation, raw JSON, and
-  tool output unless the user asks about internals.
-- If the worker reports `blocked`, the orchestrator may retry once with a
-  narrow correction brief built from the worker's report. A `failed` result is
-  terminal and is never delegated again. Failed workers become a thrown
-  `ServiceError` so `RunService` marks the run failed instead of silently
-  completing it.
-- When the context builder reaches the compaction interval, the injected
-  `SessionSummaryCompactor` rewrites (not appends to) the session's bounded
-  `ChatSession.summary`: `Objective` is set once and carried forward,
-  `State`/`LastResult`/`Blockers` reflect the current context, and `Files` is a
-  capped union across turns. The rewrite is trimmed under a 4 KB budget by
-  dropping the oldest files first. The model-backed compactor and its prompt
-  are owned by the Agent Service; the chat service only persists its result.
-
-The chat service contains no AI SDK or provider call sites. Chat-triggered runs
-still execute the Agent Service's CodeWorker, but model resolution, prompts,
-agent decisions, and summary compaction all remain inside
-[`src/services/agent`](../../../src/services/agent/).
-
-## Phase 6: artifact handling
-
-Operational output is stored outside the chat/prompt path in `Artifact` rows
-via `ArtifactStore`
-([`src/services/artifacts/artifact-store.ts`](../../../src/services/artifacts/artifact-store.ts)).
-`ArtifactStore.create` caps content at `ARTIFACT_MAX_BYTES` (64 KB), scrubs
-common secret shapes (API keys, bearer tokens, AWS access keys, PEM private
-keys) before writing, and returns a bounded pointer + preview
-(`ARTIFACT_PREVIEW_MAX_BYTES`, 500 bytes) — never the full body. Full content
-is only readable through `ArtifactStore.get`/`GET
-/chat-sessions/:sessionId/artifacts/:artifactId`, scoped to the owning
-session.
-
-Callers:
-
-- `RunService.completeRun`/`failRun` record a `diff` artifact (when the diff
-  is non-empty) and a `worker_report` artifact (the orchestrator's raw,
-  unparsed `WorkerResult` JSON, carried through `TaskRunResult.workerReport`
-  — including on a `worker_failed` `ServiceError`, via `error.details`) and
-  emit an `artifact_created` event on both the run and session streams for
-  each one.
-- `ToolEventRelay` stores the full tool result as a `tool_output` artifact
-  only when the session-scoped 500-byte event snippet would otherwise
-  truncate it, and attaches the artifact id/byte size to the
-  `agent_tool_result` event payload.
-- `ChatSessionService.result()` already includes `Task.artifacts` pointers
-  regardless of event wiring, so a `worker_report` artifact is visible on the
-  run result even when the run ends in `worker_failed`.
-
-`SessionContextBuilder` never reads the `Artifact` table, so artifacts cannot
-enter the orchestrator's prompt context by default.
-
-## Phase 8: compatibility removal
-
-The old `/tasks` routes and the standalone `TaskService` were removed once
-this module's session -> message -> run -> result path, session/run SSE, and
-the migrated frontend reached equivalent acceptance coverage (see the
-[master plan](../../planning/repo-scoped-chat-session-agent-harness-plan.md)
-and the [Phase 0 decision record](../../planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)).
-`/tasks/*` and the retired `/sandboxes/*` routes now return
-`404 not_found`. There is one product path — session, message, and run
-terminology only. The historical `/tasks` contract is documented for
-reference in [`docs/modules/task-service/README.md`](../task-service/README.md#history).
-
-`src/services/task/task.ts` still exists as shared execution runtime
-(`canTransition`, `taskServiceWorker`, `taskServiceArtifacts`) consumed only
-by this module — see
-[`docs/modules/task-service/README.md`](../task-service/README.md) for what
-remains and why.
-
-## Trace export
-
-Each run is normalized as one `chat_run` trace by
-[`EvalTraceRecorder`](../../../src/services/eval/eval-trace-recorder.ts). The
-recorder starts with the bounded user prompt, captures context facts,
-delegation briefs and worker results, records model usage, and finalizes after
-the terminal run transition with diff, artifact, assistant-message, and
-persisted tool-event facts. Tool calls and results are paired by their existing
-correlation IDs; `ToolEventRelay` event semantics are unchanged.
-
-Langfuse export uses the JavaScript SDK v4 packages
-`@langfuse/tracing@4.6.1` and `@langfuse/otel@4.6.1`. The Langfuse sink uses a
-deterministic W3C trace ID derived from the run ID and stores the original run
-ID in metadata because SDK v4 requires a 32-character hexadecimal trace ID.
-Each trace sets Langfuse's native `sessionId` to the chat session ID so runs are
-grouped in the Langfuse Sessions view, and metadata also includes
-`chatSessionId` for direct product correlation. The trace contains nested
-orchestrator, worker agent, generation, tool, and terminal-finalization
-observations. Langfuse flushes are best effort and cannot fail a user run.
-
-Set `LANGFUSE_ENABLED=true` with both API keys to enable the remote sink. Set
-`LOCAL_TRACE_EXPORT_ENABLED=true` to append the same normalized traces as JSON
-lines to `LOCAL_TRACE_EXPORT_PATH`. Context snapshots are excluded unless
-`EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED=true` is explicitly set for evaluation or
-debugging.
+`ArtifactStore` keeps bounded, redacted operational output outside the chat
+context. Artifact reads are scoped to the owning session. The context builder
+does not read artifacts by default.
 
 ## Verification
 
-Run the focused API tests and repository checks from the project root:
+From the repository root:
 
 ```bash
-npm test -- tests/chat-routes.test.ts tests/chat-session-service.test.ts tests/run-service.test.ts tests/sandbox-service.test.ts
-npm test -- tests/run-orchestrator.test.ts tests/session-context-builder.test.ts tests/session-summary.test.ts tests/harness-integration.test.ts
-npm test -- tests/artifact-store.test.ts tests/agent-tool-relay.test.ts
-npm test -- tests/eval-trace.test.ts tests/config.test.ts tests/agent-runner.test.ts tests/orchestrator-agent.test.ts tests/run-orchestrator.test.ts tests/session-summary.test.ts
 npm run typecheck
 npm run lint
 npm test

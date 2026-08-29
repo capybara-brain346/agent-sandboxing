@@ -72,7 +72,7 @@ const failure = (
 export const createPullRequestTool = (
   signal: AbortSignal,
   sessionId: string,
-  runId: string,
+  messageId: string,
   github: PullRequestService,
 ) =>
   tool({
@@ -95,7 +95,7 @@ export const createPullRequestTool = (
         }
         return await github.pullRequest(
           sessionId,
-          runId,
+          messageId,
           input as GitHubPullRequestActionInput,
         );
       } catch (error) {

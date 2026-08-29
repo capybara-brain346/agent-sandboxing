@@ -9,20 +9,20 @@ import { EventStore } from "../events/event-store";
 import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
 import {
-  taskServiceArtifacts,
-  taskServiceTraceRecorder,
-  taskServiceWorker,
-  taskServiceGithub,
-} from "../task/task";
-import { resolveAgentModel } from "../agent/model";
-import { RunService } from "../task/run-service";
+  chatArtifacts,
+  chatGithub,
+  chatTraceRecorder,
+  chatWorker,
+} from "./chat-runtime";
+import { MessageProcessingService } from "./message-processing";
+import { MessageOrchestrator } from "./message-orchestrator";
 import { ArtifactStore } from "../artifacts/artifact-store";
 import type { ArtifactContent } from "../../types/artifact.types";
-import { RunOrchestrator } from "./run-orchestrator";
 import { ModelOrchestratorAgent } from "../agent/orchestrator-agent";
+import { resolveAgentModel } from "../agent/model";
 import { SessionContextBuilder } from "./session-context-builder";
 import { ModelSessionSummaryCompactor } from "../agent/session-summary-compactor";
-import { PlaceholderTaskRunner } from "../task/task-runner";
+import { PlaceholderMessageProcessor } from "../../types/message-processing.types";
 import type { PublicEvent } from "../../types/event.types";
 import type {
   ChatMessage,
@@ -31,43 +31,18 @@ import type {
   CreateChatSessionRequest,
   CreateMessageRequest,
   CreateMessageResponse,
+  MessageCancellationResponse,
   Page,
   RepoScope,
-  RunCancellationResponse,
-  RunResult,
-  RunSnapshot,
+  SessionResult,
   UpdateChatSessionRequest,
 } from "../../types/chat.types";
-import type { TaskFailure, TaskStatus } from "../../types/task.types";
+import type {
+  MessageProcessingFailure,
+  MessageProcessingStatus,
+} from "../../types/message-processing.types";
 import type { PullRequestMetadata } from "../../types/github.types";
 import type { GitHubService } from "../github/github";
-
-type RunRow = {
-  id: string;
-  sessionId: string | null;
-  status: TaskStatus;
-  sandboxId: string | null;
-  createdAt: Date;
-  provisioningAt: Date | null;
-  runningAt: Date | null;
-  completedAt: Date | null;
-  failedAt: Date | null;
-  cancelledAt: Date | null;
-  diff: string | null;
-  agentSummary: string | null;
-  exitReason: string | null;
-  failureCode: string | null;
-  failureMessage: string | null;
-  messages?: Array<{ id: string; role: "user" | "assistant" | "system" }>;
-  artifacts?: Array<{
-    id: string;
-    kind: string;
-    contentType: string;
-    byteSize: number;
-    truncated: boolean;
-    redacted: boolean;
-  }>;
-};
 
 type SessionRow = {
   id: string;
@@ -83,12 +58,40 @@ type SessionRow = {
   repoBaseBranch: string | null;
   repoBaseSha: string | null;
   image: string | null;
-  activeRunId: string | null;
+  activeMessageId: string | null;
   createdAt: Date;
   updatedAt: Date;
   sandbox?: { id: string } | null;
-  runs?: RunRow[];
-  messages?: Array<{ id: string; content: string }>;
+  messages?: Array<{
+    id: string;
+    content: string;
+    role: "user" | "assistant" | "system";
+    processingStatus: MessageProcessingStatus | null;
+  }>;
+};
+
+type MessageRow = {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  processingStatus: MessageProcessingStatus | null;
+  processingStartedAt: Date | null;
+  processingCompletedAt: Date | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  agentSummary: string | null;
+  createdAt: Date;
+  diff: string | null;
+  exitReason: string | null;
+  artifacts?: Array<{
+    id: string;
+    kind: string;
+    contentType: string;
+    byteSize: number;
+    truncated: boolean;
+    redacted: boolean;
+  }>;
 };
 
 type ListSessionQuery = {
@@ -98,16 +101,15 @@ type ListSessionQuery = {
   repoRef?: string | undefined;
 };
 
-type PageQuery = { limit: number; cursor?: string | undefined };
 type MessagePageQuery = { limit: number; before?: string | undefined };
 type PublishedEvent = (event: PublicEvent) => void;
-
-type RunTrigger = Pick<
-  RunService,
-  "createRunForMessage" | "requestCancellation" | "cancelDirectly"
+type ProcessingTrigger = Pick<
+  MessageProcessingService,
+  "processMessage" | "requestCancellation" | "cancelDirectly"
 >;
-const noopRunService: RunTrigger = {
-  createRunForMessage: () => undefined,
+
+const noopProcessing: ProcessingTrigger = {
+  processMessage: () => undefined,
   requestCancellation: () => false,
   cancelDirectly: async () => false,
 };
@@ -120,23 +122,13 @@ const messagesUrl = (sessionId: string): string =>
   `${sessionUrl(sessionId)}/messages`;
 const sessionEventsUrl = (sessionId: string): string =>
   `${sessionUrl(sessionId)}/events`;
-const runUrl = (sessionId: string, runId: string): string =>
-  `${sessionUrl(sessionId)}/runs/${runId}`;
-const runEventsUrl = (sessionId: string, runId: string): string =>
-  `${runUrl(sessionId, runId)}/events`;
-const runResultUrl = (sessionId: string, runId: string): string =>
-  `${runUrl(sessionId, runId)}/result`;
-
-const failure = (run: RunRow): TaskFailure | null =>
-  run.failureCode
+const failure = (message: MessageRow): MessageProcessingFailure | null =>
+  message.failureCode
     ? {
-        code: run.failureCode,
-        message: run.failureMessage ?? "Run failed",
+        code: message.failureCode,
+        message: message.failureMessage ?? "Message processing failed",
       }
     : null;
-
-const terminalAt = (run: RunRow): Date | null =>
-  run.completedAt ?? run.failedAt ?? run.cancelledAt;
 
 const repo = (session: SessionRow): RepoScope => ({
   source: session.repoSource as RepoScope["source"],
@@ -151,83 +143,77 @@ const repo = (session: SessionRow): RepoScope => ({
   baseSha: session.repoBaseSha,
 });
 
-const runSnapshot = (run: RunRow): RunSnapshot => {
-  const sessionId = run.sessionId ?? "";
-  const completedAt = terminalAt(run);
-  return {
-    taskRunId: run.id,
-    chatSessionId: sessionId,
-    triggerMessageId: run.messages?.[0]?.id ?? null,
-    status: run.status,
-    sandboxId: run.sandboxId,
-    resultUrl: runResultUrl(sessionId, run.id),
-    eventsUrl: runEventsUrl(sessionId, run.id),
-    createdAt: run.createdAt.toISOString(),
-    provisioningAt: run.provisioningAt?.toISOString() ?? null,
-    runningAt: run.runningAt?.toISOString() ?? null,
-    completedAt: completedAt?.toISOString() ?? null,
-    failure: failure(run),
-  };
-};
-
 const sessionView = (session: SessionRow): ChatSession => ({
   chatSessionId: session.id,
   title: session.title,
   repo: repo(session),
-  status: "active",
+  status: session.activeMessageId ? "working" : "active",
+  activeMessageId: session.activeMessageId,
   sandboxId: session.sandbox?.id ?? null,
   eventsUrl: sessionEventsUrl(session.id),
   messagesUrl: messagesUrl(session.id),
-  latestRun: session.runs?.[0] ? runSnapshot(session.runs[0]) : null,
   createdAt: session.createdAt.toISOString(),
   updatedAt: session.updatedAt.toISOString(),
 });
 
-const messageView = (message: {
-  id: string;
-  sessionId: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  runId: string | null;
-  createdAt: Date;
-}): ChatMessage => ({
+const messageView = (message: MessageRow): ChatMessage => ({
   messageId: message.id,
   chatSessionId: message.sessionId,
   role: message.role,
   content: message.content,
-  taskRunId: message.runId,
+  processingStatus: message.processingStatus,
+  processingStartedAt: message.processingStartedAt?.toISOString() ?? null,
+  processingCompletedAt: message.processingCompletedAt?.toISOString() ?? null,
+  failure: failure(message),
+  agentSummary: message.agentSummary,
   createdAt: message.createdAt.toISOString(),
 });
 
-const runResult = (
-  run: RunRow,
+const terminalStatuses: MessageProcessingStatus[] = [
+  "completed",
+  "failed",
+  "cancelled",
+];
+
+const sessionResult = (
+  message: MessageRow,
   pullRequest: PullRequestMetadata | null,
-): RunResult => {
-  const completed = terminalAt(run);
-  if (!completed)
+): SessionResult => {
+  if (!message.processingCompletedAt || !message.processingStatus)
     throw new ServiceError(
-      "run_result_unavailable",
-      "Run result metadata is incomplete",
+      "session_result_unavailable",
+      "Session result metadata is incomplete",
       500,
     );
+  const status = message.processingStatus;
+  if (!terminalStatuses.includes(status))
+    throw new ServiceError(
+      "message_processing_not_terminal",
+      "Message processing is not complete",
+      409,
+    );
   const exitReason =
-    run.exitReason === "completed" ||
-    run.exitReason === "failed" ||
-    run.exitReason === "cancelled" ||
-    run.exitReason === "timed_out"
-      ? run.exitReason
-      : run.status === "completed"
+    message.exitReason === "completed" ||
+    message.exitReason === "failed" ||
+    message.exitReason === "cancelled" ||
+    message.exitReason === "timed_out"
+      ? message.exitReason
+      : status === "completed"
         ? "completed"
-        : run.status === "cancelled"
+        : status === "cancelled"
           ? "cancelled"
           : "failed";
+  const terminalStatus = status as Extract<
+    MessageProcessingStatus,
+    "completed" | "failed" | "cancelled"
+  >;
   return {
-    taskRunId: run.id,
-    chatSessionId: run.sessionId ?? "",
-    status: run.status as RunResult["status"],
-    diff: run.diff ?? "",
+    messageId: message.id,
+    chatSessionId: message.sessionId,
+    status: terminalStatus,
+    diff: message.diff ?? "",
     artifacts:
-      run.artifacts?.map((artifact) => ({
+      message.artifacts?.map((artifact) => ({
         artifactId: artifact.id,
         kind: artifact.kind,
         contentType: artifact.contentType,
@@ -235,14 +221,12 @@ const runResult = (
         truncated: artifact.truncated,
         redacted: artifact.redacted,
       })) ?? [],
-    assistantMessageId:
-      run.messages?.find((message) => message.role === "assistant")?.id ?? null,
-    agentSummary: run.agentSummary,
+    agentSummary: message.agentSummary,
     exitReason,
-    failure: failure(run),
+    failure: failure(message),
     pullRequest,
-    createdAt: run.createdAt.toISOString(),
-    completedAt: completed.toISOString(),
+    createdAt: message.createdAt.toISOString(),
+    completedAt: message.processingCompletedAt.toISOString(),
   };
 };
 
@@ -251,7 +235,7 @@ export class ChatSessionService {
     private readonly prisma: PrismaClient,
     private readonly events: EventStore,
     private readonly publish: PublishedEvent = (event) => sseHub.publish(event),
-    private readonly runService: RunTrigger = noopRunService,
+    private readonly processing: ProcessingTrigger = noopProcessing,
     private readonly artifacts: Pick<ArtifactStore, "get"> = new ArtifactStore(
       prisma,
     ),
@@ -314,7 +298,7 @@ export class ChatSessionService {
         const event = await this.events.appendSessionEventInTransaction(tx, {
           sessionId,
           type: "session_created",
-          producerService: "task",
+          producerService: "chat",
           producerId: sessionId,
           correlationId: id("cor").slice(0, 24),
           payload: {
@@ -327,7 +311,7 @@ export class ChatSessionService {
     );
     this.publish(result.event);
     logger.debug("chat_session_created", { sessionId });
-    return sessionView({ ...result.session, sandbox: null, runs: [] });
+    return sessionView({ ...result.session, sandbox: null, messages: [] });
   }
 
   async listSessions(
@@ -346,22 +330,15 @@ export class ChatSessionService {
         take: query.limit + 1,
         include: {
           sandbox: { select: { id: true } },
-          runs: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            include: {
-              messages: {
-                where: { role: "user" },
-                orderBy: { createdAt: "asc" },
-                take: 1,
-                select: { id: true, role: true },
-              },
-            },
-          },
           messages: {
             orderBy: { createdAt: "desc" },
             take: 1,
-            select: { id: true, content: true },
+            select: {
+              id: true,
+              content: true,
+              role: true,
+              processingStatus: true,
+            },
           },
         },
       }),
@@ -371,7 +348,7 @@ export class ChatSessionService {
       const session = sessionView(row);
       return {
         ...session,
-        latestRunStatus: session.latestRun?.status ?? null,
+        latestMessageStatus: row.messages?.[0]?.processingStatus ?? null,
         lastMessagePreview: row.messages?.[0]?.content ?? null,
       };
     });
@@ -388,21 +365,7 @@ export class ChatSessionService {
       () =>
         this.prisma.chatSession.findFirst({
           where: { id: sessionId, userId },
-          include: {
-            sandbox: { select: { id: true } },
-            runs: {
-              orderBy: { createdAt: "desc" },
-              take: 1,
-              include: {
-                messages: {
-                  where: { role: "user" },
-                  orderBy: { createdAt: "asc" },
-                  take: 1,
-                  select: { id: true, role: true },
-                },
-              },
-            },
-          },
+          include: { sandbox: { select: { id: true } } },
         }),
     );
     if (!session)
@@ -468,224 +431,109 @@ export class ChatSessionService {
     sessionId: string,
     input: CreateMessageRequest,
   ): Promise<CreateMessageResponse> {
-    const runId = input.startRun ? id("run") : null;
-    const messageId = id("msg");
+    const activeMessageId = id("msg");
     const result = await runQuery(
       "append_chat_message",
-      { sessionId, runId },
+      { sessionId, messageId: activeMessageId },
       () =>
         this.prisma.$transaction(async (tx) => {
           const session = await tx.chatSession.findUnique({
             where: { id: sessionId },
-            select: {
-              id: true,
-              userId: true,
-              activeRunId: true,
-              repoRef: true,
-              image: true,
-            },
+            select: { id: true, userId: true, activeMessageId: true },
           });
           if (!session || session.userId !== userId)
             throw notFound(
               "chat_session_not_found",
               "Chat session was not found",
             );
-          if (runId && session.activeRunId)
-            throw this.activeRunError(sessionId, session.activeRunId);
+          if (session.activeMessageId)
+            throw this.activeMessageError(sessionId, session.activeMessageId);
 
-          if (!runId) {
-            const message = await tx.chatMessage.create({
-              data: {
-                id: messageId,
-                sessionId,
-                runId: null,
-                role: "user",
-                content: input.content,
-              },
-            });
-            await tx.chatSession.update({
-              where: { id: sessionId },
-              data: { updatedAt: new Date() },
-            });
-            const event = await this.events.appendSessionEventInTransaction(
-              tx,
-              {
-                sessionId,
-                messageId,
-                type: "message_created",
-                producerService: "task",
-                producerId: messageId,
-                correlationId: id("cor").slice(0, 24),
-                domain: "message",
-                payload: { role: "user", content: input.content },
-              },
-            );
-            return { message, run: null, events: [event] };
-          }
-
-          const run = await tx.task.create({
-            data: {
-              id: runId,
-              sessionId,
-              status: "created",
-              repoRef: session.repoRef,
-              instructions: input.content,
-              image: session.image,
-              nextEventSequence: 1,
-            },
-          });
           const claimed = await tx.chatSession.updateMany({
-            where: { id: sessionId, activeRunId: null },
+            where: { id: sessionId, activeMessageId: null },
             data: {
-              activeRunId: runId,
+              activeMessageId,
               lockedAt: new Date(),
               lockVersion: { increment: 1 },
             },
           });
-          if (claimed.count === 0)
-            throw this.activeRunError(sessionId, session.activeRunId ?? runId);
+          if (claimed.count === 0) {
+            const current = await tx.chatSession.findUnique({
+              where: { id: sessionId },
+              select: { activeMessageId: true },
+            });
+            throw this.activeMessageError(
+              sessionId,
+              current?.activeMessageId ?? activeMessageId,
+            );
+          }
 
           const message = await tx.chatMessage.create({
             data: {
-              id: messageId,
+              id: activeMessageId,
               sessionId,
-              runId,
               role: "user",
               content: input.content,
+              processingStatus: "queued",
             },
           });
-
-          const messageEvent =
+          const messageCreated =
             await this.events.appendSessionEventInTransaction(tx, {
               sessionId,
-              runId,
-              messageId,
+              messageId: activeMessageId,
               type: "message_created",
-              producerService: "task",
-              producerId: messageId,
+              producerService: "chat",
+              producerId: activeMessageId,
               correlationId: id("cor").slice(0, 24),
               domain: "message",
               payload: { role: "user", content: input.content },
             });
-          const requestedEvent =
+          const processingRequested =
             await this.events.appendSessionEventInTransaction(tx, {
               sessionId,
-              runId,
-              type: "run_requested",
-              producerService: "task",
-              producerId: runId,
+              messageId: activeMessageId,
+              type: "message_processing_requested",
+              producerService: "chat",
+              producerId: activeMessageId,
               correlationId: id("cor").slice(0, 24),
-              domain: "run",
-              payload: { message_id: messageId },
+              domain: "message",
+              payload: {},
             });
-          const sessionRunEvent =
-            await this.events.appendSessionEventInTransaction(tx, {
-              sessionId,
-              runId,
-              type: "run_created",
-              producerService: "task",
-              producerId: runId,
-              correlationId: id("cor").slice(0, 24),
-              domain: "run",
-              payload: { message_id: messageId },
-            });
-          const runEvent = await this.events.appendRunEventInTransaction(tx, {
-            sessionId,
-            runId,
-            type: "run_created",
-            producerService: "task",
-            producerId: runId,
-            correlationId: id("cor").slice(0, 24),
-            domain: "run",
-            payload: { message_id: messageId },
-          });
-          return {
-            message,
-            run: {
-              ...run,
-              messages: [{ id: messageId, role: "user" as const }],
-            },
-            events: [messageEvent, requestedEvent, sessionRunEvent, runEvent],
-          };
+          return { message, events: [messageCreated, processingRequested] };
         }),
     );
-    for (const event of result.events) this.publish(event);
+    result.events.forEach((event) => this.publish(event));
     logger.debug("chat_message_appended", {
       sessionId,
-      messageId,
-      runId,
-      startRun: result.run !== null,
+      messageId: activeMessageId,
       eventCount: result.events.length,
     });
-    if (result.run)
-      this.runService.createRunForMessage(
-        sessionId,
-        result.run.id,
-        messageId,
-        input.content,
-      );
+    this.processing.processMessage(sessionId, activeMessageId, input.content);
     return {
       message: messageView(result.message),
-      run: result.run ? runSnapshot(result.run) : null,
+      sessionUrl: sessionUrl(sessionId),
+      messagesUrl: messagesUrl(sessionId),
       eventsUrl: sessionEventsUrl(sessionId),
     };
   }
 
-  async listRuns(
+  async sessionResult(
     userId: string,
     sessionId: string,
-    query: PageQuery,
-  ): Promise<Page<RunSnapshot>> {
-    await this.requireSession(userId, sessionId);
-    const rows = await runQuery("list_chat_runs", { sessionId }, () =>
-      this.prisma.task.findMany({
-        where: { sessionId },
-        orderBy: { createdAt: "desc" },
-        ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-        take: query.limit + 1,
-        include: {
-          messages: {
-            where: { role: "user" },
-            orderBy: { createdAt: "asc" },
-            take: 1,
-            select: { id: true, role: true },
-          },
-        },
-      }),
-    );
-    const hasMore = rows.length > query.limit;
-    const items = rows.slice(0, query.limit).map(runSnapshot);
-    return {
-      items,
-      nextCursor: hasMore ? (items.at(-1)?.taskRunId ?? null) : null,
-    };
-  }
-
-  async getRun(
-    userId: string,
-    sessionId: string,
-    runId: string,
-  ): Promise<RunSnapshot> {
-    const run = await this.findRun(userId, sessionId, runId);
-    return runSnapshot(run);
-  }
-
-  async result(
-    userId: string,
-    sessionId: string,
-    runId: string,
-  ): Promise<RunResult> {
-    const run = await runQuery(
-      "get_chat_run_result",
-      { sessionId, runId },
+  ): Promise<SessionResult> {
+    const message = await runQuery(
+      "get_session_result",
+      { sessionId, userId },
       () =>
-        this.prisma.task.findFirst({
-          where: { id: runId, sessionId, session: { userId } },
+        this.prisma.chatMessage.findFirst({
+          where: {
+            sessionId,
+            role: "user",
+            processingStatus: { in: terminalStatuses },
+            session: { userId },
+          },
+          orderBy: { createdAt: "desc" },
           include: {
-            messages: {
-              orderBy: { createdAt: "asc" },
-              select: { id: true, role: true },
-            },
             artifacts: {
               select: {
                 id: true,
@@ -699,51 +547,70 @@ export class ChatSessionService {
           },
         }),
     );
-    if (!run) throw notFound("run_not_found", "Run was not found");
-    if (
-      !(["completed", "failed", "cancelled"] as TaskStatus[]).includes(
-        run.status,
-      )
-    )
-      throw new ServiceError(
-        "run_not_terminal",
-        "Run result is not available until the run is terminal",
-        409,
+    if (!message)
+      throw notFound(
+        "session_result_not_found",
+        "No processed message was found",
       );
-    return runResult(
-      run,
+    return sessionResult(
+      message,
       this.github ? await this.github.currentPullRequest(sessionId) : null,
     );
   }
 
-  async cancelRun(
+  async cancelCurrentMessage(
     userId: string,
     sessionId: string,
-    runId: string,
-  ): Promise<RunCancellationResponse> {
-    const current = await this.findRun(userId, sessionId, runId);
-    if (current.status === "cancelled")
-      return { taskRunId: runId, status: "cancelled" };
-    if (current.status === "completed" || current.status === "failed")
+  ): Promise<MessageCancellationResponse> {
+    const session = await runQuery(
+      "get_active_message",
+      { sessionId, userId },
+      () =>
+        this.prisma.chatSession.findFirst({
+          where: { id: sessionId, userId },
+          select: { activeMessageId: true },
+        }),
+    );
+    if (!session)
+      throw notFound("chat_session_not_found", "Chat session was not found");
+    if (!session.activeMessageId)
       throw new ServiceError(
-        "run_already_terminal",
-        "Run is already terminal and cannot be cancelled",
+        "no_active_message",
+        "No message is currently being processed",
+        409,
+      );
+    const active = await this.prisma.chatMessage.findUnique({
+      where: { id: session.activeMessageId },
+      select: { processingStatus: true },
+    });
+    if (!active) throw notFound("message_not_found", "Message was not found");
+    if (active.processingStatus === "cancelled")
+      return { messageId: session.activeMessageId, status: "cancelled" };
+    if (
+      active.processingStatus === "completed" ||
+      active.processingStatus === "failed"
+    )
+      throw new ServiceError(
+        "message_processing_already_terminal",
+        "Message processing is already terminal",
         409,
       );
 
-    const tracked = this.runService.requestCancellation(sessionId, runId);
-    logger.debug("run_cancellation_requested", {
+    const tracked = this.processing.requestCancellation(
       sessionId,
-      runId,
-      previousStatus: current.status,
+      session.activeMessageId,
+    );
+    logger.debug("message_cancellation_requested", {
+      sessionId,
+      messageId: session.activeMessageId,
       mode: tracked ? "tracked" : "direct",
     });
-    if (!tracked) await this.runService.cancelDirectly(sessionId, runId);
-
+    if (!tracked)
+      await this.processing.cancelDirectly(sessionId, session.activeMessageId);
     return {
-      taskRunId: runId,
+      messageId: session.activeMessageId,
       status: "cancelling",
-      eventsUrl: runEventsUrl(sessionId, runId),
+      eventsUrl: sessionEventsUrl(sessionId),
     };
   }
 
@@ -754,16 +621,6 @@ export class ChatSessionService {
   ): Promise<PublicEvent[]> {
     await this.requireSession(userId, sessionId);
     return this.events.listSessionEvents(sessionId, after);
-  }
-
-  async runEventsAfter(
-    userId: string,
-    sessionId: string,
-    runId: string,
-    after: number,
-  ): Promise<PublicEvent[]> {
-    await this.findRun(userId, sessionId, runId);
-    return this.events.listRunEvents(runId, after);
   }
 
   async getArtifact(
@@ -787,81 +644,57 @@ export class ChatSessionService {
       throw notFound("chat_session_not_found", "Chat session was not found");
   }
 
-  private async findRun(
-    userId: string,
+  private activeMessageError(
     sessionId: string,
-    runId: string,
-  ): Promise<RunRow> {
-    const run = await runQuery(
-      "get_chat_run",
-      { sessionId, runId, userId },
-      () =>
-        this.prisma.task.findFirst({
-          where: { id: runId, sessionId, session: { userId } },
-          include: {
-            messages: {
-              where: { role: "user" },
-              orderBy: { createdAt: "asc" },
-              take: 1,
-              select: { id: true, role: true },
-            },
-          },
-        }),
-    );
-    if (!run) throw notFound("run_not_found", "Run was not found");
-    return run;
-  }
-
-  private activeRunError(sessionId: string, runId: string): ServiceError {
+    activeMessageId: string,
+  ): ServiceError {
     return new ServiceError(
-      "session_run_in_progress",
-      "A run is already active for this chat session",
+      "session_message_in_progress",
+      "A message is already being processed for this chat session",
       409,
       {
-        taskRunId: runId,
-        runId,
-        eventsUrl: runEventsUrl(sessionId, runId),
+        activeMessageId,
+        eventsUrl: sessionEventsUrl(sessionId),
       },
     );
   }
 }
 
-const chatSessionEvents = new EventStore(prisma);
-const publishChatEvent = (event: PublicEvent): void => sseHub.publish(event);
-const chatHarnessConfig = loadConfig();
-const chatRunner =
-  chatHarnessConfig.NODE_ENV === "test"
-    ? new PlaceholderTaskRunner()
-    : new RunOrchestrator(
+const chatEvents = new EventStore(prisma);
+const config = loadConfig();
+const processor =
+  config.NODE_ENV === "test"
+    ? new PlaceholderMessageProcessor()
+    : new MessageOrchestrator(
         prisma,
-        new SessionContextBuilder(prisma, chatSessionEvents),
+        new SessionContextBuilder(prisma, chatEvents),
         new ModelSessionSummaryCompactor(
-          resolveAgentModel(chatHarnessConfig),
-          taskServiceTraceRecorder,
+          resolveAgentModel(config),
+          chatTraceRecorder,
         ),
-        taskServiceWorker,
+        chatWorker,
         new ModelOrchestratorAgent(
-          resolveAgentModel(chatHarnessConfig),
-          taskServiceTraceRecorder,
+          resolveAgentModel(config),
+          chatTraceRecorder,
         ),
-        taskServiceTraceRecorder,
+        chatTraceRecorder,
       );
-const chatRunService = new RunService(
+const messageProcessing = new MessageProcessingService(
   prisma,
-  chatSessionEvents,
+  chatEvents,
   sandboxService,
-  chatRunner,
-  publishChatEvent,
-  taskServiceArtifacts,
-  taskServiceTraceRecorder,
-  taskServiceGithub,
+  processor,
+  (event) => sseHub.publish(event),
+  chatArtifacts,
+  chatTraceRecorder,
+  chatGithub,
 );
 export const chatSessionService = new ChatSessionService(
   prisma,
-  chatSessionEvents,
-  publishChatEvent,
-  chatRunService,
-  taskServiceArtifacts,
-  chatHarnessConfig.FIXTURE_REPOS_ENABLED,
-  taskServiceGithub,
+  chatEvents,
+  (event) => sseHub.publish(event),
+  messageProcessing,
+  chatArtifacts,
+  config.FIXTURE_REPOS_ENABLED,
+  chatGithub,
 );

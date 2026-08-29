@@ -16,6 +16,8 @@ export const agentToolResultPayloadSchema = z
     truncated: z.boolean(),
     exit_code: z.number().int().nullable(),
     duration_ms: z.number().int().nonnegative(),
+    artifact_byte_size: z.number().int().nonnegative().optional(),
+    artifact_redacted: z.boolean().optional(),
   })
   .strict();
 

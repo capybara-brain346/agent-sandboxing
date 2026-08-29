@@ -9,7 +9,6 @@ import {
   createMessageSchema,
   listSessionQuerySchema,
   messagePageQuerySchema,
-  pageQuerySchema,
   updateChatSessionSchema,
 } from "../types/chat.types";
 import { parseSseCursor, startSseKeepalive, writeSseEvent } from "./sse";
@@ -38,7 +37,6 @@ const routeParam = (request: Request, name: string): string => {
 const sse = async (
   request: Request,
   response: Response,
-  scope: "session" | "run",
   streamId: string,
   eventsAfter: (
     after: number,
@@ -62,10 +60,9 @@ const sse = async (
     if (closed || !subscribed) return;
     closed = true;
     clearKeepalive();
-    if (client !== undefined) sseHub.unsubscribe(scope, streamId, client);
+    if (client !== undefined) sseHub.unsubscribe(streamId, client);
     logger.debug("sse_connection_closed", {
       requestId: request.id,
-      scope,
       streamId,
       after,
       replayCompleted,
@@ -85,11 +82,10 @@ const sse = async (
           : "invalid";
     after = parseSseCursor(rawAfter);
     lastSequence = after;
-    client = sseHub.subscribe(scope, streamId, response, after);
+    client = sseHub.subscribe(streamId, response, after);
     subscribed = true;
     logger.debug("sse_subscribed", {
       requestId: request.id,
-      scope,
       streamId,
       after,
     });
@@ -98,7 +94,7 @@ const sse = async (
     replayEventCount = events.length;
     lastSequence = events.at(-1)?.sequence ?? after;
     if (closed || response.writableEnded || response.destroyed) {
-      sseHub.unsubscribe(scope, streamId, client);
+      sseHub.unsubscribe(streamId, client);
       return;
     }
     response.status(200).set({
@@ -109,16 +105,10 @@ const sse = async (
     });
     response.flushHeaders();
     for (const event of events) writeSseEvent(response, event);
-    sseHub.finishReplay(
-      scope,
-      streamId,
-      client,
-      events.at(-1)?.sequence ?? after,
-    );
+    sseHub.finishReplay(streamId, client, events.at(-1)?.sequence ?? after);
     replayCompleted = true;
     logger.debug("sse_replay_completed", {
       requestId: request.id,
-      scope,
       streamId,
       after,
       eventCount: events.length,
@@ -253,7 +243,7 @@ chatSessionRouter.post(
         routeParam(request, "sessionId"),
         parsed.data,
       );
-      response.status(result.run ? 202 : 201).json(result);
+      response.status(202).json(result);
     } catch (error) {
       next(error);
     }
@@ -261,16 +251,13 @@ chatSessionRouter.post(
 );
 
 chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs",
+  "/chat-sessions/:sessionId/result",
   async (request, response, next) => {
     try {
-      const parsed = pageQuerySchema.safeParse(request.query);
-      if (!parsed.success) throw invalidRequest(parsed.error);
       response.json(
-        await chatSessionService.listRuns(
+        await chatSessionService.sessionResult(
           sessionClaims(request).sub,
           routeParam(request, "sessionId"),
-          parsed.data,
         ),
       );
     } catch (error) {
@@ -279,49 +266,14 @@ chatSessionRouter.get(
   },
 );
 
-chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs/:runId",
-  async (request, response, next) => {
-    try {
-      response.json(
-        await chatSessionService.getRun(
-          sessionClaims(request).sub,
-          routeParam(request, "sessionId"),
-          routeParam(request, "runId"),
-        ),
-      );
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs/:runId/result",
-  async (request, response, next) => {
-    try {
-      response.json(
-        await chatSessionService.result(
-          sessionClaims(request).sub,
-          routeParam(request, "sessionId"),
-          routeParam(request, "runId"),
-        ),
-      );
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-chatSessionRouter.delete(
-  "/chat-sessions/:sessionId/runs/:runId",
+chatSessionRouter.post(
+  "/chat-sessions/:sessionId/cancel",
   requireSameOrigin(chatRouteConfig),
   async (request, response, next) => {
     try {
-      const result = await chatSessionService.cancelRun(
+      const result = await chatSessionService.cancelCurrentMessage(
         sessionClaims(request).sub,
         routeParam(request, "sessionId"),
-        routeParam(request, "runId"),
       );
       response.status(result.status === "cancelling" ? 202 : 200).json(result);
     } catch (error) {
@@ -334,17 +286,12 @@ chatSessionRouter.get(
   "/chat-sessions/:sessionId/events",
   async (request, response, next) => {
     try {
-      await sse(
-        request,
-        response,
-        "session",
-        routeParam(request, "sessionId"),
-        (after) =>
-          chatSessionService.sessionEventsAfter(
-            sessionClaims(request).sub,
-            routeParam(request, "sessionId"),
-            after,
-          ),
+      await sse(request, response, routeParam(request, "sessionId"), (after) =>
+        chatSessionService.sessionEventsAfter(
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
+          after,
+        ),
       );
     } catch (error) {
       next(error);
@@ -362,29 +309,6 @@ chatSessionRouter.get(
           routeParam(request, "sessionId"),
           routeParam(request, "artifactId"),
         ),
-      );
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs/:runId/events",
-  async (request, response, next) => {
-    try {
-      await sse(
-        request,
-        response,
-        "run",
-        routeParam(request, "runId"),
-        (after) =>
-          chatSessionService.runEventsAfter(
-            sessionClaims(request).sub,
-            routeParam(request, "sessionId"),
-            routeParam(request, "runId"),
-            after,
-          ),
       );
     } catch (error) {
       next(error);

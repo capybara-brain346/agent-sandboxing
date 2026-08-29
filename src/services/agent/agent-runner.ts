@@ -11,7 +11,7 @@ import type { PublicEvent } from "../../types/event.types";
 import type { WorkerResult } from "../../types/harness.types";
 import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
-import type { TaskRunContext } from "../task/task-runner";
+import type { MessageProcessingContext } from "../../types/message-processing.types";
 import { createAgentToolRegistry } from "./tools/registry";
 import type { AgentToolConfig } from "./tools/config";
 import type { CodeWorker } from "./code-worker";
@@ -92,17 +92,16 @@ export const serializeToolRegistry = <TOOLS extends ToolSet>(
 export class AgentRunner implements CodeWorker {
   constructor(private readonly dependencies: AgentRunnerDependencies) {}
 
-  async run(context: TaskRunContext): Promise<WorkerResult> {
+  async process(context: MessageProcessingContext): Promise<WorkerResult> {
     throwIfAborted(context.signal);
     const executionStartedAt = Date.now();
     logger.debug("agent_worker_started", {
       sessionId: context.sessionId,
-      runId: context.taskId,
+      messageId: context.messageId,
       sandboxId: context.sandboxId,
     });
     const target = await this.dependencies.sandbox.getAgentToolTarget(
       context.sessionId,
-      context.taskId,
       context.sandboxId,
     );
     throwIfAborted(context.signal);
@@ -113,7 +112,7 @@ export class AgentRunner implements CodeWorker {
         target.containerName,
         toolConfig(this.dependencies.config),
         context.signal,
-        { sessionId: context.sessionId, runId: context.taskId },
+        { sessionId: context.sessionId, messageId: context.messageId },
         this.dependencies.github,
       ),
     );
@@ -125,7 +124,7 @@ export class AgentRunner implements CodeWorker {
         : {}),
     } satisfies ToolEventRelayDependencies);
     const callbacks = relay.callbacks<ToolSet>({
-      taskId: context.taskId,
+      messageId: context.messageId,
       sandboxId: context.sandboxId,
       sessionId: context.sessionId,
     });
@@ -151,7 +150,7 @@ export class AgentRunner implements CodeWorker {
       });
       recordModelUsage({
         recorder: this.dependencies.traceRecorder,
-        runId: context.taskId,
+        messageId: context.messageId,
         stage: "worker",
         model: this.dependencies.model,
         startedAt,
@@ -167,7 +166,7 @@ export class AgentRunner implements CodeWorker {
 
       logger.debug("agent_worker_completed", {
         sessionId: context.sessionId,
-        runId: context.taskId,
+        messageId: context.messageId,
         sandboxId: context.sandboxId,
         durationMs: Date.now() - executionStartedAt,
         status: workerResult.status,
@@ -178,7 +177,7 @@ export class AgentRunner implements CodeWorker {
       const cancelled = isAbortError(error) || context.signal.aborted;
       logger.debug("agent_worker_failed", {
         sessionId: context.sessionId,
-        runId: context.taskId,
+        messageId: context.messageId,
         sandboxId: context.sandboxId,
         durationMs: Date.now() - executionStartedAt,
         outcome: cancelled ? "cancelled" : "failed",
@@ -188,7 +187,7 @@ export class AgentRunner implements CodeWorker {
       if (!usageRecorded)
         recordModelUsage({
           recorder: this.dependencies.traceRecorder,
-          runId: context.taskId,
+          messageId: context.messageId,
           stage: "worker",
           model: this.dependencies.model,
           startedAt,
@@ -197,7 +196,11 @@ export class AgentRunner implements CodeWorker {
       if (isAbortError(error)) throw error;
       if (context.signal.aborted) throw createAbortError();
       if (error instanceof ServiceError) throw error;
-      throw new ServiceError("agent_run_failed", "Agent run failed", 502);
+      throw new ServiceError(
+        "agent_processing_failed",
+        "Agent processing failed",
+        502,
+      );
     }
   }
 }

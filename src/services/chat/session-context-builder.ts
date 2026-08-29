@@ -33,19 +33,19 @@ type SessionSummaryRow = {
   summaryCompactedThroughMessageCount: number;
 } | null;
 type MessageRow = { role: "user" | "assistant" | "system"; content: string };
-type LastRunRow = {
+type LastMessageRow = {
   id: string;
-  status: string;
+  processingStatus: string | null;
   diff: string | null;
   agentSummary: string | null;
 } | null;
 
 export type SessionContextPrismaCollaborator = Pick<
   PrismaClient,
-  "chatSession" | "chatMessage" | "task"
+  "chatSession" | "chatMessage"
 >;
 
-export type SessionContextEventStore = Pick<EventStore, "listRunEvents">;
+export type SessionContextEventStore = Pick<EventStore, "listSessionEvents">;
 
 const toolActivityLine = (event: {
   type: string;
@@ -64,13 +64,6 @@ const toolActivityLine = (event: {
   return `${toolName}: ${boundUtf8(detail, TOOL_ACTIVITY_SNIPPET_MAX_BYTES).value}`;
 };
 
-/**
- * Builds the bounded, explicitly-selected context the orchestrator reads:
- * session identity, durable summary, recent chat messages, recent tool
- * activity from the last run, and a compact workspace snapshot derived from
- * the last terminal run. Never replays raw event/command history beyond that
- * bounded window, and never reads the artifact table.
- */
 export class SessionContextBuilder {
   constructor(
     private readonly prisma: SessionContextPrismaCollaborator,
@@ -112,40 +105,47 @@ export class SessionContextBuilder {
       () => this.prisma.chatMessage.count({ where: { sessionId } }),
     );
 
-    const lastRun: LastRunRow = await runQuery(
-      "build_orchestrator_context_last_run",
+    const lastMessage: LastMessageRow = await runQuery(
+      "build_orchestrator_context_last_message",
       { sessionId },
       () =>
-        this.prisma.task.findFirst({
+        this.prisma.chatMessage.findFirst({
           where: {
             sessionId,
-            status: { in: ["completed", "failed", "cancelled"] },
+            role: "user",
+            processingStatus: { in: ["completed", "failed", "cancelled"] },
           },
           orderBy: { createdAt: "desc" },
-          select: { id: true, status: true, diff: true, agentSummary: true },
+          select: {
+            id: true,
+            processingStatus: true,
+            diff: true,
+            agentSummary: true,
+          },
         }),
     );
 
-    const workspace: WorkspaceSnapshot = lastRun
+    const workspace: WorkspaceSnapshot = lastMessage
       ? {
-          hasPriorRun: true,
-          lastRunStatus: lastRun.status,
-          lastRunSummary: lastRun.agentSummary,
-          changedFilesHint: extractChangedFiles(lastRun.diff ?? ""),
+          hasPriorProcessing: true,
+          lastProcessingStatus: lastMessage.processingStatus,
+          lastProcessingSummary: lastMessage.agentSummary,
+          changedFilesHint: extractChangedFiles(lastMessage.diff ?? ""),
         }
       : {
-          hasPriorRun: false,
-          lastRunStatus: null,
-          lastRunSummary: null,
+          hasPriorProcessing: false,
+          lastProcessingStatus: null,
+          lastProcessingSummary: null,
           changedFilesHint: [],
         };
 
-    const recentToolActivity = lastRun
-      ? (await this.events.listRunEvents(lastRun.id, 0))
+    const recentToolActivity = lastMessage
+      ? (await this.events.listSessionEvents(sessionId, 0))
           .filter(
             (event) =>
-              event.type === "agent_tool_call" ||
-              event.type === "agent_tool_result",
+              event.messageId === lastMessage.id &&
+              (event.type === "agent_tool_call" ||
+                event.type === "agent_tool_result"),
           )
           .slice(-RECENT_TOOL_ACTIVITY_LIMIT)
           .map(toolActivityLine)

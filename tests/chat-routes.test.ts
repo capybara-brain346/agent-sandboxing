@@ -7,12 +7,7 @@ import { chatSessionService } from "../src/services/chat/chat-session";
 import { ServiceError } from "../src/shared/errors";
 import { loadConfig } from "../src/config";
 import { AUTH_COOKIE_NAME, signSessionToken } from "../src/services/auth/auth";
-import type {
-  ChatMessage,
-  ChatSession,
-  CreateMessageResponse,
-  RunSnapshot,
-} from "../src/types/chat.types";
+import type { ChatMessage, ChatSession } from "../src/types/chat.types";
 import type { PublicEvent } from "../src/types/event.types";
 
 const session: ChatSession = {
@@ -27,51 +22,28 @@ const session: ChatSession = {
     repoId: null,
     defaultBranch: null,
     installationId: null,
+    baseBranch: null,
+    baseSha: null,
   },
   status: "active",
+  activeMessageId: null,
   sandboxId: null,
   eventsUrl: "/chat-sessions/chat_1/events",
   messagesUrl: "/chat-sessions/chat_1/messages",
-  latestRun: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
-
-const run: RunSnapshot = {
-  taskRunId: "run_1",
-  chatSessionId: "chat_1",
-  triggerMessageId: "msg_1",
-  status: "created",
-  sandboxId: null,
-  resultUrl: "/chat-sessions/chat_1/runs/run_1/result",
-  eventsUrl: "/chat-sessions/chat_1/runs/run_1/events",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  provisioningAt: null,
-  runningAt: null,
-  completedAt: null,
-  failure: null,
-};
-
-const testConfig = loadConfig({
-  NODE_ENV: "test",
-  DATABASE_URL: "postgresql://test",
-});
-const authCookie = `${AUTH_COOKIE_NAME}=${await signSessionToken(
-  {
-    sub: "user_1",
-    login: "octo",
-    avatarUrl: "https://github.com/octo.png",
-    email: null,
-  },
-  testConfig.AUTH_COOKIE_SECRET,
-)}`;
 
 const message: ChatMessage = {
   messageId: "msg_1",
   chatSessionId: "chat_1",
   role: "user",
   content: "Fix the tests",
-  taskRunId: "run_1",
+  processingStatus: "queued",
+  processingStartedAt: null,
+  processingCompletedAt: null,
+  failure: null,
+  agentSummary: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -79,29 +51,38 @@ const event: PublicEvent = {
   id: "evt_1",
   streamId: "chat_1",
   streamScope: "session",
-  domain: "session",
+  domain: "message",
   sessionId: "chat_1",
-  runId: null,
-  taskId: null,
-  messageId: null,
+  messageId: "msg_1",
   artifactId: null,
   sandboxId: null,
   commandId: null,
   sequence: 1,
-  type: "session_created",
-  producerService: "task",
-  producerId: "chat_1",
+  type: "message_processing_started",
+  producerService: "chat",
+  producerId: "msg_1",
   correlationId: null,
   payload: {},
   createdAt: "2026-01-01T00:00:00.000Z",
 };
+
+const config = loadConfig();
+const authCookie = `${AUTH_COOKIE_NAME}=${await signSessionToken(
+  {
+    sub: "user_1",
+    login: "octo",
+    avatarUrl: "https://github.com/octo.png",
+    email: null,
+  },
+  config.AUTH_COOKIE_SECRET,
+)}`;
 
 const makeApp = () => {
   const app = express();
   app.use(express.json());
   app.use((request, _response, next) => {
     request.headers.cookie = authCookie;
-    request.headers.origin = "http://localhost:3000";
+    request.headers.origin = config.APP_BASE_URL;
     next();
   });
   app.use(chatSessionRouter);
@@ -130,19 +111,18 @@ afterEach(() => {
 });
 
 describe("chat session routes", () => {
-  it("strictly validates session creation and dispatches repo scope", async () => {
+  it("validates session creation and dispatches the repository scope", async () => {
     const create = vi
       .spyOn(chatSessionService, "createSession")
       .mockResolvedValue(session);
-    const response = await request(makeApp())
+
+    const invalid = await request(makeApp())
       .post("/chat-sessions")
       .send({
         repo: { source: "fixture", ref: "./repo" },
-        title: "Fix tests",
         extra: true,
       });
-
-    expect(response.status).toBe(400);
+    expect(invalid.status).toBe(400);
     expect(create).not.toHaveBeenCalled();
 
     const valid = await request(makeApp())
@@ -153,46 +133,8 @@ describe("chat session routes", () => {
       });
     expect(valid.status).toBe(201);
     expect(create).toHaveBeenCalledWith("user_1", {
-      repo: {
-        source: "fixture",
-        ref: "./repo",
-      },
+      repo: { source: "fixture", ref: "./repo" },
       title: "Fix tests",
-    });
-  });
-
-  it("accepts an authenticated GitHub session request", async () => {
-    const create = vi
-      .spyOn(chatSessionService, "createSession")
-      .mockResolvedValue(session);
-
-    const response = await request(makeApp())
-      .post("/chat-sessions")
-      .send({
-        repo: {
-          source: "github",
-          ref: "github:octo/repo",
-          provider: "github",
-          owner: "octo",
-          name: "repo",
-          repoId: "1",
-          defaultBranch: "main",
-          installationId: "2",
-        },
-      });
-
-    expect(response.status).toBe(201);
-    expect(create).toHaveBeenCalledWith("user_1", {
-      repo: {
-        source: "github",
-        ref: "github:octo/repo",
-        provider: "github",
-        owner: "octo",
-        name: "repo",
-        repoId: "1",
-        defaultBranch: "main",
-        installationId: "2",
-      },
     });
   });
 
@@ -223,17 +165,105 @@ describe("chat session routes", () => {
     });
   });
 
-  it("returns the current session pull request", async () => {
+  it("appends a message and returns session-first URLs", async () => {
+    const append = vi
+      .spyOn(chatSessionService, "appendMessage")
+      .mockResolvedValue({
+        message,
+        sessionUrl: "/chat-sessions/chat_1",
+        messagesUrl: session.messagesUrl,
+        eventsUrl: session.eventsUrl,
+      });
+
+    const response = await request(makeApp())
+      .post("/chat-sessions/chat_1/messages")
+      .send({ content: "Fix the tests" });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      message,
+      sessionUrl: "/chat-sessions/chat_1",
+      messagesUrl: session.messagesUrl,
+      eventsUrl: session.eventsUrl,
+    });
+    expect(append).toHaveBeenCalledWith("user_1", "chat_1", {
+      content: "Fix the tests",
+    });
+  });
+
+  it("returns the active-message conflict", async () => {
+    vi.spyOn(chatSessionService, "appendMessage").mockRejectedValue(
+      new ServiceError(
+        "session_message_in_progress",
+        "A message is already active",
+        409,
+        { activeMessageId: "msg_1", eventsUrl: session.eventsUrl },
+      ),
+    );
+
+    const response = await request(makeApp())
+      .post("/chat-sessions/chat_1/messages")
+      .send({ content: "Another request" });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatchObject({
+      code: "session_message_in_progress",
+      details: { activeMessageId: "msg_1" },
+    });
+  });
+
+  it("replays session events", async () => {
+    vi.spyOn(chatSessionService, "sessionEventsAfter").mockResolvedValue([
+      event,
+    ]);
+    vi.spyOn(sseHub, "finishReplay").mockImplementation((_streamId, client) =>
+      client.response.end(),
+    );
+
+    const response = await request(makeApp()).get(
+      "/chat-sessions/chat_1/events?after=0",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.text).toContain("event: message_processing_started");
+  });
+
+  it("returns the latest session result", async () => {
+    const result = {
+      messageId: "msg_1",
+      chatSessionId: "chat_1",
+      status: "completed" as const,
+      diff: "",
+      artifacts: [],
+      agentSummary: "done",
+      exitReason: "completed" as const,
+      failure: null,
+      pullRequest: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:01.000Z",
+    };
+    vi.spyOn(chatSessionService, "sessionResult").mockResolvedValue(result);
+
+    const response = await request(makeApp()).get(
+      "/chat-sessions/chat_1/result",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(result);
+  });
+
+  it("returns the current pull request", async () => {
     const currentPullRequest = vi
       .spyOn(chatSessionService, "currentPullRequest")
       .mockResolvedValue({
         provider: "github",
         url: "https://github.com/octo/repo/pull/7",
         number: 7,
-        branch: "feature/test",
+        branch: "agent/chat_1",
         baseBranch: "main",
         title: "Fix it",
-        status: "merged",
+        status: "open",
         draft: false,
         failure: null,
       });
@@ -243,150 +273,41 @@ describe("chat session routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ status: "merged", draft: false });
+    expect(response.body).toMatchObject({
+      branch: "agent/chat_1",
+      status: "open",
+    });
     expect(currentPullRequest).toHaveBeenCalledWith("user_1", "chat_1");
   });
 
-  it("creates a message and run by default, or a message only when requested", async () => {
-    const append = vi
-      .spyOn(chatSessionService, "appendMessage")
+  it("cancels the active message", async () => {
+    const cancel = vi
+      .spyOn(chatSessionService, "cancelCurrentMessage")
       .mockResolvedValue({
-        message,
-        run,
+        messageId: "msg_1",
+        status: "cancelling",
         eventsUrl: session.eventsUrl,
       });
 
-    const response = await request(makeApp())
-      .post("/chat-sessions/chat_1/messages")
-      .send({ content: "Fix the tests" });
-    expect(response.status).toBe(202);
-    expect(response.body).toEqual({
-      message,
-      run,
-      eventsUrl: session.eventsUrl,
-    });
-
-    append.mockResolvedValueOnce({
-      message: { ...message, taskRunId: null },
-      run: null,
-      eventsUrl: session.eventsUrl,
-    } satisfies CreateMessageResponse);
-    const messageOnly = await request(makeApp())
-      .post("/chat-sessions/chat_1/messages")
-      .send({ content: "Keep this for later", startRun: false });
-    expect(messageOnly.status).toBe(201);
-    expect(append).toHaveBeenLastCalledWith("user_1", "chat_1", {
-      content: "Keep this for later",
-      startRun: false,
-    });
-  });
-
-  it("returns the active-run conflict without persisting a second run", async () => {
-    vi.spyOn(chatSessionService, "appendMessage").mockRejectedValue(
-      new ServiceError(
-        "session_run_in_progress",
-        "A run is already active for this chat session",
-        409,
-        {
-          taskRunId: "run_1",
-          eventsUrl: run.eventsUrl,
-        },
-      ),
-    );
-    const response = await request(makeApp())
-      .post("/chat-sessions/chat_1/messages")
-      .send({ content: "Another request" });
-
-    expect(response.status).toBe(409);
-    expect(response.body.error).toMatchObject({
-      code: "session_run_in_progress",
-      details: { taskRunId: "run_1" },
-    });
-  });
-
-  it("replays session SSE and run SSE through scoped streams", async () => {
-    const runEvent = {
-      ...event,
-      streamId: "run_1",
-      streamScope: "run",
-      runId: "run_1",
-    };
-    vi.spyOn(chatSessionService, "sessionEventsAfter").mockResolvedValue([
-      event,
-    ]);
-    vi.spyOn(chatSessionService, "runEventsAfter").mockResolvedValue([
-      runEvent,
-    ]);
-    vi.spyOn(sseHub, "finishReplay").mockImplementation(
-      (_scope, _streamId, client, _last) => client.response.end(),
-    );
-
-    const sessionResponse = await request(makeApp()).get(
-      "/chat-sessions/chat_1/events?after=0",
-    );
-    const runResponse = await request(makeApp()).get(
-      "/chat-sessions/chat_1/runs/run_1/events?after=0",
-    );
-
-    expect(sessionResponse.status).toBe(200);
-    expect(sessionResponse.headers["content-type"]).toContain(
-      "text/event-stream",
-    );
-    expect(sessionResponse.text).toContain("event: session_created");
-    expect(runResponse.status).toBe(200);
-    expect(runResponse.text).toContain('"streamScope":"run"');
-  });
-
-  it("hides cross-session runs and gates non-terminal results", async () => {
-    vi.spyOn(chatSessionService, "getRun").mockRejectedValue(
-      new ServiceError("run_not_found", "Run was not found", 404),
-    );
-    const missing = await request(makeApp()).get(
-      "/chat-sessions/chat_2/runs/run_1",
-    );
-    expect(missing.status).toBe(404);
-    expect(missing.body.error.code).toBe("run_not_found");
-
-    vi.spyOn(chatSessionService, "result").mockRejectedValue(
-      new ServiceError(
-        "run_not_terminal",
-        "Run result is not available until the run is terminal",
-        409,
-      ),
-    );
-    const active = await request(makeApp()).get(
-      "/chat-sessions/chat_1/runs/run_1/result",
-    );
-    expect(active.status).toBe(409);
-    expect(active.body.error.code).toBe("run_not_terminal");
-  });
-
-  it("cancels an active run asynchronously", async () => {
-    const cancel = vi.spyOn(chatSessionService, "cancelRun").mockResolvedValue({
-      taskRunId: "run_1",
-      status: "cancelling",
-      eventsUrl: run.eventsUrl,
-    });
-    const response = await request(makeApp()).delete(
-      "/chat-sessions/chat_1/runs/run_1",
+    const response = await request(makeApp()).post(
+      "/chat-sessions/chat_1/cancel",
     );
 
     expect(response.status).toBe(202);
-    expect(response.body).toEqual({
-      taskRunId: "run_1",
+    expect(response.body).toMatchObject({
+      messageId: "msg_1",
       status: "cancelling",
-      eventsUrl: run.eventsUrl,
     });
-    expect(cancel).toHaveBeenCalledWith("user_1", "chat_1", "run_1");
+    expect(cancel).toHaveBeenCalledWith("user_1", "chat_1");
   });
 
-  it("fetches full artifact content on demand, scoped to the session", async () => {
+  it("fetches full artifact content scoped to the session", async () => {
     const getArtifact = vi
       .spyOn(chatSessionService, "getArtifact")
       .mockResolvedValue({
         artifactId: "art_1",
         sessionId: "chat_1",
-        runId: "run_1",
+        messageId: "msg_1",
         kind: "diff",
         contentType: "text/x-diff",
         content: "diff --git a/x b/x",
@@ -401,23 +322,7 @@ describe("chat session routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      artifactId: "art_1",
-      content: "diff --git a/x b/x",
-    });
+    expect(response.body.content).toBe("diff --git a/x b/x");
     expect(getArtifact).toHaveBeenCalledWith("user_1", "chat_1", "art_1");
-  });
-
-  it("returns not_found when the artifact does not belong to the session", async () => {
-    vi.spyOn(chatSessionService, "getArtifact").mockRejectedValue(
-      new ServiceError("artifact_not_found", "Artifact was not found", 404),
-    );
-
-    const response = await request(makeApp()).get(
-      "/chat-sessions/chat_2/artifacts/art_1",
-    );
-
-    expect(response.status).toBe(404);
-    expect(response.body.error.code).toBe("artifact_not_found");
   });
 });

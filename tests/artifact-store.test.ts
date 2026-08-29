@@ -35,7 +35,7 @@ describe("ArtifactStore", () => {
 
     const pointer = await store.create({
       sessionId: "chat_1",
-      runId: "run_1",
+      messageId: "msg_1",
       kind: "diff",
       contentType: "text/x-diff",
       content: "diff --git a/x b/x\n+hello",
@@ -105,7 +105,7 @@ describe("ArtifactStore", () => {
     const store = new ArtifactStore(prisma);
     const pointer = await store.create({
       sessionId: "chat_1",
-      runId: "run_1",
+      messageId: "msg_1",
       kind: "worker_report",
       contentType: "application/json",
       content: '{"status":"completed"}',
@@ -115,7 +115,7 @@ describe("ArtifactStore", () => {
     expect(full).toMatchObject({
       artifactId: pointer.artifactId,
       sessionId: "chat_1",
-      runId: "run_1",
+      messageId: "msg_1",
       kind: "worker_report",
       content: '{"status":"completed"}',
     });

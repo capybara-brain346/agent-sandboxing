@@ -1,29 +1,26 @@
-import type { TaskStatus } from "@/api/types";
+import type { MessageProcessingStatus } from "@/api/types";
 import { TERMINAL_STATUSES } from "@/api/types";
 import { cn } from "@/lib/utils";
 
-const LABEL_BY_STATUS: Record<TaskStatus, string> = {
-  created: "Queued",
-  provisioning: "Provisioning",
-  running: "Running",
+const LABEL_BY_STATUS: Record<MessageProcessingStatus, string> = {
+  queued: "Queued",
+  working: "Working",
   completed: "Completed",
   failed: "Failed",
   cancelled: "Cancelled",
 };
 
-const DOT_CLASS_BY_STATUS: Record<TaskStatus, string> = {
-  created: "bg-fg-subtle",
-  provisioning: "bg-status-running",
-  running: "bg-status-running",
+const DOT_CLASS_BY_STATUS: Record<MessageProcessingStatus, string> = {
+  queued: "bg-fg-subtle",
+  working: "bg-status-running",
   completed: "bg-status-completed",
   failed: "bg-status-failed",
   cancelled: "bg-status-cancelled",
 };
 
-const TEXT_CLASS_BY_STATUS: Record<TaskStatus, string> = {
-  created: "text-fg-muted",
-  provisioning: "text-status-running",
-  running: "text-status-running",
+const TEXT_CLASS_BY_STATUS: Record<MessageProcessingStatus, string> = {
+  queued: "text-fg-muted",
+  working: "text-status-running",
   completed: "text-status-completed",
   failed: "text-status-failed",
   cancelled: "text-fg-muted",
@@ -33,7 +30,7 @@ export const StatusPill = ({
   status,
   size = "md",
 }: {
-  status: TaskStatus;
+  status: MessageProcessingStatus;
   size?: "sm" | "md";
 }) => {
   const nonTerminal = !TERMINAL_STATUSES.has(status);

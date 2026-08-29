@@ -41,7 +41,7 @@ export const SkeletonMessage = ({
   </div>
 );
 
-export const SkeletonTaskRow = () => (
+export const SkeletonTimelineRow = () => (
   <div className="flex items-center gap-2 px-3 py-1.5" aria-hidden>
     <Skeleton className="h-3 w-8" />
     <Skeleton className="size-3.5 rounded-full" />

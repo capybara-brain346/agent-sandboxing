@@ -17,7 +17,7 @@ import { CodeBlock } from "./CodeBlock";
 import { ToolChip } from "./ToolChip";
 
 const ICON_BY_PRODUCER: Record<string, LucideIcon> = {
-  task: ListChecks,
+  chat: ListChecks,
   sandbox: Box,
   command: Terminal,
   runtime: Cpu,
@@ -38,7 +38,7 @@ const describeDetail = (event: PublicChatEvent): string | null => {
     case "command_failed":
     case "command_timed_out":
     case "sandbox_failed":
-    case "task_failed":
+    case "message_processing_failed":
       return typeof payload.message === "string" ? payload.message : null;
     case "agent_tool_call":
       return typeof payload.tool_name === "string" ? payload.tool_name : null;
@@ -68,7 +68,7 @@ const formatElapsed = (ms: number): string => {
   return `+${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
 };
 
-export const TaskRow = ({
+export const TimelineRow = ({
   event,
   previousEvent,
 }: {

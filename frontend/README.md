@@ -1,7 +1,7 @@
 # Frontend
 
 Repo-scoped chat workspace for the Chat Session Service: pick a repo, send a
-message, watch the resulting run execute via the live SSE event stream, and
+message, watch message processing via the live session SSE event stream, and
 view the terminal result/diff. See
 [`docs/modules/frontend/README.md`](../docs/modules/frontend/README.md) for
 the module overview and [`docs/modules/chat-session/README.md`](../docs/modules/chat-session/README.md)

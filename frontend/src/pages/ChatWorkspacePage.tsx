@@ -12,10 +12,10 @@ import { Tabs } from "radix-ui";
 import { GripVertical, Ban } from "lucide-react";
 import {
   ApiError,
-  cancelRun,
+  cancelCurrentMessage,
   getChatSession,
   getCurrentPullRequest,
-  getRunResult,
+  getSessionResult,
   listMessages,
   sendMessage,
 } from "@/api/client";
@@ -24,8 +24,7 @@ import type {
   ChatMessage,
   ChatSession,
   PullRequestMetadata,
-  RunResult,
-  RunSnapshot,
+  SessionResult,
 } from "@/api/types";
 import { TERMINAL_STATUSES } from "@/api/types";
 import {
@@ -35,7 +34,7 @@ import {
   PullRequestCard,
   PromptBar,
   StatusPill,
-  TaskRow,
+  TimelineRow,
   ThinkingBlock,
 } from "@/components/ai";
 import { Alert } from "@/components/ui/alert";
@@ -45,12 +44,12 @@ import { cn } from "@/lib/utils";
 
 const SESSION_REFRESH_EVENT_TYPES = new Set([
   "message_created",
-  "run_requested",
-  "run_created",
-  "run_completed",
-  "run_failed",
-  "run_cancelled",
-  "run_result_ready",
+  "message_processing_requested",
+  "message_processing_started",
+  "message_processing_completed",
+  "message_processing_failed",
+  "message_processing_cancelled",
+  "message_result_ready",
 ]);
 
 const PR_EVENT_TYPES = new Set([
@@ -185,8 +184,8 @@ const ThreadPane = ({
   );
 };
 
-const RunPanel = ({
-  run,
+const ProcessingPanel = ({
+  message,
   sessionId,
   baseBranch,
   events,
@@ -198,12 +197,12 @@ const RunPanel = ({
   onCancel,
   onPullRequest,
 }: {
-  run: RunSnapshot;
+  message: ChatMessage;
   sessionId: string;
   baseBranch: string;
   events: ReturnType<typeof useEventStream>["events"];
   connectionError: boolean;
-  result: RunResult | null;
+  result: SessionResult | null;
   pullRequest: PullRequestMetadata | null;
   resultError: string | null;
   cancelling: boolean;
@@ -211,7 +210,9 @@ const RunPanel = ({
   onPullRequest: (pullRequest: PullRequestMetadata | null) => void;
 }) => {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("timeline");
-  const isTerminal = TERMINAL_STATUSES.has(run.status);
+  const isTerminal =
+    message.processingStatus !== null &&
+    TERMINAL_STATUSES.has(message.processingStatus);
   const files = useMemo(() => (result ? parseDiff(result.diff) : []), [result]);
 
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -265,9 +266,11 @@ const RunPanel = ({
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-xs text-fg-muted">
-            {run.taskRunId}
+            {message.messageId}
           </span>
-          <StatusPill status={run.status} size="sm" />
+          {message.processingStatus && (
+            <StatusPill status={message.processingStatus} size="sm" />
+          )}
         </div>
         {!isTerminal && (
           <Button
@@ -306,10 +309,10 @@ const RunPanel = ({
             </Alert>
           </div>
         )}
-        {run.failure && (
+        {message.failure && (
           <div className="px-3 pt-2">
             <Alert variant="error">
-              {run.failure.code}: {run.failure.message}
+              {message.failure.code}: {message.failure.message}
             </Alert>
           </div>
         )}
@@ -327,7 +330,7 @@ const RunPanel = ({
           ) : (
             <ol>
               {events.map((event, index) => (
-                <TaskRow
+                <TimelineRow
                   key={event.id}
                   event={event}
                   previousEvent={events[index - 1]}
@@ -340,7 +343,9 @@ const RunPanel = ({
         <Tabs.Content value="files" className="h-full overflow-y-auto p-3">
           {files.length === 0 ? (
             <p className="py-10 text-center text-sm text-fg-subtle">
-              {isTerminal ? "No files changed." : "Waiting for run to finish…"}
+              {isTerminal
+                ? "No files changed."
+                : "Waiting for message processing to finish…"}
             </p>
           ) : (
             <ul className="flex flex-col divide-y divide-border-subtle">
@@ -372,7 +377,7 @@ const RunPanel = ({
             <p className="py-10 text-center text-sm text-fg-subtle">
               {isTerminal
                 ? "Loading diff…"
-                : "Diff available once the run finishes."}
+                : "Diff available once message processing finishes."}
             </p>
           )}
         </Tabs.Content>
@@ -439,7 +444,9 @@ export const ChatWorkspacePage = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [sessionResult, setSessionResult] = useState<SessionResult | null>(
+    null,
+  );
   const [latestPullRequest, setLatestPullRequest] =
     useState<PullRequestMetadata | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -450,19 +457,24 @@ export const ChatWorkspacePage = () => {
   const [cancelling, setCancelling] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
 
-  const { events: sessionEvents } = useEventStream(session?.eventsUrl ?? null);
+  const { events: sessionEvents, connectionError: sessionConnectionError } =
+    useEventStream(session?.eventsUrl ?? null);
   const lastHandledSequence = useRef(0);
   const { setActiveSession } = useActiveSession();
 
-  const run = session?.latestRun ?? null;
-  const { events: runEvents, connectionError: runConnectionError } =
-    useEventStream(run?.eventsUrl ?? null);
+  const processingMessage =
+    messages
+      .filter(
+        (message) =>
+          message.role === "user" && message.processingStatus !== null,
+      )
+      .at(-1) ?? null;
   const eventPullRequest = useMemo(
-    () => pullRequestFromEvents(runEvents),
-    [runEvents],
+    () => pullRequestFromEvents(sessionEvents),
+    [sessionEvents],
   );
   const pullRequest =
-    latestPullRequest ?? runResult?.pullRequest ?? eventPullRequest;
+    latestPullRequest ?? sessionResult?.pullRequest ?? eventPullRequest;
 
   const handlePullRequest = useCallback(
     (next: PullRequestMetadata | null) => setLatestPullRequest(next),
@@ -475,9 +487,9 @@ export const ChatWorkspacePage = () => {
 
   useEffect(() => {
     if (session) {
-      setActiveSession({ repo: session.repo, run: session.latestRun });
+      setActiveSession({ repo: session.repo, message: processingMessage });
     }
-  }, [session, setActiveSession]);
+  }, [processingMessage, session, setActiveSession]);
 
   useEffect(() => () => setActiveSession(null), [setActiveSession]);
 
@@ -496,7 +508,7 @@ export const ChatWorkspacePage = () => {
     let cancelled = false;
     setSession(null);
     setMessages([]);
-    setRunResult(null);
+    setSessionResult(null);
     setLatestPullRequest(null);
     setLoadError(null);
     lastHandledSequence.current = 0;
@@ -524,18 +536,19 @@ export const ChatWorkspacePage = () => {
     refresh().catch(() => undefined);
   }, [sessionEvents, refresh]);
 
-  const runId = run?.taskRunId ?? null;
-  const runStatus = run?.status ?? null;
-  const runIsTerminal = runStatus !== null && TERMINAL_STATUSES.has(runStatus);
+  const processingStatus = processingMessage?.processingStatus ?? null;
+  const processingIsTerminal =
+    processingStatus !== null && TERMINAL_STATUSES.has(processingStatus);
 
   useEffect(() => {
-    setRunResult(null);
+    setSessionResult(null);
     setResultError(null);
-    if (!sessionId || !runId || !runIsTerminal) return;
+    if (!sessionId || !processingMessage?.messageId || !processingIsTerminal)
+      return;
     let cancelled = false;
-    getRunResult(sessionId, runId)
+    getSessionResult(sessionId)
       .then((result) => {
-        if (!cancelled) setRunResult(result);
+        if (!cancelled) setSessionResult(result);
         if (!cancelled) setLatestPullRequest(result.pullRequest);
       })
       .catch((caught) => {
@@ -543,13 +556,13 @@ export const ChatWorkspacePage = () => {
           setResultError(
             caught instanceof ApiError
               ? caught.message
-              : "Failed to load run result",
+              : "Failed to load session result",
           );
       });
     return () => {
       cancelled = true;
     };
-  }, [sessionId, runId, runIsTerminal]);
+  }, [sessionId, processingIsTerminal, processingMessage?.messageId]);
 
   if (!sessionId)
     return (
@@ -566,7 +579,11 @@ export const ChatWorkspacePage = () => {
       chatSessionId: sessionId,
       role: "user",
       content,
-      taskRunId: null,
+      processingStatus: "queued",
+      processingStartedAt: null,
+      processingCompletedAt: null,
+      failure: null,
+      agentSummary: null,
       createdAt: new Date().toISOString(),
     };
     setMessages((previous) => [...previous, optimistic]);
@@ -579,11 +596,15 @@ export const ChatWorkspacePage = () => {
             : message,
         ),
       );
-      if (response.run) {
-        setSession((previous) =>
-          previous ? { ...previous, latestRun: response.run } : previous,
-        );
-      }
+      setSession((previous) =>
+        previous
+          ? {
+              ...previous,
+              status: "working",
+              activeMessageId: response.message.messageId,
+            }
+          : previous,
+      );
     } catch (caught) {
       setMessages((previous) =>
         previous.filter(
@@ -599,25 +620,26 @@ export const ChatWorkspacePage = () => {
   };
 
   const onCancel = async () => {
-    if (!runId) return;
     setCancelling(true);
     setCancelError(null);
     try {
-      await cancelRun(sessionId, runId);
+      await cancelCurrentMessage(sessionId);
       await refresh();
     } catch (caught) {
       setCancelError(
-        caught instanceof ApiError ? caught.message : "Failed to cancel run",
+        caught instanceof ApiError
+          ? caught.message
+          : "Failed to cancel message processing",
       );
     } finally {
       setCancelling(false);
     }
   };
 
-  const runActive = run !== null && !runIsTerminal;
-  const composerDisabled = sending || runActive;
-  const composerHint = runActive
-    ? "The agent is working on the previous message. Wait for it to finish or cancel it."
+  const processingActive = processingMessage !== null && !processingIsTerminal;
+  const composerDisabled = sending || processingActive;
+  const composerHint = processingActive
+    ? "The agent is processing the previous message. Wait for it to finish or cancel it."
     : null;
 
   return (
@@ -650,8 +672,8 @@ export const ChatWorkspacePage = () => {
           ) : (
             <ThreadPane
               messages={messages}
-              pending={runActive}
-              pendingEvents={runEvents}
+              pending={processingActive}
+              pendingEvents={sessionEvents}
             />
           )}
           {sendError && <Alert variant="error">{sendError}</Alert>}
@@ -666,7 +688,7 @@ export const ChatWorkspacePage = () => {
           />
         </div>
 
-        {run && (
+        {processingMessage && (
           <>
             <ResizeHandle
               onResize={(deltaX) =>
@@ -682,17 +704,17 @@ export const ChatWorkspacePage = () => {
               style={{ width: inspectorWidth }}
               className="max-w-[70vw] shrink-0 border-l border-border-subtle bg-panel"
             >
-              <RunPanel
-                run={run}
+              <ProcessingPanel
+                message={processingMessage}
                 sessionId={sessionId}
                 baseBranch={
                   session?.repo.baseBranch ??
                   session?.repo.defaultBranch ??
                   "main"
                 }
-                events={runEvents}
-                connectionError={runConnectionError}
-                result={runResult}
+                events={sessionEvents}
+                connectionError={sessionConnectionError}
+                result={sessionResult}
                 pullRequest={pullRequest}
                 resultError={resultError}
                 cancelling={cancelling}

@@ -57,20 +57,20 @@ describe("dataset eval suite", () => {
     expect(passesDatasetThreshold(scores)).toBe(false);
   });
 
-  it("requires configured post-run checks to pass", () => {
+  it("requires configured post-processing checks to pass", () => {
     const testCase = loadRepoCases().find(
       (candidate) => candidate.id === "python-mini-update-cli-help",
     );
     if (!testCase) throw new Error("repo case not found");
 
     const observed: RepoObserved = {
-      runStatus: "completed",
+      processingStatus: "completed",
       workerStatus: "completed",
       delegationCount: 1,
       changedFiles: ["src/acme_tools/cli.py", "tests/test_cli.py"],
       diff: "Run Acme Tools utilities.",
       testsRun: ["python -m pytest tests/test_cli.py"],
-      postRunChecks: [
+      postProcessingChecks: [
         {
           command: "python -m pytest tests/test_cli.py",
           exitCode: 1,
@@ -89,7 +89,7 @@ describe("dataset eval suite", () => {
         }),
       ],
       toolEvents: [],
-      runIds: ["run_1"],
+      messageIds: ["msg_1"],
       finalMessage: "Verified with pytest; the tests passed.",
       assistantMessages: ["Verified with pytest; the tests passed."],
     };
@@ -107,13 +107,13 @@ describe("dataset eval suite", () => {
     if (!testCase) throw new Error("repo case not found");
 
     const observed: RepoObserved = {
-      runStatus: "completed",
+      processingStatus: "completed",
       workerStatus: "blocked",
       delegationCount: 2,
       changedFiles: [],
       diff: "",
       testsRun: [],
-      postRunChecks: [],
+      postProcessingChecks: [],
       workerReports: [
         workerResult({
           status: "blocked",
@@ -121,7 +121,7 @@ describe("dataset eval suite", () => {
         }),
       ],
       toolEvents: [],
-      runIds: ["run_1", "run_2"],
+      messageIds: ["msg_1", "msg_2"],
       finalMessage:
         "Blocked because ACME_PYPI_TOKEN is not available; no files were changed.",
       assistantMessages: [],

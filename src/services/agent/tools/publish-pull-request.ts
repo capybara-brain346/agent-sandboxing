@@ -34,7 +34,7 @@ export const createPublishPullRequestTool = (
   config: Pick<Config, "AGENT_TOOL_TIMEOUT_MS">,
   signal: AbortSignal,
   sessionId: string,
-  runId: string,
+  messageId: string,
   github: PublishPullRequestService,
 ) =>
   tool({
@@ -46,7 +46,7 @@ export const createPublishPullRequestTool = (
       try {
         return await github.publishPullRequest(
           sessionId,
-          runId,
+          messageId,
           { runtime, containerName },
           input,
           { timeoutMs: config.AGENT_TOOL_TIMEOUT_MS, signal },

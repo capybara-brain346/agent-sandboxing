@@ -12,9 +12,8 @@ import type {
   GitHubBranch,
   Page,
   PullRequestMetadata,
-  RunCancellationResponse,
-  RunResult,
-  RunSnapshot,
+  MessageCancellationResponse,
+  SessionResult,
   UpdateChatSessionRequest,
 } from "./types";
 
@@ -117,40 +116,18 @@ export const sendMessage = (
     body: JSON.stringify(input),
   });
 
-export const listRuns = (
-  sessionId: string,
-  params: { limit?: number; cursor?: string } = {},
-): Promise<Page<RunSnapshot>> => {
-  const query = new URLSearchParams();
-  if (params.limit) query.set("limit", String(params.limit));
-  if (params.cursor) query.set("cursor", params.cursor);
-  const suffix = query.toString();
-  return request(
-    `/chat-sessions/${sessionId}/runs${suffix ? `?${suffix}` : ""}`,
-  );
-};
-
-export const getRun = (
-  sessionId: string,
-  runId: string,
-): Promise<RunSnapshot> => request(`/chat-sessions/${sessionId}/runs/${runId}`);
-
 export const getCurrentPullRequest = (
   sessionId: string,
 ): Promise<PullRequestMetadata | null> =>
   request(`/chat-sessions/${sessionId}/pull-request`);
 
-export const getRunResult = (
-  sessionId: string,
-  runId: string,
-): Promise<RunResult> =>
-  request(`/chat-sessions/${sessionId}/runs/${runId}/result`);
+export const getSessionResult = (sessionId: string): Promise<SessionResult> =>
+  request(`/chat-sessions/${sessionId}/result`);
 
-export const cancelRun = (
+export const cancelCurrentMessage = (
   sessionId: string,
-  runId: string,
-): Promise<RunCancellationResponse> =>
-  request(`/chat-sessions/${sessionId}/runs/${runId}`, { method: "DELETE" });
+): Promise<MessageCancellationResponse> =>
+  request(`/chat-sessions/${sessionId}/cancel`, { method: "POST" });
 
 export const getArtifact = (
   sessionId: string,

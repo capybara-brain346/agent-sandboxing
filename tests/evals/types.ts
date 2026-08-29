@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { WorkerResult } from "../../src/types/harness.types";
-import type { TaskStatus } from "../../src/types/task.types";
+import type { MessageProcessingStatus } from "../../src/types/message-processing.types";
 
 const stringList = z.array(z.string().trim().min(1));
 export const workerResultSchema: z.ZodType<WorkerResult> = z
@@ -20,9 +20,9 @@ const chatMessageSchema = z
 
 const workspaceSchema = z
   .object({
-    hasPriorRun: z.boolean(),
-    lastRunStatus: z.string().nullable(),
-    lastRunSummary: z.string().nullable(),
+    hasPriorProcessing: z.boolean(),
+    lastProcessingStatus: z.string().nullable(),
+    lastProcessingSummary: z.string().nullable(),
     changedFilesHint: z.array(z.string()),
   })
   .strict();
@@ -153,7 +153,7 @@ export const repoCaseSchema = z
     messages: z.array(repoMessageSchema).min(1),
     expect: z
       .object({
-        runStatus: z.enum(["completed", "failed", "cancelled"]),
+        processingStatus: z.enum(["completed", "failed", "cancelled"]),
         workerStatus: z.enum(["completed", "blocked", "failed"]).optional(),
         shouldDelegate: z.boolean(),
         minDelegations: z.number().int().nonnegative().optional(),
@@ -163,7 +163,7 @@ export const repoCaseSchema = z
         diffMustContain: stringList.default([]),
         diffMustNotContain: stringList.default([]),
         requiredTests: stringList.default([]),
-        postRunCommands: z.array(z.string().trim().min(1)).default([]),
+        postProcessingCommands: z.array(z.string().trim().min(1)).default([]),
         responseMustContain: stringList.default([]),
         responseMustNotContain: stringList.default([]),
         responseMustMentionTests: z.boolean().default(false),
@@ -186,7 +186,7 @@ export type RepoToolEvent = {
   command?: string;
 };
 
-export type RepoPostRunCheck = {
+export type RepoPostProcessingCheck = {
   command: string;
   exitCode: number | null;
   timedOut: boolean;
@@ -199,16 +199,16 @@ export type RepoPostRunCheck = {
 };
 
 export type RepoObserved = {
-  runStatus: TaskStatus | null;
+  processingStatus: MessageProcessingStatus | null;
   workerStatus: "completed" | "blocked" | "failed" | null;
   delegationCount: number;
   changedFiles: string[];
   diff: string;
   testsRun: string[];
-  postRunChecks: RepoPostRunCheck[];
+  postProcessingChecks: RepoPostProcessingCheck[];
   workerReports: WorkerResult[];
   toolEvents: RepoToolEvent[];
-  runIds: string[];
+  messageIds: string[];
   finalMessage: string;
   assistantMessages: string[];
   error?: string;

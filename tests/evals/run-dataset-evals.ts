@@ -67,7 +67,7 @@ const runCase = async (
   try {
     const decision = await agent.decide({
       ...testCase.input,
-      runId: `eval-${testCase.id}`,
+      messageId: `eval-${testCase.id}`,
       signal,
       delegate,
     });

@@ -17,9 +17,9 @@ const makePrisma = (
     } | null;
     messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
     messageCount: number;
-    lastRun: {
+    lastMessage: {
       id: string;
-      status: string;
+      processingStatus: string;
       diff: string | null;
       agentSummary: string | null;
     } | null;
@@ -40,16 +40,14 @@ const makePrisma = (
     chatMessage: {
       findMany: vi.fn(async () => overrides.messages ?? []),
       count: vi.fn(async () => overrides.messageCount ?? 0),
-    },
-    task: {
-      findFirst: vi.fn(async () => overrides.lastRun ?? null),
+      findFirst: vi.fn(async () => overrides.lastMessage ?? null),
     },
   }) as unknown as SessionContextPrismaCollaborator;
 
 const makeEventStore = (
   events: PublicEvent[] = [],
 ): SessionContextEventStore => ({
-  listRunEvents: vi.fn(async () => events),
+  listSessionEvents: vi.fn(async () => events),
 });
 
 const event = (
@@ -57,15 +55,19 @@ const event = (
   payload: Record<string, unknown>,
 ): PublicEvent => ({
   id: "evt_1",
-  streamId: "run_1",
-  taskId: "run_1",
+  streamId: "chat_1",
+  streamScope: "session",
+  domain: "agent",
+  sessionId: "chat_1",
   sandboxId: "sbox_1",
   commandId: null,
   sequence: 1,
   type,
   producerService: "agent",
-  producerId: "run_1",
+  producerId: "msg_1",
   correlationId: "call_1",
+  messageId: "msg_1",
+  artifactId: null,
   payload,
   createdAt: "2026-01-01T00:00:00.000Z",
 });
@@ -96,12 +98,12 @@ describe("SessionContextBuilder", () => {
       "first",
       "second",
     ]);
-    expect(context.workspace.hasPriorRun).toBe(false);
+    expect(context.workspace.hasPriorProcessing).toBe(false);
     expect(context.workspace.changedFilesHint).toEqual([]);
     expect(context.recentToolActivity).toEqual([]);
   });
 
-  it("extracts changed files from the last terminal run's diff", async () => {
+  it("extracts changed files from the last terminal message's diff", async () => {
     const diff = [
       "diff --git a/src/a.ts b/src/a.ts",
       "index 111..222 100644",
@@ -111,9 +113,9 @@ describe("SessionContextBuilder", () => {
     ].join("\n");
     const builder = new SessionContextBuilder(
       makePrisma({
-        lastRun: {
-          id: "run_1",
-          status: "completed",
+        lastMessage: {
+          id: "msg_1",
+          processingStatus: "completed",
           diff,
           agentSummary: "did stuff",
         },
@@ -121,8 +123,8 @@ describe("SessionContextBuilder", () => {
       makeEventStore(),
     );
     const context = await builder.build("chat_1");
-    expect(context.workspace.hasPriorRun).toBe(true);
-    expect(context.workspace.lastRunStatus).toBe("completed");
+    expect(context.workspace.hasPriorProcessing).toBe(true);
+    expect(context.workspace.lastProcessingStatus).toBe("completed");
     expect(context.workspace.changedFilesHint).toEqual([
       "src/a.ts",
       "src/b.ts",
@@ -177,20 +179,20 @@ describe("SessionContextBuilder", () => {
     expect(context.shouldCompact).toBe(false);
   });
 
-  it("limits recent messages to RECENT_MESSAGE_LIMIT and derives tool activity only when a prior run exists", async () => {
+  it("limits recent messages to RECENT_MESSAGE_LIMIT and derives tool activity only when prior processing exists", async () => {
     const events = makeEventStore([
       event("agent_tool_call", { tool_name: "read", args: { path: "a.ts" } }),
       event("agent_tool_result", {
         tool_name: "read",
         result_snippet: "file contents",
       }),
-      event("run_created", { message_id: "msg_1" }),
+      event("message_processing_started", { message_id: "msg_1" }),
     ]);
     const builder = new SessionContextBuilder(
       makePrisma({
-        lastRun: {
-          id: "run_1",
-          status: "completed",
+        lastMessage: {
+          id: "msg_1",
+          processingStatus: "completed",
           diff: null,
           agentSummary: null,
         },

@@ -21,7 +21,7 @@ import type { SimpleExecOptions } from "../../types/sandbox.types";
 import { decryptToken } from "../auth/token-crypto";
 import type { EventStore } from "../events/event-store";
 import { workspaceRoot } from "../sandbox/workspace";
-import { githubRunBranch, sameGitBranch } from "./branch";
+import { githubSessionBranch, sameGitBranch } from "./branch";
 
 export type GitHubRepositoryRecord = {
   id: string;
@@ -94,7 +94,7 @@ export type GitHubPublishRuntime = {
 type PullRequestRow = {
   id: string;
   sessionId: string;
-  runId: string | null;
+  messageId: string | null;
   provider: string;
   owner: string;
   repo: string;
@@ -586,7 +586,7 @@ export class GitHubService {
     api?: GitHubApi,
     private readonly events?: Pick<
       EventStore,
-      "appendRunEvent" | "appendRunEventInTransaction"
+      "appendSessionEvent" | "appendSessionEventInTransaction"
     >,
     private readonly publish: (event: PublicEvent) => void = () => undefined,
   ) {
@@ -759,7 +759,7 @@ export class GitHubService {
 
   async publishPullRequest(
     sessionId: string,
-    runId: string,
+    messageId: string,
     target: { runtime: GitHubPublishRuntime; containerName: string },
     input: GitHubPublishPullRequestInput,
     options: { timeoutMs: number; signal: AbortSignal },
@@ -799,7 +799,7 @@ export class GitHubService {
         "The configured Git remote does not match the session repository",
       );
 
-    const branch = githubRunBranch(sessionId, runId);
+    const branch = githubSessionBranch(sessionId);
     if (
       sameGitBranch(repository.baseBranch, branch) ||
       sameGitBranch(repository.defaultBranch, branch)
@@ -833,7 +833,7 @@ export class GitHubService {
         return operationFailure(
           "publish",
           "git_branch_mismatch",
-          "Workspace changes are not on the expected run branch",
+          "Workspace changes are not on the expected session branch",
         );
       const checkout = await this.publishExec(
         target,
@@ -867,7 +867,7 @@ export class GitHubService {
         data: {
           id: `pr_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
           sessionId,
-          runId,
+          messageId,
           provider: "github",
           owner: repository.owner,
           repo: repository.name,
@@ -880,10 +880,10 @@ export class GitHubService {
           isCurrent: true,
         },
       });
-      const event = await this.appendRunEventInTransaction(
+      const event = await this.appendSessionEventInTransaction(
         tx,
         sessionId,
-        runId,
+        messageId,
         "pull_request_creation_started",
         row,
         { pull_request: pullRequestMetadata(row) },
@@ -897,7 +897,7 @@ export class GitHubService {
       await this.resetWorkspaceIndex(target, options);
       return this.failPublishingPullRequest(
         sessionId,
-        runId,
+        messageId,
         creating.row,
         add.code,
         add.message,
@@ -913,7 +913,7 @@ export class GitHubService {
       await this.resetWorkspaceIndex(target, options);
       return this.failPublishingPullRequest(
         sessionId,
-        runId,
+        messageId,
         creating.row,
         commit.code,
         commit.message,
@@ -928,7 +928,7 @@ export class GitHubService {
       await this.resetPublishedCommit(target, options);
       return this.failPublishingPullRequest(
         sessionId,
-        runId,
+        messageId,
         creating.row,
         code,
         message,
@@ -957,9 +957,9 @@ export class GitHubService {
     );
     if (!pushed.success) return failAfterCommit(pushed.code, pushed.message);
 
-    const pushedEvent = await this.events?.appendRunEvent({
+    const pushedEvent = await this.events?.appendSessionEvent({
       sessionId,
-      runId,
+      messageId,
       type: "pull_request_branch_pushed",
       producerService: "github",
       producerId: creating.row.id,
@@ -1001,7 +1001,7 @@ export class GitHubService {
     await this.resetPublishedCommit(target, options);
     const next = await this.persistPullRequestUpdate(
       sessionId,
-      runId,
+      messageId,
       creating.row,
       {
         number: created.number,
@@ -1094,7 +1094,7 @@ export class GitHubService {
 
   private async failPublishingPullRequest(
     sessionId: string,
-    runId: string,
+    messageId: string,
     row: PullRequestRow,
     code: string,
     message: string,
@@ -1102,7 +1102,7 @@ export class GitHubService {
   ): Promise<GitHubPullRequestToolResult> {
     const next = await this.persistPullRequestUpdate(
       sessionId,
-      runId,
+      messageId,
       row,
       {
         number: null,
@@ -1131,12 +1131,12 @@ export class GitHubService {
 
   async pullRequest(
     sessionId: string,
-    runId: string,
+    messageId: string,
     input: GitHubPullRequestActionInput,
   ): Promise<GitHubPullRequestToolResult> {
     const repository = await this.sessionRepository(sessionId);
     if (input.action === "create")
-      return this.createPullRequest(sessionId, runId, repository, input);
+      return this.createPullRequest(sessionId, messageId, repository, input);
 
     const row = input.number
       ? await this.prisma.pullRequest.findFirst({
@@ -1164,7 +1164,7 @@ export class GitHubService {
       if (!this.api.commentPullRequest) {
         const next = await this.persistPullRequestFailure(
           sessionId,
-          runId,
+          messageId,
           input.action,
           row,
           "github_api_unavailable",
@@ -1190,7 +1190,7 @@ export class GitHubService {
         const github = githubFailure(error);
         const next = await this.persistPullRequestFailure(
           sessionId,
-          runId,
+          messageId,
           input.action,
           row,
           "github_pull_request_failed",
@@ -1205,14 +1205,18 @@ export class GitHubService {
           github,
         );
       }
-      const next = await this.persistPullRequestComment(sessionId, runId, row);
+      const next = await this.persistPullRequestComment(
+        sessionId,
+        messageId,
+        row,
+      );
       return operationSuccess(input.action, pullRequestMetadata(next));
     }
 
     if (!this.api.updatePullRequest) {
       const next = await this.persistPullRequestFailure(
         sessionId,
-        runId,
+        messageId,
         input.action,
         row,
         "github_api_unavailable",
@@ -1253,7 +1257,7 @@ export class GitHubService {
         if (!this.api.readyForReview) {
           const next = await this.persistPullRequestFailure(
             sessionId,
-            runId,
+            messageId,
             input.action,
             row,
             "github_draft_transition_unsupported",
@@ -1278,7 +1282,7 @@ export class GitHubService {
       const github = githubFailure(error);
       const next = await this.persistPullRequestFailure(
         sessionId,
-        runId,
+        messageId,
         input.action,
         row,
         "github_pull_request_failed",
@@ -1301,7 +1305,7 @@ export class GitHubService {
           : updated.status;
     const next = await this.persistPullRequestUpdate(
       sessionId,
-      runId,
+      messageId,
       row,
       {
         number: updated.number,
@@ -1327,7 +1331,7 @@ export class GitHubService {
 
   private async createPullRequest(
     sessionId: string,
-    runId: string,
+    messageId: string,
     repository: GitHubSessionRepository,
     input: GitHubPullRequestActionInput,
   ): Promise<GitHubPullRequestToolResult> {
@@ -1370,7 +1374,7 @@ export class GitHubService {
         data: {
           id: `pr_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
           sessionId,
-          runId,
+          messageId,
           provider: "github",
           owner: repository.owner,
           repo: repository.name,
@@ -1383,10 +1387,10 @@ export class GitHubService {
           isCurrent: true,
         },
       });
-      const event = await this.appendRunEventInTransaction(
+      const event = await this.appendSessionEventInTransaction(
         tx,
         sessionId,
-        runId,
+        messageId,
         "pull_request_creation_started",
         row,
         { pull_request: pullRequestMetadata(row) },
@@ -1398,7 +1402,7 @@ export class GitHubService {
     if (!this.api.createPullRequest)
       return this.failCreatingPullRequest(
         sessionId,
-        runId,
+        messageId,
         creating.row,
         "github_api_unavailable",
         "GitHub pull request API is unavailable",
@@ -1421,7 +1425,7 @@ export class GitHubService {
       const github = githubFailure(error);
       return this.failCreatingPullRequest(
         sessionId,
-        runId,
+        messageId,
         creating.row,
         "github_pull_request_failed",
         "GitHub pull request creation failed",
@@ -1430,7 +1434,7 @@ export class GitHubService {
     }
     const next = await this.persistPullRequestUpdate(
       sessionId,
-      runId,
+      messageId,
       creating.row,
       {
         number: created.number,
@@ -1453,7 +1457,7 @@ export class GitHubService {
 
   private async failCreatingPullRequest(
     sessionId: string,
-    runId: string,
+    messageId: string,
     row: PullRequestRow,
     code: string,
     message: string,
@@ -1461,7 +1465,7 @@ export class GitHubService {
   ): Promise<GitHubPullRequestToolResult> {
     const next = await this.persistPullRequestUpdate(
       sessionId,
-      runId,
+      messageId,
       row,
       {
         number: null,
@@ -1490,7 +1494,7 @@ export class GitHubService {
 
   private async persistPullRequestUpdate(
     sessionId: string,
-    runId: string,
+    messageId: string,
     row: PullRequestRow,
     data: {
       number: number | null;
@@ -1519,10 +1523,10 @@ export class GitHubService {
         where: { id: row.id },
         data,
       });
-      const event = await this.appendRunEventInTransaction(
+      const event = await this.appendSessionEventInTransaction(
         tx,
         sessionId,
-        runId,
+        messageId,
         eventType,
         next,
         { pull_request: pullRequestMetadata(next) },
@@ -1533,10 +1537,12 @@ export class GitHubService {
     return result.next;
   }
 
-  private async appendRunEventInTransaction(
-    tx: Parameters<NonNullable<EventStore["appendRunEventInTransaction"]>>[0],
+  private async appendSessionEventInTransaction(
+    tx: Parameters<
+      NonNullable<EventStore["appendSessionEventInTransaction"]>
+    >[0],
     sessionId: string,
-    runId: string,
+    messageId: string,
     type:
       | "pull_request_creation_started"
       | "pull_request_created"
@@ -1548,10 +1554,10 @@ export class GitHubService {
     row: PullRequestRow,
     payload: Record<string, unknown>,
   ): Promise<PublicEvent | null> {
-    if (!this.events?.appendRunEventInTransaction) return null;
-    return this.events.appendRunEventInTransaction(tx, {
+    if (!this.events?.appendSessionEventInTransaction) return null;
+    return this.events.appendSessionEventInTransaction(tx, {
       sessionId,
-      runId,
+      messageId,
       type,
       producerService: "github",
       producerId: row.id,
@@ -1563,7 +1569,7 @@ export class GitHubService {
 
   private async persistPullRequestComment(
     sessionId: string,
-    runId: string,
+    messageId: string,
     row: PullRequestRow,
   ): Promise<PullRequestRow> {
     const result = await this.prisma.$transaction(async (tx) => {
@@ -1573,10 +1579,10 @@ export class GitHubService {
             data: { failureCode: null, failureMessage: null },
           })
         : row;
-      const event = await this.appendRunEventInTransaction(
+      const event = await this.appendSessionEventInTransaction(
         tx,
         sessionId,
-        runId,
+        messageId,
         "pull_request_commented",
         next,
         {},
@@ -1589,7 +1595,7 @@ export class GitHubService {
 
   private async persistPullRequestFailure(
     sessionId: string,
-    runId: string,
+    messageId: string,
     action: GitHubPullRequestActionInput["action"],
     row: PullRequestRow,
     code: string,
@@ -1601,10 +1607,10 @@ export class GitHubService {
         where: { id: row.id },
         data: { failureCode: code, failureMessage: message },
       });
-      const event = await this.appendRunEventInTransaction(
+      const event = await this.appendSessionEventInTransaction(
         tx,
         sessionId,
-        runId,
+        messageId,
         "pull_request_failed",
         next,
         {

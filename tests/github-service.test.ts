@@ -13,7 +13,7 @@ describe("GitHubService", () => {
   const pullRequestRow = (data: Record<string, unknown>) => ({
     id: "pr_1",
     sessionId: "chat_1",
-    runId: "run_1",
+    messageId: "msg_1",
     provider: "github",
     owner: "octo",
     repo: "repo",
@@ -91,7 +91,7 @@ describe("GitHubService", () => {
     const service = new GitHubService(prisma, config, api);
 
     await expect(
-      service.pullRequest("chat_1", "run_1", {
+      service.pullRequest("chat_1", "msg_1", {
         action: "create",
         branch: "feature/test",
         title: "Fix it",
@@ -219,7 +219,7 @@ describe("GitHubService", () => {
   it("publishes a workspace diff as a deterministic pull request", async () => {
     const token = "installation-token";
     const creating = pullRequestRow({
-      branch: "agent/chat_1/run_1",
+      branch: "agent/chat_1",
       title: "Fix it",
     });
     const create = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
@@ -239,7 +239,7 @@ describe("GitHubService", () => {
         number: 7,
         nodeId: "node_7",
         url: "https://github.com/octo/repo/pull/7",
-        branch: "agent/chat_1/run_1",
+        branch: "agent/chat_1",
         baseBranch: "main",
         title: "Fix it",
         status: "open" as const,
@@ -276,7 +276,7 @@ describe("GitHubService", () => {
           truncated: false,
         })
         .mockResolvedValueOnce({
-          stdout: "agent/chat_1/run_1\n",
+          stdout: "agent/chat_1\n",
           stderr: "",
           exitCode: 0,
           timedOut: false,
@@ -302,7 +302,7 @@ describe("GitHubService", () => {
     await expect(
       service.publishPullRequest(
         "chat_1",
-        "run_1",
+        "msg_1",
         { runtime, containerName: "sandbox-1" },
         { title: "Fix it" },
         { timeoutMs: 300, signal: new AbortController().signal },
@@ -311,7 +311,7 @@ describe("GitHubService", () => {
       success: true,
       action: "publish",
       pullRequest: {
-        branch: "agent/chat_1/run_1",
+        branch: "agent/chat_1",
         baseBranch: "main",
         number: 7,
         status: "open",
@@ -323,7 +323,7 @@ describe("GitHubService", () => {
       "octo",
       "repo",
       expect.objectContaining({
-        branch: "agent/chat_1/run_1",
+        branch: "agent/chat_1",
         baseBranch: "main",
         draft: true,
       }),
@@ -331,7 +331,7 @@ describe("GitHubService", () => {
     const pushCall = runtime.simpleExec.mock.calls.find((call) =>
       String(call[1]).includes("push --no-verify"),
     );
-    expect(pushCall?.[1]).toContain("'HEAD:refs/heads/agent/chat_1/run_1'");
+    expect(pushCall?.[1]).toContain("'HEAD:refs/heads/agent/chat_1'");
     expect(pushCall?.[1]).not.toContain(token);
     expect(pushCall?.[3]).toMatchObject({ stdin: token });
     expect(runtime.simpleExec.mock.calls.at(-1)?.[1]).toBe(
@@ -378,7 +378,7 @@ describe("GitHubService", () => {
           truncated: false,
         })
         .mockResolvedValueOnce({
-          stdout: "agent/chat_1/run_1\n",
+          stdout: "agent/chat_1\n",
           stderr: "",
           exitCode: 0,
           timedOut: false,
@@ -396,7 +396,7 @@ describe("GitHubService", () => {
 
     const result = await service.publishPullRequest(
       "chat_1",
-      "run_1",
+      "msg_1",
       { runtime, containerName: "sandbox-1" },
       { title: "Fix it" },
       { timeoutMs: 300, signal: new AbortController().signal },
@@ -446,7 +446,7 @@ describe("GitHubService", () => {
 
     const result = await service.publishPullRequest(
       "chat_1",
-      "run_1",
+      "msg_1",
       { runtime, containerName: "sandbox-1" },
       { title: "Fix it" },
       { timeoutMs: 300, signal: new AbortController().signal },
@@ -511,7 +511,7 @@ describe("GitHubService", () => {
 
     const result = await service.publishPullRequest(
       "chat_1",
-      "run_1",
+      "msg_1",
       { runtime, containerName: "sandbox-1" },
       { title: "Fix it" },
       { timeoutMs: 300, signal: new AbortController().signal },
@@ -534,7 +534,7 @@ describe("GitHubService", () => {
   it("returns a safe publication failure and restores the workspace after push rejection", async () => {
     const token = "installation-token";
     const creating = pullRequestRow({
-      branch: "agent/chat_1/run_1",
+      branch: "agent/chat_1",
       title: "Fix it",
     });
     const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
@@ -586,7 +586,7 @@ describe("GitHubService", () => {
           ...ok,
           stdout: "https://github.com/octo/repo.git\n",
         })
-        .mockResolvedValueOnce({ ...ok, stdout: "agent/chat_1/run_1\n" })
+        .mockResolvedValueOnce({ ...ok, stdout: "agent/chat_1\n" })
         .mockResolvedValueOnce({ ...ok, stdout: " M file.txt\n" })
         .mockResolvedValueOnce(ok)
         .mockResolvedValueOnce(ok)
@@ -601,7 +601,7 @@ describe("GitHubService", () => {
 
     const result = await service.publishPullRequest(
       "chat_1",
-      "run_1",
+      "msg_1",
       { runtime, containerName: "sandbox-1" },
       { title: "Fix it" },
       { timeoutMs: 300, signal: new AbortController().signal },
@@ -675,7 +675,7 @@ describe("GitHubService", () => {
     } as unknown as PrismaClient;
     const service = new GitHubService(prisma, config, api);
 
-    const result = await service.pullRequest("chat_1", "run_1", {
+    const result = await service.pullRequest("chat_1", "msg_1", {
       action: "create",
       branch: "feature/test",
       title: "Fix it",

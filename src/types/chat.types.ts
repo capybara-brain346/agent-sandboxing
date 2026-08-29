@@ -5,17 +5,24 @@ import {
   type PublicEvent,
 } from "./event.types";
 import {
-  TASK_EXIT_REASONS,
-  TASK_STATUSES,
-  type TaskFailure,
-  type TaskStatus,
-} from "./task.types";
+  MESSAGE_EXIT_REASONS,
+  MESSAGE_PROCESSING_STATUSES,
+  messageProcessingStatusSchema,
+  type MessageExitReason,
+  type MessageProcessingFailure,
+  type MessageProcessingStatus,
+} from "./message-processing.types";
 import type { ArtifactPointer } from "./artifact.types";
 import type { PullRequestMetadata } from "./github.types";
 
 export type { ArtifactPointer } from "./artifact.types";
+export type {
+  MessageExitReason,
+  MessageProcessingFailure,
+  MessageProcessingStatus,
+} from "./message-processing.types";
 
-export const CHAT_SESSION_STATUSES = ["active"] as const;
+export const CHAT_SESSION_STATUSES = ["active", "working"] as const;
 export type ChatSessionStatus = (typeof CHAT_SESSION_STATUSES)[number];
 
 export const repoSourceSchema = z.enum(["fixture", "github"]);
@@ -67,7 +74,6 @@ export type UpdateChatSessionRequest = z.output<typeof updateChatSessionSchema>;
 export const createMessageSchema = z
   .object({
     content: z.string().trim().min(1).max(32_000),
-    startRun: z.boolean().default(true),
   })
   .strict();
 export type CreateMessageRequest = z.output<typeof createMessageSchema>;
@@ -98,66 +104,50 @@ export type ChatMessage = {
   chatSessionId: string;
   role: ChatMessageRole;
   content: string;
-  taskRunId: string | null;
+  processingStatus: MessageProcessingStatus | null;
+  processingStartedAt: string | null;
+  processingCompletedAt: string | null;
+  failure: MessageProcessingFailure | null;
+  agentSummary: string | null;
   createdAt: string;
 };
 
-export type RunSnapshot = {
-  taskRunId: string;
+export type SessionResult = {
+  messageId: string;
   chatSessionId: string;
-  triggerMessageId: string | null;
-  status: TaskStatus;
-  sandboxId: string | null;
-  resultUrl: string;
-  eventsUrl: string;
-  createdAt: string;
-  provisioningAt: string | null;
-  runningAt: string | null;
-  completedAt: string | null;
-  failure: TaskFailure | null;
-};
-
-export type RunResult = {
-  taskRunId: string;
-  chatSessionId: string;
-  status: Extract<TaskStatus, "completed" | "failed" | "cancelled">;
+  status: Extract<
+    MessageProcessingStatus,
+    "completed" | "failed" | "cancelled"
+  >;
   diff: string;
   artifacts: ArtifactPointer[];
-  assistantMessageId: string | null;
   agentSummary: string | null;
-  exitReason: (typeof TASK_EXIT_REASONS)[number];
-  failure: TaskFailure | null;
+  exitReason: MessageExitReason;
+  failure: MessageProcessingFailure | null;
   pullRequest: PullRequestMetadata | null;
   createdAt: string;
   completedAt: string;
 };
 
-export type RunCancellationResponse =
-  | {
-      taskRunId: string;
-      status: "cancelling";
-      eventsUrl: string;
-    }
-  | {
-      taskRunId: string;
-      status: "cancelled";
-    };
+export type MessageCancellationResponse =
+  | { messageId: string; status: "cancelling"; eventsUrl: string }
+  | { messageId: string; status: "cancelled" };
 
 export type ChatSession = {
   chatSessionId: string;
   title: string | null;
   repo: RepoScope;
-  status: "active";
+  status: ChatSessionStatus;
+  activeMessageId: string | null;
   sandboxId: string | null;
   eventsUrl: string;
   messagesUrl: string;
-  latestRun: RunSnapshot | null;
   createdAt: string;
   updatedAt: string;
 };
 
 export type ChatSessionListItem = ChatSession & {
-  latestRunStatus: TaskStatus | null;
+  latestMessageStatus: MessageProcessingStatus | null;
   lastMessagePreview: string | null;
 };
 
@@ -170,15 +160,15 @@ export type CreateSessionResponse = ChatSession;
 
 export type CreateMessageResponse = {
   message: ChatMessage;
-  run: RunSnapshot | null;
+  sessionUrl: string;
+  messagesUrl: string;
   eventsUrl: string;
 };
 
 export type PublicChatEvent = PublicEvent & {
-  streamScope: "session" | "run";
+  streamScope: "session";
   domain: string;
   sessionId: string;
-  runId: string | null;
   messageId: string | null;
   artifactId: string | null;
 };
@@ -187,11 +177,9 @@ export const publicChatEventSchema = z
   .object({
     id: z.string(),
     streamId: z.string(),
-    streamScope: z.enum(["session", "run"]),
+    streamScope: z.literal("session"),
     domain: z.string(),
     sessionId: z.string(),
-    runId: z.string().nullable(),
-    taskId: z.string().nullable(),
     messageId: z.string().nullable(),
     artifactId: z.string().nullable(),
     sandboxId: z.string().nullable(),
@@ -206,4 +194,7 @@ export const publicChatEventSchema = z
   })
   .strict();
 
-export const taskRunStatusSchema = z.enum(TASK_STATUSES);
+export const messageProcessingStatusSchemaForApi =
+  messageProcessingStatusSchema;
+export const messageProcessingStatuses = MESSAGE_PROCESSING_STATUSES;
+export const messageExitReasons = MESSAGE_EXIT_REASONS;

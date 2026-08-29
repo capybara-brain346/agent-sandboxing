@@ -75,7 +75,7 @@ describe("sandbox-proxied agent tools", () => {
       "sandbox-1",
       config,
       signal,
-      { sessionId: "chat_1", runId: "run_1" },
+      { sessionId: "chat_1", messageId: "msg_1" },
       {
         publishPullRequest: vi.fn(),
         currentPullRequest: vi.fn(),
@@ -115,7 +115,7 @@ describe("sandbox-proxied agent tools", () => {
         config,
         signal,
         "chat_1",
-        "run_1",
+        "msg_1",
         github,
       ),
       { title: "Fix it", body: "Details", draft: false },
@@ -124,7 +124,7 @@ describe("sandbox-proxied agent tools", () => {
     expect(result).toMatchObject({ success: true, action: "publish" });
     expect(github.publishPullRequest).toHaveBeenCalledWith(
       "chat_1",
-      "run_1",
+      "msg_1",
       { runtime: fake, containerName: "sandbox-1" },
       { title: "Fix it", body: "Details", draft: false },
       { timeoutMs: 300, signal },
@@ -137,7 +137,7 @@ describe("sandbox-proxied agent tools", () => {
         provider: "github" as const,
         url: "https://github.test/pull/1",
         number: 1,
-        branch: "agent/chat_1/run_1",
+        branch: "agent/chat_1",
         baseBranch: "main",
         title: "Fix it",
         status: "open" as const,
@@ -148,7 +148,7 @@ describe("sandbox-proxied agent tools", () => {
     };
 
     const result = await execute(
-      createPullRequestTool(signal, "chat_1", "run_1", github),
+      createPullRequestTool(signal, "chat_1", "msg_1", github),
       { action: "read" },
     );
 
@@ -174,12 +174,12 @@ describe("sandbox-proxied agent tools", () => {
     };
 
     const result = await execute(
-      createPullRequestTool(signal, "chat_1", "run_1", github),
+      createPullRequestTool(signal, "chat_1", "msg_1", github),
       { action: "comment", comment: "Looks good" },
     );
 
     expect(result).toMatchObject({ success: true, action: "comment" });
-    expect(github.pullRequest).toHaveBeenCalledWith("chat_1", "run_1", {
+    expect(github.pullRequest).toHaveBeenCalledWith("chat_1", "msg_1", {
       action: "comment",
       comment: "Looks good",
     });
@@ -196,7 +196,7 @@ describe("sandbox-proxied agent tools", () => {
     };
 
     await expect(
-      execute(createPullRequestTool(signal, "chat_1", "run_1", github), input),
+      execute(createPullRequestTool(signal, "chat_1", "msg_1", github), input),
     ).rejects.toThrow();
     expect(github.currentPullRequest).not.toHaveBeenCalled();
     expect(github.pullRequest).not.toHaveBeenCalled();

@@ -82,24 +82,24 @@ describe("SandboxService", () => {
     );
 
     await expect(
-      service.ensureReadyForSession("chat_1", "run_1", "s1"),
+      service.ensureReadyForSession("chat_1", "msg_1", "s1"),
     ).resolves.toEqual({ status: "ready" });
     expect(findFirst).toHaveBeenCalledWith({
       where: { id: "s1", sessionId: "chat_1" },
     });
   });
 
-  it("provisions a creating session sandbox and publishes run-scoped events", async () => {
+  it("provisions a creating session sandbox and publishes session events", async () => {
     const debug = vi.spyOn(logger, "debug");
     const publish = vi.fn();
     const runtime = {
       provision: vi.fn(async () => ({ containerId: "container-1" })),
     } as unknown as SandboxRuntime;
     const events = {
-      appendRunEvent: vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      appendSessionEvent: vi.fn(async (input: { type: PublicEvent["type"] }) =>
         event(input.type, 1),
       ),
-      appendRunEventInTransaction: vi.fn(
+      appendSessionEventInTransaction: vi.fn(
         async (_tx: unknown, input: { type: PublicEvent["type"] }) =>
           event(input.type, 1),
       ),
@@ -125,7 +125,7 @@ describe("SandboxService", () => {
     );
 
     await expect(
-      service.ensureReadyForSession("chat_1", "run_1", "s1"),
+      service.ensureReadyForSession("chat_1", "msg_1", "s1"),
     ).resolves.toEqual({ status: "ready" });
     expect(runtime.provision).toHaveBeenCalledWith(
       "s1",
@@ -138,7 +138,7 @@ describe("SandboxService", () => {
       "sandbox_provision_completed",
       expect.objectContaining({
         sessionId: "chat_1",
-        runId: "run_1",
+        messageId: "msg_1",
         sandboxId: "s1",
         durationMs: expect.any(Number),
         outcome: "ready",
@@ -153,10 +153,10 @@ describe("SandboxService", () => {
       provision: vi.fn(async () => ({ containerId: "container-1" })),
     } as unknown as SandboxRuntime;
     const events = {
-      appendRunEvent: vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      appendSessionEvent: vi.fn(async (input: { type: PublicEvent["type"] }) =>
         event(input.type, 1),
       ),
-      appendRunEventInTransaction: vi.fn(
+      appendSessionEventInTransaction: vi.fn(
         async (_tx: unknown, input: { type: PublicEvent["type"] }) =>
           event(input.type, 1),
       ),
@@ -189,7 +189,7 @@ describe("SandboxService", () => {
     };
 
     await expect(
-      service.ensureReadyForSession("chat_1", "run_1", "s1", source),
+      service.ensureReadyForSession("chat_1", "msg_1", "s1", source),
     ).resolves.toEqual({ status: "ready" });
     expect(runtime.provision).toHaveBeenCalledWith(
       "s1",
@@ -217,7 +217,7 @@ describe("SandboxService", () => {
       vi.fn(),
     );
 
-    const target = await service.getAgentToolTarget("chat_1", "run_1", "s1");
+    const target = await service.getAgentToolTarget("chat_1", "s1");
 
     expect(target.containerName).toBe("sandbox-s1");
     expect(findFirst).toHaveBeenCalledWith({
@@ -226,7 +226,7 @@ describe("SandboxService", () => {
     });
   });
 
-  it("prepares a deterministic GitHub run branch from the selected base", async () => {
+  it("creates the session branch from the selected base", async () => {
     const findFirst = vi.fn(async () => sandboxRow("ready"));
     const simpleExec = vi
       .fn()
@@ -234,6 +234,20 @@ describe("SandboxService", () => {
         stdout: "main\n",
         stderr: "",
         exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        exitCode: 1,
         timedOut: false,
         truncated: false,
       })
@@ -254,19 +268,113 @@ describe("SandboxService", () => {
     );
 
     await expect(
-      service.prepareRunBranchForSession("chat_1", "run_1", "s1", {
+      service.prepareSessionBranchForSession("chat_1", "s1", {
         baseBranch: "main",
         defaultBranch: "main",
       }),
     ).resolves.toBeUndefined();
 
     expect(simpleExec).toHaveBeenNthCalledWith(
-      2,
+      4,
       "sandbox-s1",
-      "git checkout -B 'agent/chat_1/run_1' 'origin/main'",
+      "git checkout -b 'agent/chat_1'",
       "/workspace/repo",
       { timeoutMs: 1000 },
     );
+  });
+
+  it("reuses an existing session branch after a clean branch mismatch", async () => {
+    const findFirst = vi.fn(async () => sandboxRow("ready"));
+    const simpleExec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: "main\n",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      });
+    const service = new SandboxService(
+      { sandbox: { findFirst } } as unknown as PrismaClient,
+      {} as EventStore,
+      { simpleExec } as unknown as SandboxRuntime,
+      { ...config, SANDBOX_COMMAND_TIMEOUT_MS: 1000 } as Config,
+      vi.fn(),
+    );
+
+    await expect(
+      service.prepareSessionBranchForSession("chat_1", "s1", {
+        baseBranch: "main",
+        defaultBranch: "main",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(simpleExec).toHaveBeenNthCalledWith(
+      4,
+      "sandbox-s1",
+      "git checkout 'agent/chat_1'",
+      "/workspace/repo",
+      { timeoutMs: 1000 },
+    );
+  });
+
+  it("rejects a dirty workspace on the wrong branch", async () => {
+    const simpleExec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: "main\n",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: " M file.txt\n",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      });
+    const service = new SandboxService(
+      {
+        sandbox: { findFirst: vi.fn(async () => sandboxRow("ready")) },
+      } as unknown as PrismaClient,
+      {} as EventStore,
+      { simpleExec } as unknown as SandboxRuntime,
+      { ...config, SANDBOX_COMMAND_TIMEOUT_MS: 1000 } as Config,
+      vi.fn(),
+    );
+
+    await expect(
+      service.prepareSessionBranchForSession("chat_1", "s1", {
+        baseBranch: "main",
+        defaultBranch: "main",
+      }),
+    ).rejects.toMatchObject({
+      code: "github_workspace_dirty",
+    });
+    expect(simpleExec).toHaveBeenCalledTimes(2);
   });
 
   it("rejects diff before the session workspace is available", async () => {
@@ -285,7 +393,7 @@ describe("SandboxService", () => {
     );
 
     await expect(
-      service.diffForSession("chat_1", "run_1", "s1"),
+      service.diffForSession("chat_1", "msg_1", "s1"),
     ).rejects.toMatchObject({
       code: "workspace_unavailable",
     });
@@ -296,7 +404,10 @@ describe("SandboxService", () => {
 const event = (type: PublicEvent["type"], sequence: number): PublicEvent => ({
   id: `evt_${sequence}`,
   streamId: "chat_1",
-  taskId: "run_1",
+  streamScope: "session",
+  domain: "sandbox",
+  sessionId: "chat_1",
+  messageId: "msg_1",
   sandboxId: "s1",
   commandId: null,
   sequence,

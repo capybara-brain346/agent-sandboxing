@@ -16,7 +16,6 @@ const describeEvent = (event: PublicChatEvent): string => {
   return event.type.replace(/_/g, " ");
 };
 
-/** Collapsible trace of the live event tail, shown while a run is non-terminal. */
 export const ThinkingBlock = ({
   events,
   active,

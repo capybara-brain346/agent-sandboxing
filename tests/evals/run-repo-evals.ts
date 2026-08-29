@@ -12,11 +12,9 @@ import type {
   CreateMessageResponse,
   CreateSessionResponse,
   Page,
-  RunResult,
-  RunSnapshot,
+  SessionResult,
 } from "../../src/types/chat.types";
 import type { PublicEvent } from "../../src/types/event.types";
-import type { TaskStatus } from "../../src/types/task.types";
 import { takeUtf8Prefix } from "../../src/shared/utf8";
 import type { SimpleExecResult } from "../../src/types/sandbox.types";
 import { loadAgentModelConfig } from "../../src/config";
@@ -36,7 +34,7 @@ import {
   type RepoCase,
   type RepoEvalResult,
   type RepoObserved,
-  type RepoPostRunCheck,
+  type RepoPostProcessingCheck,
   type RepoToolEvent,
 } from "./types";
 import { appendResult, prepareResultFile } from "./result-files";
@@ -45,15 +43,10 @@ const DEFAULT_CASES_PATH = join(process.cwd(), "tests/evals/cases/repo.jsonl");
 const DEFAULT_FIXTURES_DIR = join(process.cwd(), "tests/evals/fixtures");
 const DEFAULT_RESULTS_DIR = join(process.cwd(), "tests/evals/results");
 const DEFAULT_POLL_INTERVAL_MS = 1000;
-const DEFAULT_RUN_TIMEOUT_MS = 180000;
-const DEFAULT_POST_RUN_TIMEOUT_MS = 120000;
+const DEFAULT_PROCESSING_TIMEOUT_MS = 180000;
+const DEFAULT_POST_PROCESSING_TIMEOUT_MS = 120000;
 const EVAL_USER_ID = "user_eval";
-const POST_RUN_OUTPUT_MAX_BYTES = 16_384;
-const TERMINAL_STATUSES = new Set<TaskStatus>([
-  "completed",
-  "failed",
-  "cancelled",
-]);
+const POST_PROCESSING_OUTPUT_MAX_BYTES = 16_384;
 
 export type RepoEvalChatSessionService = {
   createSession(
@@ -66,23 +59,17 @@ export type RepoEvalChatSessionService = {
   appendMessage(
     userId: string,
     sessionId: string,
-    input: { content: string; startRun: true },
+    input: { content: string },
   ): Promise<CreateMessageResponse>;
-  getRun(
-    userId: string,
-    sessionId: string,
-    runId: string,
-  ): Promise<RunSnapshot>;
-  result(userId: string, sessionId: string, runId: string): Promise<RunResult>;
+  sessionResult(userId: string, sessionId: string): Promise<SessionResult>;
   listMessages(
     userId: string,
     sessionId: string,
     query: { limit: number },
   ): Promise<Page<ChatMessage>>;
-  runEventsAfter(
+  sessionEventsAfter(
     userId: string,
     sessionId: string,
-    runId: string,
     after: number,
   ): Promise<PublicEvent[]>;
   getArtifact(
@@ -90,18 +77,13 @@ export type RepoEvalChatSessionService = {
     sessionId: string,
     artifactId: string,
   ): Promise<ArtifactContent>;
-  runPostRunCommand?(input: {
+  postProcessingCommand?(input: {
     sessionId: string;
-    runId: string;
     sandboxId: string;
     command: string;
     timeoutMs: number;
   }): Promise<SimpleExecResult>;
-  cancelRun?(
-    userId: string,
-    sessionId: string,
-    runId: string,
-  ): Promise<unknown>;
+  cancelCurrentMessage?(userId: string, sessionId: string): Promise<unknown>;
 };
 
 export type RepoEvalOptions = {
@@ -112,7 +94,7 @@ export type RepoEvalOptions = {
   image?: string;
   pollIntervalMs?: number;
   timeoutMs?: number;
-  postRunTimeoutMs?: number;
+  postProcessingTimeoutMs?: number;
   resultsPath?: string;
   resume?: boolean;
   judgeModel?: LanguageModel;
@@ -138,35 +120,37 @@ export const loadRepoCases = (path = DEFAULT_CASES_PATH): RepoCase[] =>
       }
     });
 
-export const waitForTerminalRun = async (
-  service: Pick<RepoEvalChatSessionService, "getRun">,
+export const waitForTerminalProcessing = async (
+  service: Pick<RepoEvalChatSessionService, "sessionResult">,
   sessionId: string,
-  runId: string,
-  timeoutMs = DEFAULT_RUN_TIMEOUT_MS,
+  timeoutMs = DEFAULT_PROCESSING_TIMEOUT_MS,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
-): Promise<RunSnapshot> => {
+): Promise<SessionResult> => {
   const deadline = Date.now() + timeoutMs;
-  let snapshot = await service.getRun(EVAL_USER_ID, sessionId, runId);
-  while (!TERMINAL_STATUSES.has(snapshot.status)) {
-    if (Date.now() >= deadline)
-      throw new Error(`Run ${runId} did not reach a terminal state in time`);
-    await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
-    snapshot = await service.getRun(EVAL_USER_ID, sessionId, runId);
+  while (true) {
+    try {
+      return await service.sessionResult(EVAL_USER_ID, sessionId);
+    } catch {
+      if (Date.now() >= deadline)
+        throw new Error(
+          "Message processing did not reach a terminal state in time",
+        );
+      await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
+    }
   }
-  return snapshot;
 };
 
 const emptyObserved = (): RepoObserved => ({
-  runStatus: null,
+  processingStatus: null,
   workerStatus: null,
   delegationCount: 0,
   changedFiles: [],
   diff: "",
   testsRun: [],
-  postRunChecks: [],
+  postProcessingChecks: [],
   workerReports: [],
   toolEvents: [],
-  runIds: [],
+  messageIds: [],
   finalMessage: "",
   assistantMessages: [],
 });
@@ -191,7 +175,7 @@ const appendBounded = (
   const full =
     current +
     (typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-  const value = takeUtf8Prefix(full, POST_RUN_OUTPUT_MAX_BYTES);
+  const value = takeUtf8Prefix(full, POST_PROCESSING_OUTPUT_MAX_BYTES);
   return { value, truncated: value.length < full.length };
 };
 
@@ -257,11 +241,11 @@ const runLocalProcess = (
     if (input !== undefined) child.stdin?.end(input);
   });
 
-const runLocalPostRunCommand = async (
+const runLocalPostProcessingCommand = async (
   repositoryPath: string,
   command: string,
   timeoutMs: number,
-): Promise<RepoPostRunCheck> => {
+): Promise<RepoPostProcessingCheck> => {
   const result = await runLocalProcess(
     "sh",
     ["-lc", command],
@@ -275,11 +259,11 @@ const runLocalPostRunCommand = async (
   };
 };
 
-const postRunFailure = (
+const postProcessingFailure = (
   command: string,
   error: unknown,
   durationMs: number,
-): RepoPostRunCheck => ({
+): RepoPostProcessingCheck => ({
   command,
   exitCode: null,
   timedOut: false,
@@ -300,7 +284,7 @@ const applyDiff = async (
     "git",
     ["apply", "--binary", "--whitespace=nowarn", "-"],
     repositoryPath,
-    DEFAULT_POST_RUN_TIMEOUT_MS,
+    DEFAULT_POST_PROCESSING_TIMEOUT_MS,
     diff,
   );
   if (result.exitCode !== 0 || result.timedOut)
@@ -357,7 +341,7 @@ const toolEventsFrom = (events: PublicEvent[]): RepoToolEvent[] =>
 const readWorkerReport = async (
   service: Pick<RepoEvalChatSessionService, "getArtifact">,
   sessionId: string,
-  result: RunResult,
+  result: SessionResult,
 ): Promise<WorkerResult | null> => {
   const artifact = result.artifacts.find(
     (candidate) => candidate.kind === "worker_report",
@@ -395,7 +379,7 @@ const initializeRepository = async (repositoryPath: string): Promise<void> => {
       "git",
       args,
       repositoryPath,
-      DEFAULT_POST_RUN_TIMEOUT_MS,
+      DEFAULT_POST_PROCESSING_TIMEOUT_MS,
     );
     if (result.exitCode !== 0 || result.timedOut)
       throw new Error(
@@ -410,7 +394,7 @@ const runRepoCase = async (
   options: Required<
     Pick<
       RepoEvalOptions,
-      "fixturesDir" | "timeoutMs" | "pollIntervalMs" | "postRunTimeoutMs"
+      "fixturesDir" | "timeoutMs" | "pollIntervalMs" | "postProcessingTimeoutMs"
     >
   > &
     Pick<RepoEvalOptions, "image">,
@@ -418,9 +402,8 @@ const runRepoCase = async (
 ): Promise<RepoEvalResult> => {
   const observed = emptyObserved();
   let temporaryRoot: string | undefined;
-  let activeRun: { sessionId: string; runId: string } | undefined;
-  let finalRun:
-    { sessionId: string; runId: string; sandboxId: string } | undefined;
+  let activeProcessing: { sessionId: string } | undefined;
+  let finalProcessing: { sessionId: string; sandboxId: string } | undefined;
   try {
     const fixturePath = resolve(options.fixturesDir, testCase.fixture);
     await access(fixturePath);
@@ -436,45 +419,27 @@ const runRepoCase = async (
     });
 
     for (const message of testCase.messages) {
-      const created = await service.appendMessage(
-        EVAL_USER_ID,
-        session.chatSessionId,
-        {
-          content: message.content,
-          startRun: true,
-        },
-      );
-      if (!created.run)
-        throw new Error(`Message did not create a run: ${testCase.id}`);
-      const runId = created.run.taskRunId;
-      activeRun = { sessionId: session.chatSessionId, runId };
-      const snapshot = await waitForTerminalRun(
+      await service.appendMessage(EVAL_USER_ID, session.chatSessionId, {
+        content: message.content,
+      });
+      activeProcessing = { sessionId: session.chatSessionId };
+      const result = await waitForTerminalProcessing(
         service,
         session.chatSessionId,
-        runId,
         options.timeoutMs,
         options.pollIntervalMs,
       );
-      activeRun = undefined;
-      const result = await service.result(
+      activeProcessing = undefined;
+      const events = await service.sessionEventsAfter(
         EVAL_USER_ID,
         session.chatSessionId,
-        runId,
-      );
-      const events = await service.runEventsAfter(
-        EVAL_USER_ID,
-        session.chatSessionId,
-        runId,
         0,
       );
       const sandboxId =
-        snapshot.sandboxId ??
-        events.find((event) => event.sandboxId !== null)?.sandboxId ??
-        null;
+        events.find((event) => event.sandboxId !== null)?.sandboxId ?? null;
       if (sandboxId)
-        finalRun = {
+        finalProcessing = {
           sessionId: session.chatSessionId,
-          runId,
           sandboxId,
         };
       const messages = await service.listMessages(
@@ -490,13 +455,12 @@ const runRepoCase = async (
         result,
       );
       const assistant = messages.items.find(
-        (candidate) =>
-          candidate.taskRunId === runId && candidate.role === "assistant",
+        (candidate) => candidate.role === "assistant",
       );
 
-      observed.runStatus = snapshot.status;
+      observed.processingStatus = result.status;
       observed.workerStatus = report?.status ?? null;
-      observed.runIds.push(runId);
+      observed.messageIds.push(result.messageId);
       observed.toolEvents.push(...toolEventsFrom(events));
       if (report) {
         observed.delegationCount += 1;
@@ -518,17 +482,17 @@ const runRepoCase = async (
       observed.diff = result.diff;
       observed.changedFiles = changedFilesFromDiff(result.diff);
     }
-    if (testCase.expect.postRunCommands.length) {
-      if (service.runPostRunCommand && finalRun) {
-        for (const command of testCase.expect.postRunCommands) {
+    if (testCase.expect.postProcessingCommands.length) {
+      if (service.postProcessingCommand && finalProcessing) {
+        for (const command of testCase.expect.postProcessingCommands) {
           const startedAt = Date.now();
           try {
-            const result = await service.runPostRunCommand({
-              ...finalRun,
+            const result = await service.postProcessingCommand({
+              ...finalProcessing,
               command,
-              timeoutMs: options.postRunTimeoutMs,
+              timeoutMs: options.postProcessingTimeoutMs,
             });
-            observed.postRunChecks.push({
+            observed.postProcessingChecks.push({
               command,
               ...result,
               durationMs: Date.now() - startedAt,
@@ -536,19 +500,19 @@ const runRepoCase = async (
               passed: result.exitCode === 0 && !result.timedOut,
             });
           } catch (error) {
-            observed.postRunChecks.push(
-              postRunFailure(command, error, Date.now() - startedAt),
+            observed.postProcessingChecks.push(
+              postProcessingFailure(command, error, Date.now() - startedAt),
             );
           }
         }
       } else {
         await applyDiff(repositoryPath, observed.diff);
-        for (const command of testCase.expect.postRunCommands)
-          observed.postRunChecks.push(
-            await runLocalPostRunCommand(
+        for (const command of testCase.expect.postProcessingCommands)
+          observed.postProcessingChecks.push(
+            await runLocalPostProcessingCommand(
               repositoryPath,
               command,
-              options.postRunTimeoutMs,
+              options.postProcessingTimeoutMs,
             ),
           );
       }
@@ -556,14 +520,13 @@ const runRepoCase = async (
     observed.testsRun = [...new Set(observed.testsRun)];
   } catch (error) {
     observed.error = errorMessage(error);
-    if (activeRun && service.cancelRun) {
+    if (activeProcessing && service.cancelCurrentMessage) {
       await service
-        .cancelRun(EVAL_USER_ID, activeRun.sessionId, activeRun.runId)
+        .cancelCurrentMessage(EVAL_USER_ID, activeProcessing.sessionId)
         .catch(() => undefined);
-      await waitForTerminalRun(
+      await waitForTerminalProcessing(
         service,
-        activeRun.sessionId,
-        activeRun.runId,
+        activeProcessing.sessionId,
         options.timeoutMs,
         options.pollIntervalMs,
       ).catch(() => undefined);
@@ -605,7 +568,7 @@ const printReport = (results: RepoEvalResult[], resultsPath: string): void => {
   );
   for (const result of results)
     console.log(
-      `${result.caseId}\t${result.status}\t${failedRepoScoreNames(result.scores).join(",") || "-"}\t${result.observed.delegationCount}\t${result.observed.changedFiles.join(",") || "-"}\t${result.observed.testsRun.join(",") || "-"}\t${result.observed.postRunChecks.map((check) => `${check.command}:${check.passed ? "passed" : "failed"}`).join(",") || "-"}\t${subjectiveScoreSummary(result.subjectiveJudge)}`,
+      `${result.caseId}\t${result.status}\t${failedRepoScoreNames(result.scores).join(",") || "-"}\t${result.observed.delegationCount}\t${result.observed.changedFiles.join(",") || "-"}\t${result.observed.testsRun.join(",") || "-"}\t${result.observed.postProcessingChecks.map((check) => `${check.command}:${check.passed ? "passed" : "failed"}`).join(",") || "-"}\t${subjectiveScoreSummary(result.subjectiveJudge)}`,
     );
   const passed = results.filter((result) =>
     allRepoScoresPass(result.scores),
@@ -627,16 +590,14 @@ const defaultService = async (): Promise<RepoEvalChatSessionService> => {
   const chat = await import("../../src/services/chat/chat-session");
   const sandbox = await import("../../src/services/sandbox/sandbox");
   return Object.assign(chat.chatSessionService, {
-    runPostRunCommand: async (input: {
+    postProcessingCommand: async (input: {
       sessionId: string;
-      runId: string;
       sandboxId: string;
       command: string;
       timeoutMs: number;
     }): Promise<SimpleExecResult> => {
       const target = await sandbox.sandboxService.getAgentToolTarget(
         input.sessionId,
-        input.runId,
         input.sandboxId,
       );
       return target.runtime.simpleExec(
@@ -664,12 +625,13 @@ export const runRepoEvals = async (
   const resultsPath =
     options.resultsPath ??
     join(options.resultsDir ?? DEFAULT_RESULTS_DIR, `repo-${timestamp}.jsonl`);
-  const runOptions = {
+  const processingOptions = {
     fixturesDir: options.fixturesDir ?? DEFAULT_FIXTURES_DIR,
     ...(options.image ? { image: options.image } : {}),
-    timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
+    timeoutMs: options.timeoutMs ?? DEFAULT_PROCESSING_TIMEOUT_MS,
     pollIntervalMs: options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-    postRunTimeoutMs: options.postRunTimeoutMs ?? DEFAULT_POST_RUN_TIMEOUT_MS,
+    postProcessingTimeoutMs:
+      options.postProcessingTimeoutMs ?? DEFAULT_POST_PROCESSING_TIMEOUT_MS,
   };
   const previousResults = await prepareResultFile<RepoEvalResult>(
     resultsPath,
@@ -689,7 +651,7 @@ export const runRepoEvals = async (
     const result = await runRepoCase(
       service,
       testCase,
-      runOptions,
+      processingOptions,
       options.judgeModel,
     );
     results.push(result);

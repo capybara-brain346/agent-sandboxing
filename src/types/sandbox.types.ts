@@ -21,7 +21,7 @@ export type SandboxProvisioningSource =
       token: string;
     };
 
-export type TaskSandboxInput = {
+export type SandboxCreationInput = {
   source: SandboxProvisioningSource;
   image?: string | undefined;
 };
@@ -38,13 +38,13 @@ export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
 export type CommandStartResult = {
   commandId: string;
-  taskId: string;
+  sessionId: string;
   status: CommandStatus;
 };
 
 export type CommandStatusResult = {
   commandId: string;
-  taskId: string;
+  sessionId: string;
   status: CommandStatus;
   exitCode: number | null;
   outputBytes: number;

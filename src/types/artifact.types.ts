@@ -11,7 +11,7 @@ export type ArtifactPreview = ArtifactPointer & { preview: string };
 
 export type ArtifactContent = ArtifactPointer & {
   sessionId: string;
-  runId: string | null;
+  messageId: string | null;
   content: string;
   createdAt: string;
 };

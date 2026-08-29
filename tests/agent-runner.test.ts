@@ -4,7 +4,7 @@ import { loadConfig, type Config } from "../src/config";
 import { AgentRunner } from "../src/services/agent/agent-runner";
 import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
-import type { TaskRunContext } from "../src/services/task/task-runner";
+import type { MessageProcessingContext } from "../src/types/message-processing.types";
 import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 import { logger } from "../src/logger";
 
@@ -30,14 +30,16 @@ const config = loadConfig({
 
 const event = (type: PublicEvent["type"]): PublicEvent => ({
   id: "evt_1",
-  streamId: "task_1",
-  taskId: "task_1",
+  streamId: "chat_1",
+  streamScope: "session",
+  domain: "agent",
+  sessionId: "chat_1",
   sandboxId: "sbox_1",
   commandId: null,
   sequence: 1,
   type,
   producerService: "agent",
-  producerId: "task_1",
+  producerId: "msg_1",
   correlationId: "call_1",
   payload: {},
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -45,8 +47,7 @@ const event = (type: PublicEvent["type"]): PublicEvent => ({
 
 const makeContext = (
   signal = new AbortController().signal,
-): TaskRunContext => ({
-  taskId: "task_1",
+): MessageProcessingContext => ({
   sandboxId: "sbox_1",
   instructions: "Update the greeting",
   signal,
@@ -114,13 +115,12 @@ describe("AgentRunner", () => {
     const harness = makeRunner();
     const debug = vi.spyOn(logger, "debug");
 
-    await expect(harness.runner.run(makeContext())).resolves.toEqual(
+    await expect(harness.runner.process(makeContext())).resolves.toEqual(
       workerOutput,
     );
 
     expect(harness.sandbox.getAgentToolTarget).toHaveBeenCalledWith(
       "chat_1",
-      "task_1",
       "sbox_1",
     );
     expect(aiMocks.isStepCount).toHaveBeenCalledWith(4);
@@ -152,7 +152,7 @@ describe("AgentRunner", () => {
       "agent_worker_completed",
       expect.objectContaining({
         sessionId: "chat_1",
-        runId: "task_1",
+        messageId: "msg_1",
         sandboxId: "sbox_1",
         durationMs: expect.any(Number),
         status: "completed",
@@ -173,12 +173,12 @@ describe("AgentRunner", () => {
       response: { messages: [] },
     });
 
-    await expect(makeRunner().runner.run(makeContext())).resolves.toMatchObject(
-      {
-        status: "completed",
-        summary: "Worker completed without a final report.",
-      },
-    );
+    await expect(
+      makeRunner().runner.process(makeContext()),
+    ).resolves.toMatchObject({
+      status: "completed",
+      summary: "Worker completed without a final report.",
+    });
     expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
   });
 
@@ -188,7 +188,7 @@ describe("AgentRunner", () => {
     const harness = makeRunner();
 
     await expect(
-      harness.runner.run(makeContext(controller.signal)),
+      harness.runner.process(makeContext(controller.signal)),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(harness.sandbox.getAgentToolTarget).not.toHaveBeenCalled();
     expect(aiMocks.generateText).not.toHaveBeenCalled();
@@ -200,19 +200,21 @@ describe("AgentRunner", () => {
     });
     aiMocks.generateText.mockRejectedValueOnce(abortError);
 
-    await expect(makeRunner().runner.run(makeContext())).rejects.toBe(
+    await expect(makeRunner().runner.process(makeContext())).rejects.toBe(
       abortError,
     );
   });
 
-  it("converts provider failures to a safe agent_run_failed error", async () => {
+  it("converts provider failures to a safe processing error", async () => {
     aiMocks.generateText.mockRejectedValueOnce(
       new Error("provider key leaked in a raw error"),
     );
 
-    await expect(makeRunner().runner.run(makeContext())).rejects.toMatchObject({
-      code: "agent_run_failed",
-      message: "Agent run failed",
+    await expect(
+      makeRunner().runner.process(makeContext()),
+    ).rejects.toMatchObject({
+      code: "agent_processing_failed",
+      message: "Agent processing failed",
       status: 502,
     });
   });
@@ -256,7 +258,7 @@ describe("AgentRunner", () => {
       };
     });
 
-    await harness.runner.run(makeContext());
+    await harness.runner.process(makeContext());
     expect(maximum).toBe(1);
   });
 });

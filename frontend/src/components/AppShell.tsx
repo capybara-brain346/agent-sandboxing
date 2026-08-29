@@ -32,7 +32,7 @@ import type {
   GitHubBranch,
   GitHubRepository,
   GitHubRepositoriesResponse,
-  TaskStatus,
+  MessageProcessingStatus,
 } from "@/api/types";
 import {
   ActiveSessionProvider,
@@ -46,19 +46,17 @@ import {
 } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  created: "Queued",
-  provisioning: "Provisioning",
-  running: "Running",
+const STATUS_LABEL: Record<MessageProcessingStatus, string> = {
+  queued: "Queued",
+  working: "Working",
   completed: "Completed",
   failed: "Failed",
   cancelled: "Cancelled",
 };
 
-const STATUS_DOT_CLASS: Record<TaskStatus, string> = {
-  created: "bg-fg-subtle",
-  provisioning: "bg-status-running",
-  running: "bg-status-running",
+const STATUS_DOT_CLASS: Record<MessageProcessingStatus, string> = {
+  queued: "bg-fg-subtle",
+  working: "bg-status-running",
   completed: "bg-status-completed",
   failed: "bg-status-failed",
   cancelled: "bg-status-cancelled",
@@ -229,9 +227,9 @@ const RepoBranchSwitcher = () => {
   );
 };
 
-const RunStatusPill = () => {
+const ProcessingStatusPill = () => {
   const { activeSession } = useActiveSession();
-  const status = activeSession?.run?.status;
+  const status = activeSession?.message?.processingStatus;
   if (!status) return null;
 
   return (
@@ -240,7 +238,7 @@ const RunStatusPill = () => {
         className={cn(
           "size-1.5 rounded-full",
           STATUS_DOT_CLASS[status],
-          status === "running" && "animate-pulse",
+          status === "working" && "animate-pulse",
         )}
       />
       {STATUS_LABEL[status]}
@@ -338,11 +336,11 @@ const Sidebar = ({ sessions }: { sessions: ChatSessionListItem[] }) => {
               )}
             >
               <span className="flex items-center gap-1.5 truncate text-xs font-medium text-fg">
-                {session.latestRunStatus && (
+                {session.latestMessageStatus && (
                   <span
                     className={cn(
                       "size-1.5 shrink-0 rounded-full",
-                      STATUS_DOT_CLASS[session.latestRunStatus],
+                      STATUS_DOT_CLASS[session.latestMessageStatus],
                     )}
                   />
                 )}
@@ -423,7 +421,7 @@ const ShellChrome = () => {
         </Link>
         <span className="text-border-strong">/</span>
         <RepoBranchSwitcher />
-        <RunStatusPill />
+        <ProcessingStatusPill />
         <div className="ml-auto flex items-center gap-2">
           <ThemeToggle />
           {user && <UserMenu user={user} />}

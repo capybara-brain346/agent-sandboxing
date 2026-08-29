@@ -15,9 +15,9 @@ const RESULT_SNIPPET_MAX_BYTES = 500;
 type PublishEvent = (event: PublicEvent) => void;
 
 export type ToolEventContext = {
-  taskId: string;
+  messageId: string;
   sandboxId: string;
-  sessionId?: string | undefined;
+  sessionId: string;
 };
 
 export type ToolEventRelayDependencies = {
@@ -118,7 +118,7 @@ export class ToolEventRelay {
       context.sessionId && bounded.truncated && this.dependencies.artifacts
         ? await this.dependencies.artifacts.create({
             sessionId: context.sessionId,
-            runId: context.taskId,
+            messageId: context.messageId,
             kind: "tool_output",
             contentType: "application/json",
             content: serialized,
@@ -158,27 +158,15 @@ export class ToolEventRelay {
     payload: Record<string, unknown>,
     artifactId?: string,
   ): Parameters<EventStore["append"]>[0] {
-    if (context.sessionId)
-      return {
-        streamScope: "run",
-        streamId: context.taskId,
-        sessionId: context.sessionId,
-        runId: context.taskId,
-        sandboxId: context.sandboxId,
-        artifactId: artifactId ?? null,
-        domain: "agent",
-        type,
-        producerService: "agent",
-        producerId: context.taskId,
-        correlationId,
-        payload,
-      };
     return {
-      taskId: context.taskId,
+      sessionId: context.sessionId,
+      messageId: context.messageId,
       sandboxId: context.sandboxId,
+      artifactId: artifactId ?? null,
+      domain: "agent",
       type,
       producerService: "agent",
-      producerId: context.taskId,
+      producerId: context.messageId,
       correlationId,
       payload,
     };
