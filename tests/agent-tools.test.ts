@@ -328,6 +328,28 @@ describe("sandbox-proxied agent tools", () => {
     );
   });
 
+  it("returns non-zero bash output instead of failing the tool", async () => {
+    const fake = runtime({
+      stdout: "",
+      stderr: "missing\n",
+      exitCode: 2,
+      timedOut: false,
+      truncated: false,
+    });
+    const result = await execute(
+      createBashTool(fake, "sandbox-1", config, signal),
+      { command: "ls missing" },
+    );
+
+    expect(result).toEqual({
+      stdout: "",
+      stderr: "missing\n",
+      exitCode: 2,
+      timedOut: false,
+      truncated: false,
+    });
+  });
+
   it.each([
     "npm test",
     "npm run test:unit",
@@ -386,6 +408,23 @@ describe("sandbox-proxied agent tools", () => {
     expect(
       Buffer.byteLength((findResult as { paths: string }).paths),
     ).toBeLessThanOrEqual(50 * 1024);
+    expect(findFake.simpleExec).toHaveBeenCalledWith(
+      "sandbox-1",
+      "find '/workspace/repo' -type f -iname '*.ts' -print",
+      "/workspace/repo",
+      { timeoutMs: 300, signal },
+    );
+
+    const plainFindFake = runtime(success());
+    await execute(createFindTool(plainFindFake, "sandbox-1", config, signal), {
+      pattern: "tmux",
+    });
+    expect(plainFindFake.simpleExec).toHaveBeenCalledWith(
+      "sandbox-1",
+      "find '/workspace/repo' -type f -iname '*tmux*' -print",
+      "/workspace/repo",
+      { timeoutMs: 300, signal },
+    );
 
     const lsFake = runtime(success(large));
     const lsResult = await execute(
@@ -439,22 +478,12 @@ describe("sandbox-proxied agent tools", () => {
     expect(cancelled.simpleExec).not.toHaveBeenCalled();
   });
 
-  it("surfaces bash timeout and non-zero command failures as service errors", async () => {
+  it("surfaces bash timeouts as service errors", async () => {
     const timedOut = runtime({ ...success(), timedOut: true, exitCode: null });
     await expect(
       execute(createBashTool(timedOut, "sandbox-1", config, signal), {
         command: "sleep 2",
       }),
     ).rejects.toMatchObject({ code: "tool_timeout" });
-
-    const failed = runtime({
-      ...success("", "private diagnostic"),
-      exitCode: 2,
-    });
-    await expect(
-      execute(createBashTool(failed, "sandbox-1", config, signal), {
-        command: "false",
-      }),
-    ).rejects.toMatchObject({ code: "tool_command_failed" });
   });
 });

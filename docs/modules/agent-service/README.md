@@ -55,8 +55,11 @@ blockers, and capped file context.
 
 `ToolEventRelay` appends `agent_tool_call` before execution and
 `agent_tool_result` after execution to the session stream. Result snippets are
-UTF-8-safe and bounded to 500 bytes; raw provider errors, arguments, secrets,
-and command environments are not persisted.
+UTF-8-safe and bounded to 500 bytes. Failed tools include a safe error marker;
+known service errors include their public code and message, while raw provider
+errors, secrets, and command environments are not persisted. The `bash` tool
+returns non-zero command output with its exit code instead of converting it to a
+tool failure, and plain `find` terms match filename substrings case-insensitively.
 
 Pull request tools receive only injected session capabilities. The backend owns
 repository identity, branch `agent/<sessionId>`, commit, push, and pull request

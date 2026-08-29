@@ -13,6 +13,8 @@ import {
 } from "./helpers";
 import { workspaceRoot } from "../../sandbox/workspace";
 
+const hasGlobSyntax = (value: string): boolean => /[*?[{]/.test(value);
+
 export const createFindTool = (
   runtime: AgentToolRuntime,
   containerName: string,
@@ -28,11 +30,14 @@ export const createFindTool = (
     execute: async ({ pattern, path: searchPath }) => {
       throwIfAborted(signal);
       const safePattern = validateToolText(pattern, "pattern");
+      const namePattern = hasGlobSyntax(safePattern)
+        ? safePattern
+        : `*${safePattern}*`;
       const safePath = validateWorkspacePath(searchPath ?? workspaceRoot);
       const result = await executeChecked(
         runtime,
         containerName,
-        `find ${shellQuote(safePath)} -type f -name ${shellQuote(safePattern)} -print`,
+        `find ${shellQuote(safePath)} -type f -iname ${shellQuote(namePattern)} -print`,
         signal,
         config.AGENT_TOOL_TIMEOUT_MS,
       );

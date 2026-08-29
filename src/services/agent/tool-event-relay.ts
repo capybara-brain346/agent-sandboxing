@@ -8,6 +8,7 @@ import type {
 import type { EventStore } from "../events/event-store";
 import type { PublicEvent } from "../../types/event.types";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
+import { ServiceError } from "../../shared/errors";
 import { boundUtf8 } from "./tools/helpers";
 
 const RESULT_SNIPPET_MAX_BYTES = 500;
@@ -47,6 +48,11 @@ const safeSerialize = (value: unknown): string => {
 
 const safeArgs = (value: unknown): Record<string, unknown> =>
   isRecord(value) ? value : {};
+
+const safeToolError = (value: unknown): Record<string, unknown> =>
+  value instanceof ServiceError
+    ? { error: { code: value.code, message: value.message } }
+    : { error: { message: "Tool execution failed" } };
 
 const safeToolArgs = (
   toolName: string,
@@ -106,7 +112,9 @@ export class ToolEventRelay {
         ? event.toolOutput.output
         : undefined;
     const serialized = safeSerialize(
-      event.toolOutput.type === "tool-error" ? "Tool execution failed" : output,
+      event.toolOutput.type === "tool-error"
+        ? safeToolError(event.toolOutput.error)
+        : output,
     );
     const bounded = boundUtf8(serialized, RESULT_SNIPPET_MAX_BYTES);
     const outputRecord = isRecord(output) ? output : {};
@@ -138,6 +146,7 @@ export class ToolEventRelay {
             event.toolOutput.type === "tool-result"
               ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)
               : null,
+          error: event.toolOutput.type === "tool-error",
           duration_ms: duration(event.toolExecutionMs),
           ...(artifact
             ? {

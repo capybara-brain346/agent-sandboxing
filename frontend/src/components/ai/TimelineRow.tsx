@@ -98,7 +98,13 @@ export const TimelineRow = ({
         </span>
         <ToolChip
           name={toolName}
-          state={event.type === "agent_tool_call" ? "pending" : "done"}
+          state={
+            event.type === "agent_tool_call"
+              ? "pending"
+              : event.payload.error === true
+                ? "error"
+                : "done"
+          }
           detail={resultSnippet}
         />
       </li>

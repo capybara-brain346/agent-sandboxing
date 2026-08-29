@@ -3,6 +3,7 @@ import type { ToolExecutionEndEvent, ToolExecutionStartEvent } from "ai";
 import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
 import { ToolEventRelay } from "../src/services/agent/tool-event-relay";
+import { ServiceError } from "../src/shared/errors";
 
 const startEvent = (
   input: unknown,
@@ -173,7 +174,7 @@ describe("ToolEventRelay", () => {
     });
   });
 
-  it("bounds results on UTF-8 boundaries and sanitizes tool errors", async () => {
+  it("bounds results on UTF-8 boundaries and sanitizes unknown tool errors", async () => {
     const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
       makeEvent(input),
     );
@@ -205,11 +206,42 @@ describe("ToolEventRelay", () => {
     );
     const safe = append.mock.calls[1]?.[0].payload;
     expect(safe).toMatchObject({
-      result_snippet: "Tool execution failed",
+      result_snippet: JSON.stringify({
+        error: { message: "Tool execution failed" },
+      }),
       exit_code: null,
       truncated: false,
+      error: true,
     });
     expect(JSON.stringify(safe)).not.toContain("provider secret");
+  });
+
+  it("includes safe service error details in failed tool results", async () => {
+    const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      makeEvent(input),
+    );
+    const relay = new ToolEventRelay({
+      events: { append } as unknown as Pick<EventStore, "append">,
+      publish: vi.fn(),
+    });
+
+    await relay.onToolExecutionEnd(
+      { messageId: "msg_1", sandboxId: "sbox_1", sessionId: "chat_1" },
+      endEvent({
+        type: "tool-error",
+        error: new ServiceError("unsafe_command", "Malformed command grammar"),
+      }),
+    );
+
+    expect(append.mock.calls[0]?.[0].payload).toMatchObject({
+      result_snippet: JSON.stringify({
+        error: {
+          code: "unsafe_command",
+          message: "Malformed command grammar",
+        },
+      }),
+      error: true,
+    });
   });
 
   it("publishes only after append commits and propagates append failures", async () => {
