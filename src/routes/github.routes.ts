@@ -63,8 +63,12 @@ githubRouter.get(
   requireAuth(githubConfig),
   async (request, response, next) => {
     try {
+      const userId = sessionClaims(request).sub;
+      const forceRefresh = queryString(request.query.forceRefresh) === "true";
       response.json(
-        await githubService.repositories(sessionClaims(request).sub),
+        await (forceRefresh
+          ? githubService.repositories(userId, { forceRefresh: true })
+          : githubService.repositories(userId)),
       );
     } catch (error) {
       next(error);

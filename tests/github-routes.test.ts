@@ -81,6 +81,23 @@ describe("GitHub routes", () => {
     expect(response.body.repositories[0].branches).toEqual([]);
   });
 
+  it("passes repository refresh requests through to the service", async () => {
+    const repositories = vi
+      .spyOn(githubService, "repositories")
+      .mockResolvedValue({
+        installations: [],
+        repositories: [],
+        installUrl: config.GITHUB_APP_INSTALL_URL,
+      });
+    const response = await request(makeApp())
+      .get("/github/repositories?forceRefresh=true")
+      .set("Cookie", authCookie);
+    expect(response.status).toBe(200);
+    expect(repositories).toHaveBeenCalledWith("user_1", {
+      forceRefresh: true,
+    });
+  });
+
   it("returns branches for one repository", async () => {
     const branches = vi
       .spyOn(githubService, "branches")

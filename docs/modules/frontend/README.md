@@ -39,7 +39,8 @@ rendered with `TimelineRow` and tool results use bounded event snippets.
   event contracts.
 - `src/api/client.ts` is the credentialed fetch wrapper.
 - GitHub repository discovery reuses an in-flight request across the repository
-  picker and shell switcher; explicit refresh bypasses that request.
+  picker and shell switcher; explicit refresh bypasses that request and the
+  backend's short-lived repository and branch caches.
 - `src/api/useEventStream.ts` opens the session SSE stream and deduplicates
   sequence numbers.
 - `src/pages/` contains authentication, repository selection, and chat pages.

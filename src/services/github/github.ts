@@ -194,6 +194,29 @@ const timedGitHubApiCall = <T>(
   });
 };
 
+const githubCacheTtlMs = 30_000;
+
+type GitHubCacheEntry<T> = {
+  expiresAt: number;
+  promise: Promise<T>;
+};
+
+const cachedGitHubRequest = <T>(
+  cache: Map<string, GitHubCacheEntry<T>>,
+  key: string,
+  load: () => Promise<T>,
+): Promise<T> => {
+  const existing = cache.get(key);
+  if (existing && existing.expiresAt > Date.now()) return existing.promise;
+  if (existing) cache.delete(key);
+  const promise = load();
+  cache.set(key, { expiresAt: Date.now() + githubCacheTtlMs, promise });
+  void promise.catch(() => {
+    if (cache.get(key)?.promise === promise) cache.delete(key);
+  });
+  return promise;
+};
+
 class OctokitGitHubApi implements GitHubApi {
   private readonly app: App;
 
@@ -642,6 +665,14 @@ const pullRequestMetadata = (row: PullRequestRow): PullRequestMetadata => ({
 
 export class GitHubService {
   private readonly api: GitHubApi;
+  private readonly repositoryCache = new Map<
+    string,
+    GitHubCacheEntry<GitHubRepositoriesResponse>
+  >();
+  private readonly branchCache = new Map<
+    string,
+    GitHubCacheEntry<GitHubBranch[]>
+  >();
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -658,6 +689,11 @@ export class GitHubService {
 
   installUrl(): string {
     return this.config.GITHUB_APP_INSTALL_URL;
+  }
+
+  private clearRepositoryCache(userId: string): void {
+    this.repositoryCache.delete(userId);
+    this.branchCache.clear();
   }
 
   async createInstallationToken(installationId: string): Promise<string> {
@@ -1829,6 +1865,7 @@ export class GitHubService {
           accountType: "User",
         },
       });
+      this.clearRepositoryCache(userId);
       return {
         installationId: saved.installationId,
         accountLogin: saved.accountLogin,
@@ -1903,7 +1940,19 @@ export class GitHubService {
     );
   }
 
-  async repositories(userId: string): Promise<GitHubRepositoriesResponse> {
+  async repositories(
+    userId: string,
+    options: { forceRefresh?: boolean } = {},
+  ): Promise<GitHubRepositoriesResponse> {
+    if (options.forceRefresh) this.clearRepositoryCache(userId);
+    return cachedGitHubRequest(this.repositoryCache, userId, () =>
+      this.loadRepositories(userId),
+    );
+  }
+
+  private async loadRepositories(
+    userId: string,
+  ): Promise<GitHubRepositoriesResponse> {
     try {
       const [user, token] = await Promise.all([
         this.prisma.user.findUnique({
@@ -1992,6 +2041,7 @@ export class GitHubService {
   async branches(
     userId: string,
     selection: GitHubRepositorySelection,
+    options: { forceRefresh?: boolean } = {},
   ): Promise<GitHubBranch[]> {
     const { repoId, owner, name, installationId } = selection;
     if (
@@ -2017,7 +2067,11 @@ export class GitHubService {
           "Repository was not found",
           404,
         );
-      return this.api.listBranches(installationId, owner, name);
+      const cacheKey = `${installationId}:${owner}:${name}`;
+      if (options.forceRefresh) this.branchCache.delete(cacheKey);
+      return await cachedGitHubRequest(this.branchCache, cacheKey, () =>
+        this.api.listBranches(installationId, owner, name),
+      );
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(

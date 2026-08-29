@@ -73,7 +73,9 @@ export const getGitHubRepositories = ({
   }
 
   const nextRequest = request<GitHubRepositoriesResponse>(
-    "/github/repositories",
+    forceRefresh
+      ? "/github/repositories?forceRefresh=true"
+      : "/github/repositories",
   );
   githubRepositoriesRequest = nextRequest;
   void nextRequest.catch(() => {

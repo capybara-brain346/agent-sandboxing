@@ -61,6 +61,8 @@ backend checks installation ownership locally before making the direct branch
 request. GitHub session creation validates the selected metadata and installation
 ownership locally; repository and branch access are exercised during provisioning,
 where the selected base SHA is also verified when present.
+Repository and branch discovery responses use short-lived in-memory caches;
+explicit repository refresh and a newly connected installation invalidate them.
 
 Messages contain user, assistant, or system content plus processing metadata.
 Operational output stays in session events and artifacts. A message result
