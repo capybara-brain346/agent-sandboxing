@@ -33,11 +33,13 @@ once the message/run/lock transaction commits. `RunService` then:
 - never stops the sandbox on completion, so the next message in the session
   reuses it.
 
-GitHub-backed workers can use the platform-mediated `publish_pull_request`
-capability. The backend checks out `agent/<sessionId>/<runId>` before the worker
-runs, then publication commits, pushes, creates the PR, and restores the diff for
-final run capture. Pull requests are persisted with history and one current row
-per session; PR failures do not change a completed coding run to a failed run.
+GitHub-backed workers can use platform-mediated PR capabilities. The backend
+checks out `agent/<sessionId>/<runId>` before the worker runs, then
+`publish_pull_request` commits, pushes, creates the PR, and restores the diff for
+final run capture. `pull_request` can read or modify only PRs already associated
+with the current session. Pull requests are persisted with history and one
+current row per session; PR failures do not change a completed coding run to a
+failed run.
 Failed publish attempts are retained for history but cleared as current so a
 later retry is not blocked by the failed row. Current PR reads refresh the
 persisted snapshot from GitHub when a PR number is available, so externally

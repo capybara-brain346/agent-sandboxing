@@ -3,7 +3,7 @@
 The Agent Service owns all model-backed agent behavior. It runs inside the API
 process, uses the AI SDK 7 `generateText` calls with the configured OpenRouter
 model, owns orchestration and summary-compaction decisions, proxies seven tools
-through the session-owned sandbox runtime plus one GitHub-backed publish tool, relays
+through the session-owned sandbox runtime plus two GitHub-backed PR tools, relays
 tool lifecycle events to the
 shared run event stream, and records model usage for the eval trace layer. It
 does not expose an HTTP route or call the persisted command API.
@@ -133,6 +133,12 @@ because there was no workspace diff, or failed with the returned safe code and
 message. The worker must not claim a pull request was raised, opened, created,
 or published unless the tool returned success with a pull request URL.
 
+`pull_request` can read or modify only pull requests already associated with the
+current chat session. The agent supplies an action and optional PR number; the
+backend injects `sessionId` and `runId`, resolves the persisted session PR, and
+performs GitHub operations through the same brokered service. Agents never supply
+owner, repo, installation, branch, URL, token, or shell-based GitHub commands.
+
 ## Runtime boundary
 
 Each factory receives a `Pick<SandboxRuntime, "simpleExec">`, the sandbox's
@@ -141,7 +147,7 @@ an AI SDK 7 `tool({ inputSchema, execute })` object. The registry contains
 exactly these keys:
 
 `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`. GitHub-backed runs
-also expose `publish_pull_request`.
+also expose `publish_pull_request` and `pull_request`.
 
 Workspace tools execute in `/workspace/repo` through
 `SandboxRuntime.simpleExec`. GitHub tools use only their injected brokered
@@ -242,6 +248,9 @@ truncated }` output. Its timeout is `AGENT_BASH_TIMEOUT_MS` and its response
   changes as a pull request from the backend-created run branch. The backend owns
   branch naming, run-branch setup, commit, push, and PR creation. Pull requests
   are draft by default.
+- `pull_request(input)` reads or modifies an existing session pull request. It
+  accepts `read`, `update`, `comment`, `close`, and `reopen`; update requires at
+  least one of `title`, `body`, `baseBranch`, or `draft`.
 
 `grep`, `find`, and `ls` have a fixed 50 KiB UTF-8 response budget and report
 `truncated: true` when the budget is exceeded. All truncation preserves valid

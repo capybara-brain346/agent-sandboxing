@@ -8,6 +8,7 @@ import { createFindTool } from "../src/services/agent/tools/find";
 import { createGrepTool } from "../src/services/agent/tools/grep";
 import { createLsTool } from "../src/services/agent/tools/ls";
 import { createPublishPullRequestTool } from "../src/services/agent/tools/publish-pull-request";
+import { createPullRequestTool } from "../src/services/agent/tools/pull-request";
 import { createReadTool } from "../src/services/agent/tools/read";
 import { createToolRegistry } from "../src/services/agent/tools/registry";
 import { createWriteTool } from "../src/services/agent/tools/write";
@@ -68,14 +69,18 @@ describe("sandbox-proxied agent tools", () => {
     ]);
   });
 
-  it("registers one backend-owned GitHub publication tool", () => {
+  it("registers backend-owned GitHub pull request tools", () => {
     const tools = createToolRegistry(
       runtime(success()),
       "sandbox-1",
       config,
       signal,
       { sessionId: "chat_1", runId: "run_1" },
-      { publishPullRequest: vi.fn() },
+      {
+        publishPullRequest: vi.fn(),
+        currentPullRequest: vi.fn(),
+        pullRequest: vi.fn(),
+      },
     );
 
     expect(Object.keys(tools)).toEqual([
@@ -87,6 +92,7 @@ describe("sandbox-proxied agent tools", () => {
       "find",
       "ls",
       "publish_pull_request",
+      "pull_request",
     ]);
   });
 
@@ -123,6 +129,77 @@ describe("sandbox-proxied agent tools", () => {
       { title: "Fix it", body: "Details", draft: false },
       { timeoutMs: 300, signal },
     );
+  });
+
+  it("reads the current session pull request without repository input", async () => {
+    const github = {
+      currentPullRequest: vi.fn(async () => ({
+        provider: "github" as const,
+        url: "https://github.test/pull/1",
+        number: 1,
+        branch: "agent/chat_1/run_1",
+        baseBranch: "main",
+        title: "Fix it",
+        status: "open" as const,
+        draft: true,
+        failure: null,
+      })),
+      pullRequest: vi.fn(),
+    };
+
+    const result = await execute(
+      createPullRequestTool(signal, "chat_1", "run_1", github),
+      { action: "read" },
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      action: "read",
+      pullRequest: { number: 1 },
+    });
+    expect(github.currentPullRequest).toHaveBeenCalledWith("chat_1");
+    expect(github.pullRequest).not.toHaveBeenCalled();
+  });
+
+  it("delegates pull request comments through the session-scoped GitHub service", async () => {
+    const github = {
+      currentPullRequest: vi.fn(),
+      pullRequest: vi.fn(async () => ({
+        success: true,
+        action: "comment" as const,
+        pullRequest: null,
+        failure: null,
+        github: null,
+      })),
+    };
+
+    const result = await execute(
+      createPullRequestTool(signal, "chat_1", "run_1", github),
+      { action: "comment", comment: "Looks good" },
+    );
+
+    expect(result).toMatchObject({ success: true, action: "comment" });
+    expect(github.pullRequest).toHaveBeenCalledWith("chat_1", "run_1", {
+      action: "comment",
+      comment: "Looks good",
+    });
+  });
+
+  it.each([
+    { action: "update" },
+    { action: "comment", comment: "" },
+    { action: "close", number: 0 },
+  ])("rejects invalid pull request input: %o", async (input) => {
+    const github = {
+      currentPullRequest: vi.fn(),
+      pullRequest: vi.fn(),
+    };
+
+    await expect(
+      execute(createPullRequestTool(signal, "chat_1", "run_1", github), input),
+    ).rejects.toThrow();
+    expect(github.currentPullRequest).not.toHaveBeenCalled();
+    expect(github.pullRequest).not.toHaveBeenCalled();
   });
 
   it("reads bounded UTF-8 content with the task tool timeout", async () => {

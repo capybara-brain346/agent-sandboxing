@@ -88,7 +88,8 @@ export type GitHubPullRequestInput = {
 
 export type GitHubPullRequestToolResult = {
   success: boolean;
-  action: "publish" | "create" | "update" | "comment" | "close" | "reopen";
+  action:
+    "publish" | "create" | "read" | "update" | "comment" | "close" | "reopen";
   pullRequest: PullRequestMetadata | null;
   failure: PullRequestFailure | null;
   github: GitHubResponseFailure | null;

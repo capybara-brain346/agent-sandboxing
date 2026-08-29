@@ -8,9 +8,13 @@ import { createLsTool } from "./ls";
 import { createReadTool } from "./read";
 import { createWriteTool } from "./write";
 import { createPublishPullRequestTool } from "./publish-pull-request";
+import { createPullRequestTool } from "./pull-request";
 import type { GitHubService } from "../../github/github";
 
-export type AgentGitHubTools = Pick<GitHubService, "publishPullRequest">;
+export type AgentGitHubTools = Pick<
+  GitHubService,
+  "publishPullRequest" | "currentPullRequest" | "pullRequest"
+>;
 
 export const createToolRegistry = (
   runtime: AgentToolRuntime,
@@ -33,6 +37,12 @@ export const createToolRegistry = (
           runtime,
           containerName,
           config,
+          signal,
+          context.sessionId,
+          context.runId,
+          github,
+        ),
+        pull_request: createPullRequestTool(
           signal,
           context.sessionId,
           context.runId,
