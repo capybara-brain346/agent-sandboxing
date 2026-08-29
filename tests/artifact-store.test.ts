@@ -30,7 +30,7 @@ const makePrisma = () => {
 
 describe("ArtifactStore", () => {
   it("creates an artifact and returns a bounded pointer with a preview", async () => {
-    const { prisma } = makePrisma();
+    const { prisma, artifact } = makePrisma();
     const store = new ArtifactStore(prisma);
 
     const pointer = await store.create({
@@ -47,6 +47,14 @@ describe("ArtifactStore", () => {
     expect(pointer.redacted).toBe(false);
     expect(pointer.preview).toBe("diff --git a/x b/x\n+hello");
     expect(pointer.byteSize).toBeGreaterThan(0);
+    expect(artifact.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          sessionId: "chat_1",
+          messageId: "msg_1",
+        }),
+      }),
+    );
   });
 
   it("truncates content over the byte cap and marks it truncated", async () => {

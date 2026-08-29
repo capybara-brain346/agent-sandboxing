@@ -5,6 +5,11 @@
 - [Agent Sandboxing Project](agent-sandboxing-project.md) — product direction,
   scope, and broader architecture.
 
+## Current Chat Invariant
+
+A chat session owns one sandbox and one working branch. Each user message may
+trigger processing in that same workspace. There is no run resource.
+
 ## Module guides
 
 - [Chat Session Service](modules/chat-session/README.md) — the product

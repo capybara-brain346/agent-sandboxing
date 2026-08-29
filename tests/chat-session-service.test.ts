@@ -259,6 +259,107 @@ describe("ChatSessionService", () => {
     });
   });
 
+  it("returns the latest terminal message result", async () => {
+    const message = {
+      id: "msg_latest",
+      sessionId: "chat_1",
+      role: "user" as const,
+      content: "Fix the issue",
+      processingStatus: "completed" as const,
+      processingStartedAt: new Date("2026-01-01T00:00:01.000Z"),
+      processingCompletedAt: new Date("2026-01-01T00:00:02.000Z"),
+      failureCode: null,
+      failureMessage: null,
+      agentSummary: "Fixed the issue",
+      diff: "diff --git a/file.txt b/file.txt",
+      exitReason: "completed",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      artifacts: [],
+    };
+    const findFirst = vi.fn(async () => message);
+    const prisma = {
+      chatMessage: { findFirst },
+    } as unknown as PrismaClient;
+    const currentPullRequest = vi.fn(async () => null);
+    const service = new ChatSessionService(
+      prisma,
+      {} as EventStore,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      { currentPullRequest, validateRepository: vi.fn() },
+    );
+
+    await expect(
+      service.sessionResult(userId, "chat_1"),
+    ).resolves.toMatchObject({
+      messageId: "msg_latest",
+      status: "completed",
+      diff: "diff --git a/file.txt b/file.txt",
+      agentSummary: "Fixed the issue",
+    });
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          sessionId: "chat_1",
+          role: "user",
+          processingStatus: { in: ["completed", "failed", "cancelled"] },
+        }),
+        orderBy: { createdAt: "desc" },
+      }),
+    );
+    expect(currentPullRequest).toHaveBeenCalledWith("chat_1");
+  });
+
+  it("returns completed cancellation when it directly cancels the active message", async () => {
+    const cancelDirectly = vi.fn(async () => true);
+    const service = new ChatSessionService(
+      {
+        chatSession: {
+          findFirst: vi.fn(async () => ({ activeMessageId: "msg_1" })),
+        },
+        chatMessage: {
+          findUnique: vi.fn(async () => ({ processingStatus: "queued" })),
+        },
+      } as unknown as PrismaClient,
+      {} as EventStore,
+      undefined,
+      { requestCancellation: vi.fn(() => false), cancelDirectly },
+    );
+
+    await expect(
+      service.cancelCurrentMessage(userId, "chat_1"),
+    ).resolves.toEqual({ messageId: "msg_1", status: "cancelled" });
+    expect(cancelDirectly).toHaveBeenCalledWith("chat_1", "msg_1");
+  });
+
+  it("returns cancelling while tracked processing receives cancellation", async () => {
+    const requestCancellation = vi.fn(() => true);
+    const service = new ChatSessionService(
+      {
+        chatSession: {
+          findFirst: vi.fn(async () => ({ activeMessageId: "msg_1" })),
+        },
+        chatMessage: {
+          findUnique: vi.fn(async () => ({ processingStatus: "working" })),
+        },
+      } as unknown as PrismaClient,
+      {} as EventStore,
+      undefined,
+      { requestCancellation, cancelDirectly: vi.fn(async () => false) },
+    );
+
+    await expect(
+      service.cancelCurrentMessage(userId, "chat_1"),
+    ).resolves.toEqual({
+      messageId: "msg_1",
+      status: "cancelling",
+      eventsUrl: "/chat-sessions/chat_1/events",
+    });
+    expect(requestCancellation).toHaveBeenCalledWith("chat_1", "msg_1");
+  });
+
   it("delegates artifact fetches to the injected artifact store", async () => {
     const prisma = {
       chatSession: {

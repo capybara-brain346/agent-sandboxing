@@ -22,6 +22,9 @@ tokens.
 - `GET /chat-sessions/:sessionId/result` loads the latest terminal result.
 - `POST /chat-sessions/:sessionId/cancel` cancels the active message.
 
+A chat session owns one sandbox and one working branch. Each user message may
+trigger processing in that same workspace. There is no run resource.
+
 The workspace uses `activeMessageId` and message `processingStatus` to disable
 the composer while processing is active. The inspector shows the processing
 timeline, status, changed files, diff, and pull request. Session events are

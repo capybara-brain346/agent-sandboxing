@@ -16,6 +16,11 @@ Implementation:
 - [`message-orchestrator.ts`](../../../src/services/chat/message-orchestrator.ts)
   owns context, delegation, and user-facing response construction.
 
+## Session invariant
+
+A chat session owns one sandbox and one working branch. Each user message may
+trigger processing in that same workspace. There is no run resource.
+
 ## Processing flow
 
 `POST /chat-sessions/:sessionId/messages` creates a queued user message and

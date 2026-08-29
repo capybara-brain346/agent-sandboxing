@@ -605,8 +605,14 @@ export class ChatSessionService {
       messageId: session.activeMessageId,
       mode: tracked ? "tracked" : "direct",
     });
-    if (!tracked)
-      await this.processing.cancelDirectly(sessionId, session.activeMessageId);
+    if (!tracked) {
+      const cancelled = await this.processing.cancelDirectly(
+        sessionId,
+        session.activeMessageId,
+      );
+      if (cancelled)
+        return { messageId: session.activeMessageId, status: "cancelled" };
+    }
     return {
       messageId: session.activeMessageId,
       status: "cancelling",

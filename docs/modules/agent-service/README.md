@@ -21,6 +21,11 @@ Implementation:
 - [`tool-event-relay.ts`](../../../src/services/agent/tool-event-relay.ts)
   persists safe tool call and result events.
 
+## Session invariant
+
+A chat session owns one sandbox and one working branch. Each user message may
+trigger processing in that same workspace. There is no run resource.
+
 ## Runtime boundary
 
 The message processor passes `sessionId`, `messageId`, sandbox ID, a bounded

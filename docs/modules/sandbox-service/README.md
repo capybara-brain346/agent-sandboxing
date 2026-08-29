@@ -15,6 +15,11 @@ Implementation:
 - [`command-execution.ts`](../../../src/services/sandbox/command-execution.ts)
   retains the bounded persisted command seam for future use.
 
+## Session invariant
+
+A chat session owns one sandbox and one working branch. Each user message may
+trigger processing in that same workspace. There is no run resource.
+
 ## Internal contract
 
 The message processor uses these session-scoped operations:

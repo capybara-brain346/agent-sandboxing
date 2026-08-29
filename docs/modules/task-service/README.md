@@ -11,6 +11,9 @@ database migration that removed the old execution tables. New code must use the
 session, message, processing, result, and session-event contracts documented in
 the [Chat Session Service](../chat-session/README.md).
 
+A chat session owns one sandbox and one working branch. Each user message may
+trigger processing in that same workspace. There is no run resource.
+
 ## Verification
 
 Use the repository checks from the root:

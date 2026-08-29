@@ -301,6 +301,23 @@ describe("chat session routes", () => {
     expect(cancel).toHaveBeenCalledWith("user_1", "chat_1");
   });
 
+  it("does not expose legacy run routes", async () => {
+    const routes = [
+      "/chat-sessions/chat_1/runs",
+      "/chat-sessions/chat_1/runs/run_1",
+      "/chat-sessions/chat_1/runs/run_1/result",
+      "/chat-sessions/chat_1/runs/run_1/events",
+    ];
+
+    for (const route of routes)
+      await expect(request(makeApp()).get(route)).resolves.toMatchObject({
+        status: 404,
+      });
+    await expect(
+      request(makeApp()).delete("/chat-sessions/chat_1/runs/run_1"),
+    ).resolves.toMatchObject({ status: 404 });
+  });
+
   it("fetches full artifact content scoped to the session", async () => {
     const getArtifact = vi
       .spyOn(chatSessionService, "getArtifact")

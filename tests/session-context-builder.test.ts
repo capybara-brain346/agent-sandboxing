@@ -83,7 +83,7 @@ describe("SessionContextBuilder", () => {
     );
   });
 
-  it("returns messages in chronological order and an empty workspace snapshot with no prior run", async () => {
+  it("returns messages in chronological order and an empty workspace snapshot with no prior processing", async () => {
     const builder = new SessionContextBuilder(
       makePrisma({
         messages: [
