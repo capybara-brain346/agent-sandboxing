@@ -52,6 +52,7 @@ const makeService = () => {
         repoDefaultBranch: null,
         repoInstallationId: null,
         repoBaseBranch: null,
+        repoBaseSha: null,
         sandbox: null,
       })),
     },
@@ -175,6 +176,7 @@ describe("MessageProcessingService", () => {
         repoDefaultBranch: "main",
         repoInstallationId: "10",
         repoBaseBranch: "main",
+        repoBaseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         sandbox: null,
       },
       {
@@ -187,6 +189,7 @@ describe("MessageProcessingService", () => {
         repoDefaultBranch: "main",
         repoInstallationId: "10",
         repoBaseBranch: "main",
+        repoBaseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         sandbox: { id: "sbox_1", status: "ready" },
       },
     ];
@@ -251,7 +254,11 @@ describe("MessageProcessingService", () => {
       "chat_1",
       "msg_1",
       "sbox_1",
-      expect.objectContaining({ source: "github", baseBranch: "main" }),
+      expect.objectContaining({
+        source: "github",
+        baseBranch: "main",
+        baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
     );
     expect(sandbox.ensureReadyForSession).toHaveBeenNthCalledWith(
       2,

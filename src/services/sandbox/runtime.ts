@@ -343,6 +343,47 @@ export class SandboxRuntime {
           502,
         );
       }
+      if (source.baseSha) {
+        let checkedOutSha: string;
+        try {
+          const checkedOut = await execFile(
+            "docker",
+            [
+              "exec",
+              "-u",
+              "0",
+              containerId,
+              "git",
+              "-C",
+              "/workspace/repo",
+              "rev-parse",
+              "HEAD",
+            ],
+            { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+          );
+          checkedOutSha = checkedOut.stdout.trim().toLowerCase();
+        } catch {
+          throw new ServiceError(
+            "github_checkout_failed",
+            "GitHub checked-out commit could not be verified",
+            502,
+          );
+        }
+        const expectedSha = source.baseSha.toLowerCase();
+        if (
+          !checkedOutSha ||
+          (checkedOutSha !== expectedSha &&
+            !(
+              expectedSha.length < checkedOutSha.length &&
+              checkedOutSha.startsWith(expectedSha)
+            ))
+        )
+          throw new ServiceError(
+            "github_base_sha_mismatch",
+            "GitHub base branch changed since it was selected",
+            409,
+          );
+      }
     }
     await execFile(
       "docker",

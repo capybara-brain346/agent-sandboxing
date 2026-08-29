@@ -230,7 +230,7 @@ describe("SandboxRuntime.simpleExec", () => {
     ).rejects.toBe(failure);
   });
 
-  it("clones, checks out, normalizes origin, and configures ownership for GitHub", async () => {
+  it("clones, checks out, verifies the selected SHA, and configures ownership for GitHub", async () => {
     execFile.mockImplementation(
       (
         _command: string,
@@ -242,7 +242,12 @@ describe("SandboxRuntime.simpleExec", () => {
         ) => void,
       ) =>
         callback(null, {
-          stdout: args[0] === "create" ? "container-1\n" : "",
+          stdout:
+            args[0] === "create"
+              ? "container-1\n"
+              : args.includes("rev-parse")
+                ? "a".repeat(40) + "\n"
+                : "",
           stderr: "",
         }),
     );
@@ -258,6 +263,7 @@ describe("SandboxRuntime.simpleExec", () => {
           installationId: "10",
           cloneUrl: "https://github.com/octo/repo.git",
           baseBranch: "feature/test",
+          baseSha: "a".repeat(40),
           token: "installation-token",
         },
       ),
@@ -280,6 +286,17 @@ describe("SandboxRuntime.simpleExec", () => {
       ]),
     );
     expect(remoteCall?.join(" ")).not.toContain("installation-token");
+    expect(calls.find((args) => args.includes("rev-parse"))).toEqual([
+      "exec",
+      "-u",
+      "0",
+      "container-1",
+      "git",
+      "-C",
+      "/workspace/repo",
+      "rev-parse",
+      "HEAD",
+    ]);
     expect(calls.at(-1)).toEqual([
       "exec",
       "-u",
@@ -292,6 +309,46 @@ describe("SandboxRuntime.simpleExec", () => {
       "safe.directory",
       "/workspace/repo",
     ]);
+  });
+
+  it("returns a stale branch failure when the checked-out SHA differs", async () => {
+    execFile.mockImplementation(
+      (
+        _command: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, result?: unknown) => void,
+      ) => {
+        if (args.includes("rev-parse"))
+          callback(null, { stdout: "b".repeat(40) + "\n", stderr: "" });
+        else
+          callback(null, {
+            stdout: args[0] === "create" ? "container-1\n" : "",
+            stderr: "",
+          });
+      },
+    );
+
+    await expect(
+      new SandboxRuntime(provisionConfig).provision(
+        "s1",
+        "sandbox-s1",
+        "node:22",
+        {
+          source: "github",
+          owner: "octo",
+          name: "repo",
+          installationId: "10",
+          cloneUrl: "https://github.com/octo/repo.git",
+          baseBranch: "main",
+          baseSha: "a".repeat(40),
+          token: "installation-token",
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "github_base_sha_mismatch",
+      message: "GitHub base branch changed since it was selected",
+    });
   });
 
   it("returns a safe clone failure without the installation token", async () => {

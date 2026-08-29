@@ -58,7 +58,8 @@ Fixture provisioning copies the configured repository into
 `/workspace/repo`. GitHub provisioning clones the selected repository with a
 short-lived installation token, resets the remote to a token-free URL, and
 checks out the selected base branch before message processing selects the
-session branch.
+session branch. When a base SHA was selected, provisioning verifies the checked
+out commit and fails if the branch has moved.
 
 ## Events and safety
 

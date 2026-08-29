@@ -59,7 +59,8 @@ test, evaluation, and acceptance environments; GitHub repository branch lookup
 uses the selected repository's owner, name, and installation metadata. The
 backend checks installation ownership locally before making the direct branch
 request. GitHub session creation validates the selected metadata and installation
-ownership locally; repository and branch access are exercised during provisioning.
+ownership locally; repository and branch access are exercised during provisioning,
+where the selected base SHA is also verified when present.
 
 Messages contain user, assistant, or system content plus processing metadata.
 Operational output stays in session events and artifacts. A message result

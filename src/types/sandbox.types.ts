@@ -18,6 +18,7 @@ export type SandboxProvisioningSource =
       installationId: string;
       cloneUrl: string;
       baseBranch: string;
+      baseSha?: string;
       token: string;
     };
 
