@@ -86,6 +86,10 @@ later publications synchronize the session branch from its remote pull request
 branch before committing new changes. GitHub and Git failures are persisted as
 safe pull request metadata and session events.
 
+GitHub API adapter calls emit structured debug timing events with operation,
+duration, pagination, result counts, and safe repository context. Tokens and
+other secret values are never included.
+
 ## Agent and artifacts
 
 The chat service injects Agent Service collaborators and contains no provider

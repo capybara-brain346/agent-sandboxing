@@ -3,6 +3,7 @@ import { App } from "@octokit/app";
 import { Octokit } from "@octokit/rest";
 import type { PrismaClient } from "@prisma/client";
 import type { Config } from "../../config";
+import { logger } from "../../logger";
 import { ServiceError } from "../../shared/errors";
 import type {
   GitHubBranch,
@@ -173,6 +174,21 @@ type InstallationOctokit = {
   ) => Promise<{ data: unknown }>;
 };
 
+const timedGitHubApiCall = <T>(
+  operation: string,
+  fields: Record<string, unknown>,
+  call: () => Promise<T>,
+): Promise<T> => {
+  const startedAt = process.hrtime.bigint();
+  return call().finally(() => {
+    logger.debug("github_api_call_timing", {
+      operation,
+      durationMs: Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6),
+      ...fields,
+    });
+  });
+};
+
 class OctokitGitHubApi implements GitHubApi {
   private readonly app: App;
 
@@ -185,54 +201,68 @@ class OctokitGitHubApi implements GitHubApi {
 
   async listAppInstallations(): Promise<GitHubAppInstallationRecord[]> {
     const installations: GitHubAppInstallationRecord[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await this.app.octokit.request(
-        "GET /app/installations",
-        {
-          per_page: 100,
-          page,
-        },
-      );
-      const data = response.data as Array<{
-        id: number;
-        account: { id: number; login: string; type: string } | null;
-      }>;
-      installations.push(
-        ...data.flatMap((installation) =>
-          installation.account
-            ? [
-                {
-                  installationId: String(installation.id),
-                  accountId: String(installation.account.id),
-                  accountLogin: installation.account.login,
-                  accountType: installation.account.type,
-                },
-              ]
-            : [],
-        ),
-      );
-      if (data.length < 100) return installations;
-    }
+    const timing = { pageCount: 0, resultCount: 0 };
+    return timedGitHubApiCall("listAppInstallations", timing, async () => {
+      for (let page = 1; ; page += 1) {
+        timing.pageCount = page;
+        const response = await this.app.octokit.request(
+          "GET /app/installations",
+          {
+            per_page: 100,
+            page,
+          },
+        );
+        const data = response.data as Array<{
+          id: number;
+          account: { id: number; login: string; type: string } | null;
+        }>;
+        installations.push(
+          ...data.flatMap((installation) =>
+            installation.account
+              ? [
+                  {
+                    installationId: String(installation.id),
+                    accountId: String(installation.account.id),
+                    accountLogin: installation.account.login,
+                    accountType: installation.account.type,
+                  },
+                ]
+              : [],
+          ),
+        );
+        timing.resultCount = installations.length;
+        if (data.length < 100) return installations;
+      }
+    });
   }
 
   async listOAuthRepositories(
     accessToken: string,
   ): Promise<GitHubRepositoryRecord[]> {
-    const octokit = new Octokit({ auth: accessToken });
-    const repositories = await octokit.paginate(
-      octokit.rest.repos.listForAuthenticatedUser,
-      { affiliation: "owner", per_page: 100, visibility: "all" },
-    );
-    return repositories.map((repository) => ({
-      id: String(repository.id),
-      ownerId: String(repository.owner.id),
-      ownerLogin: repository.owner.login,
-      ownerType: repository.owner.type,
-      name: repository.name,
-      fullName: repository.full_name,
-      private: repository.private,
-      defaultBranch: repository.default_branch,
-    }));
+    const timing = { pageCount: 0, resultCount: 0 };
+    return timedGitHubApiCall("listOAuthRepositories", timing, async () => {
+      const octokit = new Octokit({ auth: accessToken });
+      const repositories = await octokit.paginate(
+        octokit.rest.repos.listForAuthenticatedUser,
+        { affiliation: "owner", per_page: 100, visibility: "all" },
+        (response) => {
+          timing.pageCount += 1;
+          return response.data;
+        },
+      );
+      const result = repositories.map((repository) => ({
+        id: String(repository.id),
+        ownerId: String(repository.owner.id),
+        ownerLogin: repository.owner.login,
+        ownerType: repository.owner.type,
+        name: repository.name,
+        fullName: repository.full_name,
+        private: repository.private,
+        defaultBranch: repository.default_branch,
+      }));
+      timing.resultCount = result.length;
+      return result;
+    });
   }
 
   async getInstallation(
@@ -253,36 +283,50 @@ class OctokitGitHubApi implements GitHubApi {
   }
 
   async createInstallationToken(installationId: string): Promise<string> {
-    const octokit = await this.app.getInstallationOctokit(
-      Number(installationId),
+    return timedGitHubApiCall(
+      "createInstallationToken",
+      { installationId },
+      async () => {
+        const octokit = await this.app.getInstallationOctokit(
+          Number(installationId),
+        );
+        const authentication = (await octokit.auth({
+          type: "installation",
+        })) as { token?: unknown };
+        if (typeof authentication.token !== "string" || !authentication.token)
+          throw new Error("GitHub installation token was missing");
+        return authentication.token;
+      },
     );
-    const authentication = (await octokit.auth({
-      type: "installation",
-    })) as { token?: unknown };
-    if (typeof authentication.token !== "string" || !authentication.token)
-      throw new Error("GitHub installation token was missing");
-    return authentication.token;
   }
 
   async listInstallationRepositories(
     installationId: string,
   ): Promise<GitHubRepositoryRecord[]> {
     const repositories: GitHubRepositoryRecord[] = [];
-    for await (const item of this.app.eachRepository.iterator({
-      installationId: Number(installationId),
-    })) {
-      repositories.push({
-        id: String(item.repository.id),
-        ownerId: String(item.repository.owner.id),
-        ownerLogin: item.repository.owner.login,
-        ownerType: item.repository.owner.type,
-        name: item.repository.name,
-        fullName: item.repository.full_name,
-        private: item.repository.private,
-        defaultBranch: item.repository.default_branch,
-      });
-    }
-    return repositories;
+    const timing = { installationId, resultCount: 0 };
+    return timedGitHubApiCall(
+      "listInstallationRepositories",
+      timing,
+      async () => {
+        for await (const item of this.app.eachRepository.iterator({
+          installationId: Number(installationId),
+        })) {
+          repositories.push({
+            id: String(item.repository.id),
+            ownerId: String(item.repository.owner.id),
+            ownerLogin: item.repository.owner.login,
+            ownerType: item.repository.owner.type,
+            name: item.repository.name,
+            fullName: item.repository.full_name,
+            private: item.repository.private,
+            defaultBranch: item.repository.default_branch,
+          });
+          timing.resultCount = repositories.length;
+        }
+        return repositories;
+      },
+    );
   }
 
   async listBranches(
@@ -290,34 +334,45 @@ class OctokitGitHubApi implements GitHubApi {
     owner: string,
     name: string,
   ): Promise<GitHubBranchRecord[]> {
-    const octokit = (await this.app.getInstallationOctokit(
-      Number(installationId),
-    )) as unknown as InstallationOctokit;
     const branches: GitHubBranchRecord[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await octokit.request(
-        "GET /repos/{owner}/{repo}/branches",
-        {
-          owner,
-          repo: name,
-          per_page: 100,
-          page,
-        },
-      );
-      const data = response.data as Array<{
-        name: string;
-        commit: { sha: string };
-        protected: boolean;
-      }>;
-      branches.push(
-        ...data.map((branch) => ({
-          name: branch.name,
-          sha: branch.commit.sha,
-          protected: branch.protected,
-        })),
-      );
-      if (data.length < 100) return branches;
-    }
+    const timing = {
+      installationId,
+      owner,
+      repo: name,
+      pageCount: 0,
+      resultCount: 0,
+    };
+    return timedGitHubApiCall("listBranches", timing, async () => {
+      const octokit = (await this.app.getInstallationOctokit(
+        Number(installationId),
+      )) as unknown as InstallationOctokit;
+      for (let page = 1; ; page += 1) {
+        timing.pageCount = page;
+        const response = await octokit.request(
+          "GET /repos/{owner}/{repo}/branches",
+          {
+            owner,
+            repo: name,
+            per_page: 100,
+            page,
+          },
+        );
+        const data = response.data as Array<{
+          name: string;
+          commit: { sha: string };
+          protected: boolean;
+        }>;
+        branches.push(
+          ...data.map((branch) => ({
+            name: branch.name,
+            sha: branch.commit.sha,
+            protected: branch.protected,
+          })),
+        );
+        timing.resultCount = branches.length;
+        if (data.length < 100) return branches;
+      }
+    });
   }
 
   private async installationRequest(
