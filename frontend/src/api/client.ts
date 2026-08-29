@@ -78,11 +78,18 @@ export const getGitHubRepositories = ({
       : "/github/repositories",
   );
   githubRepositoriesRequest = nextRequest;
-  void nextRequest.catch(() => {
-    if (githubRepositoriesRequest === nextRequest) {
-      githubRepositoriesRequest = null;
-    }
-  });
+  void nextRequest.then(
+    () => {
+      if (githubRepositoriesRequest === nextRequest) {
+        githubRepositoriesRequest = null;
+      }
+    },
+    () => {
+      if (githubRepositoriesRequest === nextRequest) {
+        githubRepositoriesRequest = null;
+      }
+    },
+  );
   return nextRequest;
 };
 

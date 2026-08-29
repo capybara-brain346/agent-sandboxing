@@ -41,6 +41,8 @@ rendered with `TimelineRow` and tool results use bounded event snippets.
 - GitHub repository discovery reuses an in-flight request across the repository
   picker and shell switcher; explicit refresh bypasses that request and the
   backend's short-lived repository and branch caches.
+- Settled repository responses are not retained in the browser, so a later
+  authenticated user cannot receive an earlier user's repository list.
 - `src/api/useEventStream.ts` opens the session SSE stream and deduplicates
   sequence numbers.
 - `src/pages/` contains authentication, repository selection, and chat pages.

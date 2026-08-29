@@ -96,6 +96,25 @@ GitHub API adapter calls emit structured debug timing events with operation,
 duration, pagination, result counts, and safe repository context. Tokens and
 other secret values are never included.
 
+## GitHub latency verification
+
+The response-time regression coverage is split across
+`tests/github-service.test.ts`, `tests/github-routes.test.ts`,
+`tests/github-api-timing.test.ts`, `tests/chat-session-service.test.ts`, and
+`tests/message-processing.test.ts`. Run it with:
+
+```bash
+npm test -- tests/github-service.test.ts tests/github-routes.test.ts tests/github-api-timing.test.ts tests/chat-session-service.test.ts tests/message-processing.test.ts
+```
+
+For a deployment rollout, set `LOG_LEVEL=debug` and capture one journey through
+repository discovery, branch selection, session creation, and the first
+message. Compare `request_completed` durations with the `github_api_call_timing`
+events for `listAppInstallations`, `listOAuthRepositories`,
+`listInstallationRepositories`, `listBranches`, and
+`createInstallationToken`. Session creation should have no GitHub API timing
+events; provisioning should still include token creation and repository setup.
+
 ## Agent and artifacts
 
 The chat service injects Agent Service collaborators and contains no provider

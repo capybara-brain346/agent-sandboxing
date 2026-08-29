@@ -249,6 +249,23 @@ describe("MessageProcessingService", () => {
     await vi.waitFor(() => expect(processor.process).toHaveBeenCalledTimes(2));
 
     expect(sandbox.createForSessionInTransaction).toHaveBeenCalledTimes(1);
+    expect(sandbox.createForSessionInTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        source: {
+          source: "github",
+          owner: "octo",
+          name: "repo",
+          installationId: "10",
+          cloneUrl: "https://github.com/octo/repo.git",
+          baseBranch: "main",
+          baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          token: "installation-token",
+        },
+        image: undefined,
+      },
+      { sessionId: "chat_1" },
+    );
     expect(sandbox.ensureReadyForSession).toHaveBeenNthCalledWith(
       1,
       "chat_1",
@@ -278,6 +295,7 @@ describe("MessageProcessingService", () => {
       "sbox_1",
       { baseBranch: "main", defaultBranch: "main" },
     );
+    expect(github.createInstallationToken).toHaveBeenCalledWith("10");
     expect(github.createInstallationToken).toHaveBeenCalledTimes(1);
   });
 });
