@@ -262,6 +262,14 @@ export class ChatSessionService {
     >,
   ) {}
 
+  async currentPullRequest(
+    userId: string,
+    sessionId: string,
+  ): Promise<PullRequestMetadata | null> {
+    await this.requireSession(userId, sessionId);
+    return this.github ? this.github.currentPullRequest(sessionId) : null;
+  }
+
   async createSession(
     userId: string,
     input: CreateChatSessionRequest,

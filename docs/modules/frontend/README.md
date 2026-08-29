@@ -53,8 +53,10 @@ MVP only, matching the current session API surface:
     action while non-terminal (`DELETE .../runs/:runId`), the terminal result
     (`GET .../runs/:runId/result`) with exit reason/summary/failure, and the
     unified diff via `DiffTable`. The Pull request tab renders current PR
-    status, draft state, safe failure details, and an external GitHub link when
-    available. There is no approval button.
+    status, including merged state, draft state, safe failure details, and an
+    external GitHub link when available. Opening the tab calls `GET
+/chat-sessions/:sessionId/pull-request` so externally changed GitHub state
+    can replace stale run-event metadata. There is no approval button.
   - The Timeline tab renders the live run event stream as `TaskRow`s (with
     `ToolChip` for agent tool calls/results).
 

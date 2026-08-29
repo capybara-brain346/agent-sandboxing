@@ -63,6 +63,7 @@ describe("GitHubService", () => {
         branch: "feature/test",
         baseBranch: "main",
         title: "Fix it",
+        status: "open" as const,
         state: "open" as const,
         draft: true,
       })),
@@ -114,6 +115,107 @@ describe("GitHubService", () => {
     expect(update).toHaveBeenCalled();
   });
 
+  it("refreshes the current pull request from GitHub", async () => {
+    const row = pullRequestRow({
+      number: 7,
+      nodeId: "node_7",
+      url: "https://github.com/octo/repo/pull/7",
+      status: "open",
+      draft: true,
+      openedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+      pullRequestRow({ ...row, ...data }),
+    );
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      getPullRequest: vi.fn(async () => ({
+        number: 7,
+        nodeId: "node_7",
+        url: "https://github.com/octo/repo/pull/7",
+        branch: "feature/test",
+        baseBranch: "main",
+        title: "Fix it",
+        status: "open" as const,
+        state: "open" as const,
+        draft: false,
+      })),
+    };
+    const prisma = {
+      pullRequest: {
+        findFirst: vi.fn(async () => row),
+        update,
+      },
+    } as unknown as PrismaClient;
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(service.currentPullRequest("chat_1")).resolves.toMatchObject({
+      number: 7,
+      status: "open",
+      draft: false,
+    });
+    expect(api.getPullRequest).toHaveBeenCalledWith("10", "octo", "repo", 7);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "pr_1" },
+        data: expect.objectContaining({ status: "open", draft: false }),
+      }),
+    );
+  });
+
+  it("maps merged GitHub pull requests to merged status", async () => {
+    const row = pullRequestRow({
+      number: 7,
+      status: "open",
+      draft: false,
+      openedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+      pullRequestRow({ ...row, ...data }),
+    );
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+      getPullRequest: vi.fn(async () => ({
+        number: 7,
+        nodeId: "node_7",
+        url: "https://github.com/octo/repo/pull/7",
+        branch: "feature/test",
+        baseBranch: "main",
+        title: "Fix it",
+        status: "merged" as const,
+        state: "closed" as const,
+        draft: false,
+      })),
+    };
+    const prisma = {
+      pullRequest: {
+        findFirst: vi.fn(async () => row),
+        update,
+      },
+    } as unknown as PrismaClient;
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(service.currentPullRequest("chat_1")).resolves.toMatchObject({
+      status: "merged",
+      draft: false,
+    });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "merged", draft: false }),
+      }),
+    );
+  });
+
   it("publishes a workspace diff as a deterministic pull request", async () => {
     const token = "installation-token";
     const creating = pullRequestRow({
@@ -140,6 +242,7 @@ describe("GitHubService", () => {
         branch: "agent/chat_1/run_1",
         baseBranch: "main",
         title: "Fix it",
+        status: "open" as const,
         state: "open" as const,
         draft: true,
       })),

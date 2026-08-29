@@ -31,6 +31,7 @@ export const PULL_REQUEST_STATUSES = [
   "creating",
   "open",
   "closed",
+  "merged",
   "failed",
 ] as const;
 export type PullRequestStatus = (typeof PULL_REQUEST_STATUSES)[number];
@@ -66,6 +67,7 @@ export type GitHubPullRequestRecord = {
   branch: string;
   baseBranch: string;
   title: string;
+  status: Extract<PullRequestStatus, "open" | "closed" | "merged">;
   state: "open" | "closed";
   draft: boolean;
 };

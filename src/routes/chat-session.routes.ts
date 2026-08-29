@@ -207,6 +207,22 @@ chatSessionRouter.patch(
 );
 
 chatSessionRouter.get(
+  "/chat-sessions/:sessionId/pull-request",
+  async (request, response, next) => {
+    try {
+      response.json(
+        await chatSessionService.currentPullRequest(
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+chatSessionRouter.get(
   "/chat-sessions/:sessionId/messages",
   async (request, response, next) => {
     try {

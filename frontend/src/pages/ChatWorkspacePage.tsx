@@ -14,6 +14,7 @@ import {
   ApiError,
   cancelRun,
   getChatSession,
+  getCurrentPullRequest,
   getRunResult,
   listMessages,
   sendMessage,
@@ -186,6 +187,7 @@ const ThreadPane = ({
 
 const RunPanel = ({
   run,
+  sessionId,
   baseBranch,
   events,
   connectionError,
@@ -194,8 +196,10 @@ const RunPanel = ({
   resultError,
   cancelling,
   onCancel,
+  onPullRequest,
 }: {
   run: RunSnapshot;
+  sessionId: string;
   baseBranch: string;
   events: ReturnType<typeof useEventStream>["events"];
   connectionError: boolean;
@@ -204,6 +208,7 @@ const RunPanel = ({
   resultError: string | null;
   cancelling: boolean;
   onCancel: () => void;
+  onPullRequest: (pullRequest: PullRequestMetadata | null) => void;
 }) => {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("timeline");
   const isTerminal = TERMINAL_STATUSES.has(run.status);
@@ -229,6 +234,19 @@ const RunPanel = ({
   useEffect(() => {
     if (tab === "timeline") stickToBottomRef.current = true;
   }, [tab]);
+
+  useEffect(() => {
+    if (tab !== "pr") return;
+    let cancelled = false;
+    getCurrentPullRequest(sessionId)
+      .then((next) => {
+        if (!cancelled) onPullRequest(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [onPullRequest, sessionId, tab]);
 
   const totals = files.reduce(
     (acc, file) => ({
@@ -444,7 +462,12 @@ export const ChatWorkspacePage = () => {
     [runEvents],
   );
   const pullRequest =
-    eventPullRequest ?? runResult?.pullRequest ?? latestPullRequest;
+    latestPullRequest ?? runResult?.pullRequest ?? eventPullRequest;
+
+  const handlePullRequest = useCallback(
+    (next: PullRequestMetadata | null) => setLatestPullRequest(next),
+    [],
+  );
 
   useEffect(() => {
     if (eventPullRequest) setLatestPullRequest(eventPullRequest);
@@ -661,6 +684,7 @@ export const ChatWorkspacePage = () => {
             >
               <RunPanel
                 run={run}
+                sessionId={sessionId}
                 baseBranch={
                   session?.repo.baseBranch ??
                   session?.repo.defaultBranch ??
@@ -673,6 +697,7 @@ export const ChatWorkspacePage = () => {
                 resultError={resultError}
                 cancelling={cancelling}
                 onCancel={() => void onCancel()}
+                onPullRequest={handlePullRequest}
               />
             </div>
           </>

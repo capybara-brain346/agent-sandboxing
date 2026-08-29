@@ -129,6 +129,12 @@ export type GitHubApi = {
     owner: string,
     name: string,
   ): Promise<GitHubBranchRecord[]>;
+  getPullRequest?: (
+    installationId: string,
+    owner: string,
+    name: string,
+    number: number,
+  ) => Promise<GitHubPullRequestRecord>;
   createPullRequest?: (
     installationId: string,
     owner: string,
@@ -350,6 +356,20 @@ class OctokitGitHubApi implements GitHubApi {
     return pullRequestRecord(data, input);
   }
 
+  async getPullRequest(
+    installationId: string,
+    owner: string,
+    name: string,
+    number: number,
+  ): Promise<GitHubPullRequestRecord> {
+    const data = (await this.installationRequest(
+      installationId,
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      { owner, repo: name, pull_number: number },
+    )) as Record<string, unknown>;
+    return pullRequestRecord(data, {}, number);
+  }
+
   async updatePullRequest(
     installationId: string,
     owner: string,
@@ -426,6 +446,12 @@ const pullRequestRecord = (
     baseBranch:
       typeof base?.ref === "string" ? base.ref : (input.baseBranch ?? ""),
     title: typeof data.title === "string" ? data.title : (input.title ?? ""),
+    status:
+      data.merged === true
+        ? "merged"
+        : data.state === "closed"
+          ? "closed"
+          : "open",
     state: data.state === "closed" ? "closed" : "open",
     draft: typeof data.draft === "boolean" ? data.draft : (input.draft ?? true),
   };
@@ -682,7 +708,53 @@ export class GitHubService {
         where: { sessionId },
         orderBy: { createdAt: "desc" },
       }));
-    return row ? pullRequestMetadata(row) : null;
+    if (!row) return null;
+    if (row.number === null || !this.api.getPullRequest)
+      return pullRequestMetadata(row);
+    try {
+      const latest = await this.api.getPullRequest(
+        row.installationId,
+        row.owner,
+        row.repo,
+        row.number,
+      );
+      const data = {
+        number: latest.number,
+        nodeId: latest.nodeId ?? row.nodeId,
+        url: latest.url ?? row.url,
+        branch: latest.branch || row.branch,
+        baseBranch: latest.baseBranch || row.baseBranch,
+        title: latest.title || row.title,
+        status: latest.status,
+        draft: latest.draft,
+        failureCode: null,
+        failureMessage: null,
+        closedAt:
+          latest.status === "closed" || latest.status === "merged"
+            ? (row.closedAt ?? new Date())
+            : null,
+      };
+      if (
+        data.nodeId === row.nodeId &&
+        data.url === row.url &&
+        data.branch === row.branch &&
+        data.baseBranch === row.baseBranch &&
+        data.title === row.title &&
+        data.status === row.status &&
+        data.draft === row.draft &&
+        data.failureCode === row.failureCode &&
+        data.failureMessage === row.failureMessage &&
+        data.closedAt?.getTime() === row.closedAt?.getTime()
+      )
+        return pullRequestMetadata(row);
+      const next = await this.prisma.pullRequest.update({
+        where: { id: row.id },
+        data,
+      });
+      return pullRequestMetadata(next);
+    } catch {
+      return pullRequestMetadata(row);
+    }
   }
 
   async publishPullRequest(
@@ -938,7 +1010,7 @@ export class GitHubService {
         branch: created.branch || branch,
         baseBranch: created.baseBranch || baseBranch,
         title: created.title || title,
-        status: "open",
+        status: created.state,
         draft: created.draft,
         failureCode: null,
         failureMessage: null,
@@ -1226,7 +1298,7 @@ export class GitHubService {
         ? "closed"
         : input.action === "reopen"
           ? "open"
-          : updated.state;
+          : updated.status;
     const next = await this.persistPullRequestUpdate(
       sessionId,
       runId,
@@ -1367,7 +1439,7 @@ export class GitHubService {
         branch: created.branch || branch,
         baseBranch: created.baseBranch || baseBranch,
         title: created.title || title,
-        status: "open",
+        status: created.state,
         draft: created.draft,
         failureCode: null,
         failureMessage: null,
@@ -1427,7 +1499,7 @@ export class GitHubService {
       branch: string;
       baseBranch: string;
       title: string;
-      status: "creating" | "open" | "closed" | "failed";
+      status: PullRequestMetadata["status"];
       draft: boolean;
       isCurrent?: boolean;
       failureCode: string | null;

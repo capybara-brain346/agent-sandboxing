@@ -39,8 +39,11 @@ runs, then publication commits, pushes, creates the PR, and restores the diff fo
 final run capture. Pull requests are persisted with history and one current row
 per session; PR failures do not change a completed coding run to a failed run.
 Failed publish attempts are retained for history but cleared as current so a
-later retry is not blocked by the failed row. Reused GitHub sandboxes are
-currently rejected before worker execution instead of being reused.
+later retry is not blocked by the failed row. Current PR reads refresh the
+persisted snapshot from GitHub when a PR number is available, so externally
+changed draft, closed, reopened, and merged state can be reflected in the UI.
+Reused GitHub sandboxes are currently rejected before worker execution instead
+of being reused.
 
 Cancellation aborts the tracked in-flight execution's `AbortSignal` through
 `RunService.requestCancellation` and falls back to a direct terminal-state
@@ -64,6 +67,7 @@ GET    /chat-sessions
 GET    /chat-sessions/:sessionId
 PATCH  /chat-sessions/:sessionId
 GET    /chat-sessions/:sessionId/messages
+GET    /chat-sessions/:sessionId/pull-request
 POST   /chat-sessions/:sessionId/messages
 GET    /chat-sessions/:sessionId/runs
 GET    /chat-sessions/:sessionId/runs/:runId
@@ -134,7 +138,9 @@ Lifecycle state changes and their events are persisted in one transaction. The
 Terminal run results include compact current pull request metadata: provider,
 URL, number, branch, base branch, title, status, draft state, and safe failure
 details. The result reads the current session PR, so a later run's current PR
-is visible from an earlier run result.
+is visible from an earlier run result. `GET /chat-sessions/:sessionId/pull-request`
+returns the same current PR metadata for the PR tab and refreshes the cached row
+from GitHub before responding when possible.
 
 ## Phase 5: orchestrator-worker harness
 

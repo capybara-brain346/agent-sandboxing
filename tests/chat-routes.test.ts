@@ -223,6 +223,30 @@ describe("chat session routes", () => {
     });
   });
 
+  it("returns the current session pull request", async () => {
+    const currentPullRequest = vi
+      .spyOn(chatSessionService, "currentPullRequest")
+      .mockResolvedValue({
+        provider: "github",
+        url: "https://github.com/octo/repo/pull/7",
+        number: 7,
+        branch: "feature/test",
+        baseBranch: "main",
+        title: "Fix it",
+        status: "merged",
+        draft: false,
+        failure: null,
+      });
+
+    const response = await request(makeApp()).get(
+      "/chat-sessions/chat_1/pull-request",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ status: "merged", draft: false });
+    expect(currentPullRequest).toHaveBeenCalledWith("user_1", "chat_1");
+  });
+
   it("creates a message and run by default, or a message only when requested", async () => {
     const append = vi
       .spyOn(chatSessionService, "appendMessage")

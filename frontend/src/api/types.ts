@@ -31,6 +31,7 @@ export const PULL_REQUEST_STATUSES = [
   "creating",
   "open",
   "closed",
+  "merged",
   "failed",
 ] as const;
 export type PullRequestStatus = (typeof PULL_REQUEST_STATUSES)[number];

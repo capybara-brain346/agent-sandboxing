@@ -11,6 +11,7 @@ import type {
   GitHubRepositoriesResponse,
   GitHubBranch,
   Page,
+  PullRequestMetadata,
   RunCancellationResponse,
   RunResult,
   RunSnapshot,
@@ -133,6 +134,11 @@ export const getRun = (
   sessionId: string,
   runId: string,
 ): Promise<RunSnapshot> => request(`/chat-sessions/${sessionId}/runs/${runId}`);
+
+export const getCurrentPullRequest = (
+  sessionId: string,
+): Promise<PullRequestMetadata | null> =>
+  request(`/chat-sessions/${sessionId}/pull-request`);
 
 export const getRunResult = (
   sessionId: string,

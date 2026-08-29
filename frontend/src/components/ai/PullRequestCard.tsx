@@ -6,6 +6,7 @@ const STATUS_LABELS: Record<PullRequestMetadata["status"], string> = {
   creating: "Creating",
   open: "Open",
   closed: "Closed",
+  merged: "Merged",
   failed: "Failed",
 };
 
@@ -13,6 +14,7 @@ const STATUS_CLASSES: Record<PullRequestMetadata["status"], string> = {
   creating: "border-status-running/30 bg-status-running/10 text-status-running",
   open: "border-status-completed/30 bg-status-completed/10 text-status-completed",
   closed: "border-border-default bg-raised text-fg-muted",
+  merged: "border-brand/30 bg-brand/10 text-brand",
   failed: "border-status-failed/30 bg-status-failed/10 text-status-failed",
 };
 
