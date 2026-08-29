@@ -15,13 +15,13 @@ const modelId = (model: LanguageModel): string | undefined => {
 
 export const recordModelUsage = (input: {
   recorder: EvalTraceRecorderLike | undefined;
-  runId: string | undefined;
+  messageId: string | undefined;
   stage: EvalTraceStage;
   model: LanguageModel;
   startedAt: number;
   result: unknown;
 }): void => {
-  if (!input.recorder || !input.runId) return;
+  if (!input.recorder || !input.messageId) return;
   const usageRecord =
     isRecord(input.result) && isRecord(input.result.usage)
       ? input.result.usage
@@ -54,7 +54,7 @@ export const recordModelUsage = (input: {
     latencyMs: Math.max(0, Date.now() - input.startedAt),
   };
   input.recorder.recordUsage({
-    runId: input.runId,
+    messageId: input.messageId,
     stage: input.stage,
     usage,
   });

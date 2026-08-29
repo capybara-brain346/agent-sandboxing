@@ -16,10 +16,6 @@ import type { WorkerResult } from "../src/types/harness.types";
 const workerResult: WorkerResult = {
   status: "completed",
   summary: "Updated the file",
-  changedFiles: ["/workspace/repo/a.ts"],
-  testsRun: [],
-  blockers: [],
-  suggestedNextStep: "",
 };
 
 const event = (
@@ -29,14 +25,17 @@ const event = (
 ): PublicEvent =>
   ({
     id: `${type}_1`,
-    streamId: "run_1",
-    taskId: "run_1",
+    streamId: "chat_1",
+    streamScope: "session",
+    domain: "agent",
+    sessionId: "chat_1",
+    messageId: "msg_1",
     sandboxId: "sbox_1",
     commandId: null,
     sequence: type === "agent_tool_call" ? 1 : 2,
     type,
     producerService: "agent",
-    producerId: "run_1",
+    producerId: "msg_1",
     correlationId,
     payload,
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -44,13 +43,13 @@ const event = (
 
 const sinkWithSpies = (): EvalTraceSink =>
   ({
-    startRun: vi.fn(),
+    startProcessing: vi.fn(),
     recordOrchestratorContext: vi.fn(),
     recordWorkerBrief: vi.fn(),
     recordWorkerResult: vi.fn(),
     recordOrchestratorReply: vi.fn(),
     recordUsage: vi.fn(),
-    finishRun: vi.fn(),
+    finishProcessing: vi.fn(),
   }) as EvalTraceSink;
 
 describe("eval trace normalization", () => {
@@ -104,45 +103,48 @@ describe("eval trace normalization", () => {
       includeContextSnapshot: true,
       tags: ["environment:test"],
     });
-    recorder.startRun({
+    recorder.startProcessing({
       sessionId: "chat_1",
-      runId: "run_1",
+      messageId: "msg_1",
       userPrompt: "Fix the issue",
     });
     recorder.recordOrchestratorContext({
-      runId: "run_1",
+      messageId: "msg_1",
       contextSummary: {
         summaryPresent: true,
         summaryChars: 12,
         recentMessageCount: 2,
         recentToolActivityCount: 1,
-        workspaceHasPriorRun: true,
+        workspaceHasPriorProcessing: true,
       },
       contextSnapshot: {
         summary: "Objective: fix",
         recentMessages: [{ role: "user", content: "Fix the issue" }],
         recentToolActivity: ["read"],
         workspace: {
-          hasPriorRun: true,
-          lastRunStatus: "completed",
+          hasPriorProcessing: true,
+          lastProcessingStatus: "completed",
           changedFilesHint: ["a.ts"],
         },
       },
     });
-    recorder.recordWorkerBrief({ runId: "run_1", brief: "Inspect and fix" });
-    recorder.recordWorkerResult({ runId: "run_1", result: workerResult });
+    recorder.recordWorkerBrief({
+      messageId: "msg_1",
+      brief: "Inspect and fix",
+    });
+    recorder.recordWorkerResult({ messageId: "msg_1", result: workerResult });
     recorder.recordOrchestratorReply({
-      runId: "run_1",
+      messageId: "msg_1",
       reply: "Fixed it",
       delegated: true,
     });
     recorder.recordUsage({
-      runId: "run_1",
+      messageId: "msg_1",
       stage: "worker",
       usage: { model: "test-model", inputTokens: 3, latencyMs: 8 },
     });
-    await recorder.finishRun({
-      runId: "run_1",
+    await recorder.finishProcessing({
+      messageId: "msg_1",
       terminal: {
         status: "completed",
         exitReason: "completed",
@@ -154,10 +156,10 @@ describe("eval trace normalization", () => {
       events: [],
     });
 
-    const trace = vi.mocked(sink.finishRun).mock.calls[0]?.[0];
+    const trace = vi.mocked(sink.finishProcessing).mock.calls[0]?.[0];
     expect(trace).toMatchObject({
-      traceId: "run_1",
-      runId: "run_1",
+      traceId: "msg_1",
+      messageId: "msg_1",
       sessionId: "chat_1",
       input: "Fix the issue",
       output: "Fixed it",
@@ -166,7 +168,7 @@ describe("eval trace normalization", () => {
         delegated: true,
         workerBriefs: ["Inspect and fix"],
         workerResults: [workerResult],
-        contextSummary: { workspaceHasPriorRun: true },
+        contextSummary: { workspaceHasPriorProcessing: true },
       },
       usage: [
         {
@@ -180,10 +182,10 @@ describe("eval trace normalization", () => {
 
   it("maps trace facts to Langfuse-safe metadata", () => {
     const metadata = langfuseTraceMetadata({
-      traceId: "run_1",
-      runId: "run_1",
+      traceId: "msg_1",
+      messageId: "msg_1",
       sessionId: "chat_1",
-      name: "chat_run",
+      name: "chat_message",
       input: "Fix it",
       tags: [],
       metadata: { source: "chat" },
@@ -197,25 +199,26 @@ describe("eval trace normalization", () => {
     });
     expect(metadata).toMatchObject({
       source: "chat",
-      runId: "run_1",
+      messageId: "msg_1",
+      chatSessionId: "chat_1",
       sessionId: "chat_1",
-      traceId: "run_1",
+      traceId: "msg_1",
       orchestrator: { delegated: false },
     });
   });
 });
 
 describe("local trace export", () => {
-  it("writes one JSON trace per completed run", async () => {
+  it("writes one JSON trace per completed message", async () => {
     const directory = await mkdtemp(join(tmpdir(), "agent-traces-"));
     const path = join(directory, "traces.jsonl");
     try {
       const sink = new LocalTraceSink(path);
-      await sink.finishRun({
-        traceId: "run_1",
-        runId: "run_1",
+      await sink.finishProcessing({
+        traceId: "msg_1",
+        messageId: "msg_1",
         sessionId: "chat_1",
-        name: "chat_run",
+        name: "chat_message",
         input: "hello",
         tags: [],
         metadata: {},
@@ -228,7 +231,9 @@ describe("local trace export", () => {
         tools: [],
       });
       const lines = (await readFile(path, "utf8")).trim().split("\n");
-      expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({ runId: "run_1" });
+      expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+        messageId: "msg_1",
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

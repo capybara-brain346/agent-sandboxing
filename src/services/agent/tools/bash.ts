@@ -9,6 +9,8 @@ import {
 } from "./helpers";
 import { validateBashCommand } from "./bash-policy";
 
+const BASH_EXIT_CODES = Array.from({ length: 256 }, (_, index) => index);
+
 export const createBashTool = (
   runtime: AgentToolRuntime,
   containerName: string,
@@ -27,6 +29,7 @@ export const createBashTool = (
         safeCommand,
         signal,
         config.AGENT_BASH_TIMEOUT_MS,
+        BASH_EXIT_CODES,
       );
       const stdout = boundUtf8(
         result.stdout,

@@ -9,8 +9,20 @@ export type SandboxStatus =
 export type CommandStatus =
   "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
 
-export type TaskSandboxInput = {
-  fixtureRepoPath?: string;
+export type SandboxProvisioningSource =
+  | { source: "fixture"; fixtureRepoPath: string }
+  | {
+      source: "github";
+      owner: string;
+      name: string;
+      installationId: string;
+      cloneUrl: string;
+      baseBranch: string;
+      token: string;
+    };
+
+export type SandboxCreationInput = {
+  source: SandboxProvisioningSource;
   image?: string | undefined;
 };
 
@@ -26,13 +38,13 @@ export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
 export type CommandStartResult = {
   commandId: string;
-  taskId: string;
+  sessionId: string;
   status: CommandStatus;
 };
 
 export type CommandStatusResult = {
   commandId: string;
-  taskId: string;
+  sessionId: string;
   status: CommandStatus;
   exitCode: number | null;
   outputBytes: number;
@@ -59,6 +71,7 @@ export type RuntimeResult = {
 export type SimpleExecOptions = {
   timeoutMs?: number;
   env?: Record<string, string>;
+  stdin?: string;
   signal?: AbortSignal;
 };
 

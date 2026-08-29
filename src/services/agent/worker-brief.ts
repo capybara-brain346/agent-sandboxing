@@ -1,38 +1,26 @@
 import type { OrchestratorContext } from "../../types/harness.types";
 
-export type WorkerCorrection = {
-  blockers: string[];
-  suggestedNextStep: string;
-};
-
-/**
- * Builds the focused brief the CodeWorker receives. Deliberately excludes
- * chat history: only the durable session summary and a workspace hint are
- * carried over, plus the current delegation brief and any narrow correction.
- */
 export const buildWorkerBrief = (
   context: Pick<OrchestratorContext, "summary" | "workspace">,
   brief: string,
-  correction?: WorkerCorrection,
+  correction?: string,
 ): string =>
   [
-    "You are the CodeWorker. Inspect and edit files under /workspace/repo to satisfy the brief below.",
+    "Inspect and edit files under /workspace/repo to satisfy the brief below.",
     "Work only within that scope, run narrow checks where useful, and fix obvious failures within your attempt budget.",
+    "If the brief explicitly asks for a pull request, use publish_pull_request after the requested workspace change; do not give manual git or gh instructions.",
+    "After any publish_pull_request call, report the observed outcome: published at the returned URL, not published because there was no workspace diff, or failed with the returned code and message. Never say a pull request was raised, opened, created, or published unless the tool returned success with a pull request URL.",
     "",
-    context.summary ? `Session summary:\n${context.summary}` : null,
-    context.workspace.hasPriorRun
-      ? `Last run status: ${context.workspace.lastRunStatus}. Previously touched files: ${
+    context.summary ? `Prior context:\n${context.summary}` : null,
+    context.workspace.hasPriorProcessing
+      ? `Previous attempt: ${context.workspace.lastProcessingStatus}. Previously touched files: ${
           context.workspace.changedFilesHint.join(", ") || "none"
         }.`
       : null,
     "",
     `Brief: ${brief}`,
     correction
-      ? `Correction needed. The previous attempt was blocked by: ${
-          correction.blockers.join("; ") || "unspecified issues"
-        }. Suggested next step: ${
-          correction.suggestedNextStep || "re-attempt with a narrower scope"
-        }.`
+      ? `Correction needed. Previous attempt report: ${correction}`
       : null,
   ]
     .filter((line): line is string => line !== null)

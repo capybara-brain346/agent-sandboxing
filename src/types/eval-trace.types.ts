@@ -1,5 +1,5 @@
 import type { WorkerResult } from "./harness.types";
-import type { TaskStatus } from "./task.types";
+import type { MessageProcessingStatus } from "./message-processing.types";
 
 export type EvalTraceStage = "orchestrator" | "worker" | "summaryCompaction";
 
@@ -31,7 +31,7 @@ export type EvalTraceContextSummary = {
   summaryChars: number;
   recentMessageCount: number;
   recentToolActivityCount: number;
-  workspaceHasPriorRun: boolean;
+  workspaceHasPriorProcessing: boolean;
 };
 
 export type EvalTraceContextSnapshot = {
@@ -42,14 +42,14 @@ export type EvalTraceContextSnapshot = {
   }>;
   recentToolActivity: string[];
   workspace: {
-    hasPriorRun: boolean;
-    lastRunStatus: string | null;
+    hasPriorProcessing: boolean;
+    lastProcessingStatus: string | null;
     changedFilesHint: string[];
   };
 };
 
-export type EvalTraceRunFacts = {
-  status: TaskStatus;
+export type EvalTraceMessageFacts = {
+  status: MessageProcessingStatus;
   exitReason: string;
   diffBytes: number;
   diffPresent: boolean;
@@ -65,9 +65,9 @@ export type EvalTraceRunFacts = {
 
 export type EvalTrace = {
   traceId: string;
-  runId: string;
+  messageId: string;
   sessionId: string;
-  name: "chat_run";
+  name: "chat_message";
   input: string;
   output?: string;
   tags: string[];
@@ -83,37 +83,37 @@ export type EvalTrace = {
   usage: Array<{ stage: EvalTraceStage; usage: ModelUsage }>;
   tools: EvalTraceToolEvent[];
   worker?: WorkerResult;
-  run?: EvalTraceRunFacts;
+  processing?: EvalTraceMessageFacts;
 };
 
 export type EvalTraceSink = {
-  startRun(input: {
+  startProcessing(input: {
     sessionId: string;
-    runId: string;
+    messageId: string;
     userPrompt: string;
   }): void | Promise<void>;
   recordOrchestratorContext(input: {
-    runId: string;
+    messageId: string;
     contextSummary: EvalTraceContextSummary;
     contextSnapshot?: EvalTraceContextSnapshot;
   }): void | Promise<void>;
   recordWorkerBrief(input: {
-    runId: string;
+    messageId: string;
     brief: string;
   }): void | Promise<void>;
   recordWorkerResult(input: {
-    runId: string;
+    messageId: string;
     result: WorkerResult;
   }): void | Promise<void>;
   recordOrchestratorReply(input: {
-    runId: string;
+    messageId: string;
     reply: string;
     delegated: boolean;
   }): void | Promise<void>;
   recordUsage(input: {
-    runId: string;
+    messageId: string;
     stage: EvalTraceStage;
     usage: ModelUsage;
   }): void | Promise<void>;
-  finishRun(trace: EvalTrace): void | Promise<void>;
+  finishProcessing(trace: EvalTrace): void | Promise<void>;
 };

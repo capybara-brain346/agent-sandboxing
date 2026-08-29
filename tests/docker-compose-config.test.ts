@@ -17,6 +17,7 @@ describe("Docker Compose configuration", () => {
     expect(compose.services.app.environment).toMatchObject({
       LOG_LEVEL: "${LOG_LEVEL:-debug}",
       LOG_COLOR: "${LOG_COLOR:-auto}",
+      FIXTURE_REPOS_ENABLED: "${FIXTURE_REPOS_ENABLED:-true}",
       LANGFUSE_ENABLED: "${LANGFUSE_ENABLED:-false}",
       LANGFUSE_PUBLIC_KEY: "${LANGFUSE_PUBLIC_KEY:-}",
       LANGFUSE_SECRET_KEY: "${LANGFUSE_SECRET_KEY:-}",

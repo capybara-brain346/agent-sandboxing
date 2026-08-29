@@ -1,16 +1,19 @@
 import type {
   ApiErrorBody,
   ArtifactContent,
+  AuthMe,
   ChatSession,
   ChatSessionListItem,
   ChatMessage,
   CreateChatSessionRequest,
   CreateMessageRequest,
   CreateMessageResponse,
+  GitHubRepositoriesResponse,
+  GitHubBranch,
   Page,
-  RunCancellationResponse,
-  RunResult,
-  RunSnapshot,
+  PullRequestMetadata,
+  MessageCancellationResponse,
+  SessionResult,
   UpdateChatSessionRequest,
 } from "./types";
 
@@ -28,9 +31,15 @@ export class ApiError extends Error {
   }
 }
 
+export const isSessionAuthFailure = (error: unknown): boolean =>
+  error instanceof ApiError &&
+  error.status === 401 &&
+  error.code !== "github_reconnect_required";
+
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   if (!response.ok) {
@@ -43,8 +52,20 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
       body?.error.message ?? `Request failed with status ${response.status}`,
     );
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 };
+
+export const getAuthMe = (): Promise<AuthMe> => request("/auth/me");
+
+export const logout = (): Promise<void> =>
+  request("/auth/logout", { method: "POST" });
+
+export const getGitHubRepositories = (): Promise<GitHubRepositoriesResponse> =>
+  request("/github/repositories");
+
+export const getGitHubBranches = (repoId: string): Promise<GitHubBranch[]> =>
+  request(`/github/repositories/${repoId}/branches`);
 
 export const createChatSession = (
   input: CreateChatSessionRequest,
@@ -95,35 +116,18 @@ export const sendMessage = (
     body: JSON.stringify(input),
   });
 
-export const listRuns = (
+export const getCurrentPullRequest = (
   sessionId: string,
-  params: { limit?: number; cursor?: string } = {},
-): Promise<Page<RunSnapshot>> => {
-  const query = new URLSearchParams();
-  if (params.limit) query.set("limit", String(params.limit));
-  if (params.cursor) query.set("cursor", params.cursor);
-  const suffix = query.toString();
-  return request(
-    `/chat-sessions/${sessionId}/runs${suffix ? `?${suffix}` : ""}`,
-  );
-};
+): Promise<PullRequestMetadata | null> =>
+  request(`/chat-sessions/${sessionId}/pull-request`);
 
-export const getRun = (
-  sessionId: string,
-  runId: string,
-): Promise<RunSnapshot> => request(`/chat-sessions/${sessionId}/runs/${runId}`);
+export const getSessionResult = (sessionId: string): Promise<SessionResult> =>
+  request(`/chat-sessions/${sessionId}/result`);
 
-export const getRunResult = (
+export const cancelSession = (
   sessionId: string,
-  runId: string,
-): Promise<RunResult> =>
-  request(`/chat-sessions/${sessionId}/runs/${runId}/result`);
-
-export const cancelRun = (
-  sessionId: string,
-  runId: string,
-): Promise<RunCancellationResponse> =>
-  request(`/chat-sessions/${sessionId}/runs/${runId}`, { method: "DELETE" });
+): Promise<MessageCancellationResponse> =>
+  request(`/chat-sessions/${sessionId}/cancel`, { method: "POST" });
 
 export const getArtifact = (
   sessionId: string,

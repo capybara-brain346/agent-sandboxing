@@ -4,10 +4,10 @@ import { runQuery } from "../../shared/query-logging";
 import { logger } from "../../logger";
 import type { CodeWorker } from "../agent/code-worker";
 import type {
-  TaskRunContext,
-  TaskRunner,
-  TaskRunResult,
-} from "../task/task-runner";
+  MessageProcessingContext,
+  MessageProcessingResult,
+  MessageProcessor,
+} from "../../types/message-processing.types";
 import type {
   OrchestratorContext,
   WorkerResult,
@@ -17,7 +17,7 @@ import type { SessionContextBuilder } from "./session-context-builder";
 import type { SessionSummaryCompactor } from "../agent/session-summary-compactor";
 import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 
-export class RunOrchestrator implements TaskRunner {
+export class MessageOrchestrator implements MessageProcessor {
   constructor(
     private readonly prisma: Pick<PrismaClient, "chatSession">,
     private readonly contextBuilder: SessionContextBuilder,
@@ -27,11 +27,13 @@ export class RunOrchestrator implements TaskRunner {
     private readonly traceRecorder?: EvalTraceRecorderLike,
   ) {}
 
-  async run(context: TaskRunContext): Promise<TaskRunResult> {
+  async process(
+    context: MessageProcessingContext,
+  ): Promise<MessageProcessingResult> {
     if (!context.sessionId)
       throw new ServiceError(
         "orchestrator_requires_session",
-        "RunOrchestrator requires a session-scoped run",
+        "MessageOrchestrator requires a session",
         500,
       );
     const sessionId = context.sessionId;
@@ -39,42 +41,47 @@ export class RunOrchestrator implements TaskRunner {
     const orchestratorContext = await this.contextBuilder.build(sessionId);
     logger.debug("orchestrator_context_built", {
       sessionId,
-      runId: context.taskId,
+      messageId: context.messageId,
       messageCount: orchestratorContext.messageCount,
       recentMessageCount: orchestratorContext.recentMessages.length,
       recentToolActivityCount: orchestratorContext.recentToolActivity.length,
       summaryPresent: Boolean(orchestratorContext.summary),
-      hasPriorRun: orchestratorContext.workspace.hasPriorRun,
+      hasPriorProcessing: orchestratorContext.workspace.hasPriorProcessing,
       shouldCompact: orchestratorContext.shouldCompact,
     });
     this.traceRecorder?.recordOrchestratorContext({
-      runId: context.taskId,
+      messageId: context.messageId,
       contextSummary: {
         summaryPresent: Boolean(orchestratorContext.summary),
         summaryChars: orchestratorContext.summary.length,
         recentMessageCount: orchestratorContext.recentMessages.length,
         recentToolActivityCount: orchestratorContext.recentToolActivity.length,
-        workspaceHasPriorRun: orchestratorContext.workspace.hasPriorRun,
+        workspaceHasPriorProcessing:
+          orchestratorContext.workspace.hasPriorProcessing,
       },
       contextSnapshot: {
         summary: orchestratorContext.summary,
         recentMessages: orchestratorContext.recentMessages,
         recentToolActivity: orchestratorContext.recentToolActivity,
         workspace: {
-          hasPriorRun: orchestratorContext.workspace.hasPriorRun,
-          lastRunStatus: orchestratorContext.workspace.lastRunStatus,
+          hasPriorProcessing: orchestratorContext.workspace.hasPriorProcessing,
+          lastProcessingStatus:
+            orchestratorContext.workspace.lastProcessingStatus,
           changedFilesHint: orchestratorContext.workspace.changedFilesHint,
         },
       },
     });
     const delegate = async (brief: string): Promise<WorkerResult> => {
       this.traceRecorder?.recordWorkerBrief({
-        runId: context.taskId,
+        messageId: context.messageId,
         brief,
       });
-      const result = await this.worker.run({ ...context, instructions: brief });
+      const result = await this.worker.process({
+        ...context,
+        instructions: brief,
+      });
       this.traceRecorder?.recordWorkerResult({
-        runId: context.taskId,
+        messageId: context.messageId,
         result,
       });
       return result;
@@ -86,20 +93,20 @@ export class RunOrchestrator implements TaskRunner {
       recentToolActivity: orchestratorContext.recentToolActivity,
       workspace: orchestratorContext.workspace,
       message: context.instructions,
-      runId: context.taskId,
+      messageId: context.messageId,
       signal: context.signal,
       delegate,
     });
 
     const lastResult = decision.delegations.at(-1) ?? null;
     this.traceRecorder?.recordOrchestratorReply({
-      runId: context.taskId,
+      messageId: context.messageId,
       reply: decision.reply,
       delegated: decision.delegations.length > 0,
     });
     logger.debug("orchestrator_decision_completed", {
       sessionId,
-      runId: context.taskId,
+      messageId: context.messageId,
       delegated: decision.delegations.length > 0,
       delegationCount: decision.delegations.length,
       lastDelegationStatus: lastResult?.status ?? null,
@@ -110,7 +117,7 @@ export class RunOrchestrator implements TaskRunner {
       await this.compactSummary(
         sessionId,
         orchestratorContext,
-        context.taskId,
+        context.messageId,
         context.signal,
       );
 
@@ -120,9 +127,7 @@ export class RunOrchestrator implements TaskRunner {
     if (lastResult?.status === "failed")
       throw new ServiceError(
         "worker_failed",
-        lastResult.blockers.length
-          ? lastResult.blockers.join("; ")
-          : lastResult.summary || "CodeWorker failed",
+        lastResult.summary || "CodeWorker failed",
         502,
         { workerReport },
       );
@@ -135,14 +140,14 @@ export class RunOrchestrator implements TaskRunner {
   private async compactSummary(
     sessionId: string,
     orchestratorContext: OrchestratorContext,
-    runId: string,
+    messageId: string,
     signal: AbortSignal,
   ): Promise<void> {
     const summary = await this.compactor.compact({
       previousSummary: orchestratorContext.summary,
       recentMessages: orchestratorContext.recentMessages,
       recentToolActivity: orchestratorContext.recentToolActivity,
-      runId,
+      messageId,
       signal,
     });
     await runQuery("compact_session_summary", { sessionId }, () =>
@@ -156,7 +161,7 @@ export class RunOrchestrator implements TaskRunner {
     );
     logger.debug("session_summary_compacted", {
       sessionId,
-      runId,
+      messageId,
       messageCount: orchestratorContext.messageCount,
       summaryBytes: Buffer.byteLength(summary),
     });

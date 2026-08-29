@@ -5,7 +5,7 @@ import type { EvalTrace, EvalTraceSink } from "../../types/eval-trace.types";
 export class LocalTraceSink implements EvalTraceSink {
   constructor(private readonly path: string) {}
 
-  startRun(): void {}
+  startProcessing(): void {}
 
   recordOrchestratorContext(): void {}
 
@@ -17,7 +17,7 @@ export class LocalTraceSink implements EvalTraceSink {
 
   recordUsage(): void {}
 
-  async finishRun(trace: EvalTrace): Promise<void> {
+  async finishProcessing(trace: EvalTrace): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
     await appendFile(this.path, `${JSON.stringify(trace)}\n`, "utf8");
   }

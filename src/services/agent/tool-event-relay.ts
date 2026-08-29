@@ -8,6 +8,7 @@ import type {
 import type { EventStore } from "../events/event-store";
 import type { PublicEvent } from "../../types/event.types";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
+import { ServiceError } from "../../shared/errors";
 import { boundUtf8 } from "./tools/helpers";
 
 const RESULT_SNIPPET_MAX_BYTES = 500;
@@ -15,9 +16,9 @@ const RESULT_SNIPPET_MAX_BYTES = 500;
 type PublishEvent = (event: PublicEvent) => void;
 
 export type ToolEventContext = {
-  taskId: string;
+  messageId: string;
   sandboxId: string;
-  sessionId?: string | undefined;
+  sessionId: string;
 };
 
 export type ToolEventRelayDependencies = {
@@ -47,6 +48,23 @@ const safeSerialize = (value: unknown): string => {
 
 const safeArgs = (value: unknown): Record<string, unknown> =>
   isRecord(value) ? value : {};
+
+const safeToolError = (value: unknown): Record<string, unknown> =>
+  value instanceof ServiceError
+    ? { error: { code: value.code, message: value.message } }
+    : { error: { message: "Tool execution failed" } };
+
+const safeToolArgs = (
+  toolName: string,
+  value: unknown,
+): Record<string, unknown> =>
+  toolName === "publish_pull_request"
+    ? Object.fromEntries(
+        Object.entries(safeArgs(value)).filter(
+          ([key]) => key !== "body" && key !== "comment",
+        ),
+      )
+    : safeArgs(value);
 
 const integerOrNull = (value: unknown): number | null =>
   typeof value === "number" && Number.isInteger(value) ? value : null;
@@ -79,7 +97,7 @@ export class ToolEventRelay {
     await this.appendAndPublish(
       this.eventInput(context, correlationId, "agent_tool_call", {
         tool_name: event.toolCall.toolName,
-        args: safeArgs(event.toolCall.input),
+        args: safeToolArgs(event.toolCall.toolName, event.toolCall.input),
       }),
     );
   }
@@ -94,7 +112,9 @@ export class ToolEventRelay {
         ? event.toolOutput.output
         : undefined;
     const serialized = safeSerialize(
-      event.toolOutput.type === "tool-error" ? "Tool execution failed" : output,
+      event.toolOutput.type === "tool-error"
+        ? safeToolError(event.toolOutput.error)
+        : output,
     );
     const bounded = boundUtf8(serialized, RESULT_SNIPPET_MAX_BYTES);
     const outputRecord = isRecord(output) ? output : {};
@@ -106,7 +126,7 @@ export class ToolEventRelay {
       context.sessionId && bounded.truncated && this.dependencies.artifacts
         ? await this.dependencies.artifacts.create({
             sessionId: context.sessionId,
-            runId: context.taskId,
+            messageId: context.messageId,
             kind: "tool_output",
             contentType: "application/json",
             content: serialized,
@@ -126,6 +146,7 @@ export class ToolEventRelay {
             event.toolOutput.type === "tool-result"
               ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)
               : null,
+          error: event.toolOutput.type === "tool-error",
           duration_ms: duration(event.toolExecutionMs),
           ...(artifact
             ? {
@@ -146,27 +167,15 @@ export class ToolEventRelay {
     payload: Record<string, unknown>,
     artifactId?: string,
   ): Parameters<EventStore["append"]>[0] {
-    if (context.sessionId)
-      return {
-        streamScope: "run",
-        streamId: context.taskId,
-        sessionId: context.sessionId,
-        runId: context.taskId,
-        sandboxId: context.sandboxId,
-        artifactId: artifactId ?? null,
-        domain: "agent",
-        type,
-        producerService: "agent",
-        producerId: context.taskId,
-        correlationId,
-        payload,
-      };
     return {
-      taskId: context.taskId,
+      sessionId: context.sessionId,
+      messageId: context.messageId,
       sandboxId: context.sandboxId,
+      artifactId: artifactId ?? null,
+      domain: "agent",
       type,
       producerService: "agent",
-      producerId: context.taskId,
+      producerId: context.messageId,
       correlationId,
       payload,
     };

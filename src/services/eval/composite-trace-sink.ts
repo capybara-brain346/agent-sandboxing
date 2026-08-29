@@ -11,16 +11,16 @@ import type {
 export class CompositeTraceSink implements EvalTraceSink {
   constructor(private readonly sinks: EvalTraceSink[]) {}
 
-  startRun(input: {
+  startProcessing(input: {
     sessionId: string;
-    runId: string;
+    messageId: string;
     userPrompt: string;
   }): void | Promise<void> {
-    return this.call((sink) => sink.startRun(input));
+    return this.call((sink) => sink.startProcessing(input));
   }
 
   recordOrchestratorContext(input: {
-    runId: string;
+    messageId: string;
     contextSummary: EvalTraceContextSummary;
     contextSnapshot?: EvalTraceContextSnapshot;
   }): void | Promise<void> {
@@ -28,21 +28,21 @@ export class CompositeTraceSink implements EvalTraceSink {
   }
 
   recordWorkerBrief(input: {
-    runId: string;
+    messageId: string;
     brief: string;
   }): void | Promise<void> {
     return this.call((sink) => sink.recordWorkerBrief(input));
   }
 
   recordWorkerResult(input: {
-    runId: string;
+    messageId: string;
     result: WorkerResult;
   }): void | Promise<void> {
     return this.call((sink) => sink.recordWorkerResult(input));
   }
 
   recordOrchestratorReply(input: {
-    runId: string;
+    messageId: string;
     reply: string;
     delegated: boolean;
   }): void | Promise<void> {
@@ -50,18 +50,18 @@ export class CompositeTraceSink implements EvalTraceSink {
   }
 
   recordUsage(input: {
-    runId: string;
+    messageId: string;
     stage: EvalTraceStage;
     usage: ModelUsage;
   }): void | Promise<void> {
     return this.call((sink) => sink.recordUsage(input));
   }
 
-  finishRun(trace: EvalTrace): Promise<void> {
+  finishProcessing(trace: EvalTrace): Promise<void> {
     return Promise.all(
       this.sinks.map(async (sink) => {
         try {
-          await sink.finishRun(trace);
+          await sink.finishProcessing(trace);
         } catch {
           return;
         }

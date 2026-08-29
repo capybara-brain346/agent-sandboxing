@@ -3,7 +3,7 @@ import { configureLogger, logger } from "./logger";
 import { createApp } from "./server";
 import { prisma } from "./db/prisma";
 import { sseHub } from "./services/events/sse-hub";
-import { shutdownTaskServiceTracing } from "./services/task/task";
+import { shutdownChatTracing } from "./services/chat/chat-runtime";
 
 const config = loadConfig();
 configureLogger({ level: config.LOG_LEVEL, color: config.LOG_COLOR });
@@ -45,7 +45,7 @@ const shutdown = async (signal: string): Promise<void> => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-    await shutdownTaskServiceTracing();
+    await shutdownChatTracing();
     await prisma.$disconnect();
     clearTimeout(forceExit);
     logger.info("server_stopped", { signal });

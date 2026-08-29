@@ -61,8 +61,6 @@ const workerOutput = (results: WorkerResult[]): unknown => {
     ? {
         status: result.status,
         summary: result.summary,
-        changedFiles: result.changedFiles,
-        blockers: result.blockers,
       }
     : undefined;
 };
@@ -122,7 +120,8 @@ export const langfuseTraceMetadata = (
   trace: EvalTrace,
 ): Record<string, unknown> => ({
   ...asMetadata(trace.metadata),
-  runId: trace.runId,
+  messageId: trace.messageId,
+  chatSessionId: trace.sessionId,
   sessionId: trace.sessionId,
   traceId: trace.traceId,
   orchestrator: {
@@ -133,7 +132,7 @@ export const langfuseTraceMetadata = (
       ? { contextSummary: trace.orchestrator.contextSummary }
       : {}),
   },
-  ...(trace.run ? { run: trace.run } : {}),
+  ...(trace.processing ? { processing: trace.processing } : {}),
 });
 
 export class LangfuseTraceSink implements EvalTraceSink {
@@ -160,7 +159,7 @@ export class LangfuseTraceSink implements EvalTraceSink {
     this.sdk.start();
   }
 
-  startRun(): void {}
+  startProcessing(): void {}
 
   recordOrchestratorContext(): void {}
 
@@ -172,10 +171,10 @@ export class LangfuseTraceSink implements EvalTraceSink {
 
   recordUsage(): void {}
 
-  async finishRun(trace: EvalTrace): Promise<void> {
+  async finishProcessing(trace: EvalTrace): Promise<void> {
     if (!this.processor) return;
     try {
-      const traceId = await createTraceId(trace.runId);
+      const traceId = await createTraceId(trace.messageId);
       const root = startObservation(
         trace.name,
         {
@@ -226,18 +225,18 @@ export class LangfuseTraceSink implements EvalTraceSink {
         worker.end();
       }
 
-      const finalizer = root.startObservation("run.finalize", {
-        output: trace.run ?? {},
+      const finalizer = root.startObservation("message.finalize", {
+        output: trace.processing ?? {},
         metadata: {
-          status: trace.run?.status ?? "unknown",
-          exitReason: trace.run?.exitReason ?? "unknown",
+          status: trace.processing?.status ?? "unknown",
+          exitReason: trace.processing?.exitReason ?? "unknown",
           toolEventCount: trace.tools.length,
         },
       });
       finalizer.end();
       root.update({
         output: trace.output ?? {
-          status: trace.run?.status ?? "unknown",
+          status: trace.processing?.status ?? "unknown",
           delegated: trace.orchestrator.delegated,
         },
       });
@@ -245,7 +244,7 @@ export class LangfuseTraceSink implements EvalTraceSink {
       await this.flush();
     } catch (error) {
       logger.warn("langfuse_trace_export_failed", {
-        runId: trace.runId,
+        messageId: trace.messageId,
         error: error instanceof Error ? error.message : String(error),
       });
     }

@@ -7,6 +7,8 @@ import { createEditTool } from "../src/services/agent/tools/edit";
 import { createFindTool } from "../src/services/agent/tools/find";
 import { createGrepTool } from "../src/services/agent/tools/grep";
 import { createLsTool } from "../src/services/agent/tools/ls";
+import { createPublishPullRequestTool } from "../src/services/agent/tools/publish-pull-request";
+import { createPullRequestTool } from "../src/services/agent/tools/pull-request";
 import { createReadTool } from "../src/services/agent/tools/read";
 import { createToolRegistry } from "../src/services/agent/tools/registry";
 import { createWriteTool } from "../src/services/agent/tools/write";
@@ -65,6 +67,139 @@ describe("sandbox-proxied agent tools", () => {
       "find",
       "ls",
     ]);
+  });
+
+  it("registers backend-owned GitHub pull request tools", () => {
+    const tools = createToolRegistry(
+      runtime(success()),
+      "sandbox-1",
+      config,
+      signal,
+      { sessionId: "chat_1", messageId: "msg_1" },
+      {
+        publishPullRequest: vi.fn(),
+        currentPullRequest: vi.fn(),
+        pullRequest: vi.fn(),
+      },
+    );
+
+    expect(Object.keys(tools)).toEqual([
+      "read",
+      "write",
+      "edit",
+      "bash",
+      "grep",
+      "find",
+      "ls",
+      "publish_pull_request",
+      "pull_request",
+    ]);
+  });
+
+  it("delegates pull request publication without branch or remote input", async () => {
+    const fake = runtime(success());
+    const github = {
+      publishPullRequest: vi.fn(async () => ({
+        success: true,
+        action: "publish" as const,
+        pullRequest: null,
+        failure: null,
+        github: null,
+      })),
+    };
+
+    const result = await execute(
+      createPublishPullRequestTool(
+        fake,
+        "sandbox-1",
+        config,
+        signal,
+        "chat_1",
+        "msg_1",
+        github,
+      ),
+      { title: "Fix it", body: "Details", draft: false },
+    );
+
+    expect(result).toMatchObject({ success: true, action: "publish" });
+    expect(github.publishPullRequest).toHaveBeenCalledWith(
+      "chat_1",
+      "msg_1",
+      { runtime: fake, containerName: "sandbox-1" },
+      { title: "Fix it", body: "Details", draft: false },
+      { timeoutMs: 300, signal },
+    );
+  });
+
+  it("reads the current session pull request without repository input", async () => {
+    const github = {
+      currentPullRequest: vi.fn(async () => ({
+        provider: "github" as const,
+        url: "https://github.test/pull/1",
+        number: 1,
+        branch: "agent/chat_1",
+        baseBranch: "main",
+        title: "Fix it",
+        status: "open" as const,
+        draft: true,
+        failure: null,
+      })),
+      pullRequest: vi.fn(),
+    };
+
+    const result = await execute(
+      createPullRequestTool(signal, "chat_1", "msg_1", github),
+      { action: "read" },
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      action: "read",
+      pullRequest: { number: 1 },
+    });
+    expect(github.currentPullRequest).toHaveBeenCalledWith("chat_1");
+    expect(github.pullRequest).not.toHaveBeenCalled();
+  });
+
+  it("delegates pull request comments through the session-scoped GitHub service", async () => {
+    const github = {
+      currentPullRequest: vi.fn(),
+      pullRequest: vi.fn(async () => ({
+        success: true,
+        action: "comment" as const,
+        pullRequest: null,
+        failure: null,
+        github: null,
+      })),
+    };
+
+    const result = await execute(
+      createPullRequestTool(signal, "chat_1", "msg_1", github),
+      { action: "comment", comment: "Looks good" },
+    );
+
+    expect(result).toMatchObject({ success: true, action: "comment" });
+    expect(github.pullRequest).toHaveBeenCalledWith("chat_1", "msg_1", {
+      action: "comment",
+      comment: "Looks good",
+    });
+  });
+
+  it.each([
+    { action: "update" },
+    { action: "comment", comment: "" },
+    { action: "close", number: 0 },
+  ])("rejects invalid pull request input: %o", async (input) => {
+    const github = {
+      currentPullRequest: vi.fn(),
+      pullRequest: vi.fn(),
+    };
+
+    await expect(
+      execute(createPullRequestTool(signal, "chat_1", "msg_1", github), input),
+    ).rejects.toThrow();
+    expect(github.currentPullRequest).not.toHaveBeenCalled();
+    expect(github.pullRequest).not.toHaveBeenCalled();
   });
 
   it("reads bounded UTF-8 content with the task tool timeout", async () => {
@@ -193,6 +328,28 @@ describe("sandbox-proxied agent tools", () => {
     );
   });
 
+  it("returns non-zero bash output instead of failing the tool", async () => {
+    const fake = runtime({
+      stdout: "",
+      stderr: "missing\n",
+      exitCode: 2,
+      timedOut: false,
+      truncated: false,
+    });
+    const result = await execute(
+      createBashTool(fake, "sandbox-1", config, signal),
+      { command: "ls missing" },
+    );
+
+    expect(result).toEqual({
+      stdout: "",
+      stderr: "missing\n",
+      exitCode: 2,
+      timedOut: false,
+      truncated: false,
+    });
+  });
+
   it.each([
     "npm test",
     "npm run test:unit",
@@ -251,6 +408,23 @@ describe("sandbox-proxied agent tools", () => {
     expect(
       Buffer.byteLength((findResult as { paths: string }).paths),
     ).toBeLessThanOrEqual(50 * 1024);
+    expect(findFake.simpleExec).toHaveBeenCalledWith(
+      "sandbox-1",
+      "find '/workspace/repo' -type f -iname '*.ts' -print",
+      "/workspace/repo",
+      { timeoutMs: 300, signal },
+    );
+
+    const plainFindFake = runtime(success());
+    await execute(createFindTool(plainFindFake, "sandbox-1", config, signal), {
+      pattern: "tmux",
+    });
+    expect(plainFindFake.simpleExec).toHaveBeenCalledWith(
+      "sandbox-1",
+      "find '/workspace/repo' -type f -iname '*tmux*' -print",
+      "/workspace/repo",
+      { timeoutMs: 300, signal },
+    );
 
     const lsFake = runtime(success(large));
     const lsResult = await execute(
@@ -304,22 +478,12 @@ describe("sandbox-proxied agent tools", () => {
     expect(cancelled.simpleExec).not.toHaveBeenCalled();
   });
 
-  it("surfaces bash timeout and non-zero command failures as service errors", async () => {
+  it("surfaces bash timeouts as service errors", async () => {
     const timedOut = runtime({ ...success(), timedOut: true, exitCode: null });
     await expect(
       execute(createBashTool(timedOut, "sandbox-1", config, signal), {
         command: "sleep 2",
       }),
     ).rejects.toMatchObject({ code: "tool_timeout" });
-
-    const failed = runtime({
-      ...success("", "private diagnostic"),
-      exitCode: 2,
-    });
-    await expect(
-      execute(createBashTool(failed, "sandbox-1", config, signal), {
-        command: "false",
-      }),
-    ).rejects.toMatchObject({ code: "tool_command_failed" });
   });
 });

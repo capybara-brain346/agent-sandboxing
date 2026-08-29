@@ -1,6 +1,6 @@
 import type { WorkerResult } from "../../types/harness.types";
-import type { TaskRunContext } from "../task/task-runner";
+import type { MessageProcessingContext } from "../../types/message-processing.types";
 
 export type CodeWorker = {
-  run(context: TaskRunContext): Promise<WorkerResult>;
+  process(context: MessageProcessingContext): Promise<WorkerResult>;
 };

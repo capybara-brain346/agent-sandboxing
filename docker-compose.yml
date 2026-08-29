@@ -26,6 +26,7 @@ services:
       LOG_COLOR: ${LOG_COLOR:-auto}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent_sandboxing?schema=public
       FIXTURE_REPO_PATH: /workspace/fixture-repo
+      FIXTURE_REPOS_ENABLED: ${FIXTURE_REPOS_ENABLED:-true}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
       LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
       LANGFUSE_FLUSH_TIMEOUT_MS: ${LANGFUSE_FLUSH_TIMEOUT_MS:-2000}
@@ -34,6 +35,15 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       AGENT_MODEL: ${AGENT_MODEL:-openrouter:deepseek/deepseek-v4-flash}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-25}
+      GITHUB_APP_ID: ${GITHUB_APP_ID}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:-http://localhost:3000/auth/github/callback}
+      GITHUB_APP_INSTALL_URL: ${GITHUB_APP_INSTALL_URL}
+      AUTH_COOKIE_SECRET: ${AUTH_COOKIE_SECRET}
+      AUTH_TOKEN_ENCRYPTION_KEY: ${AUTH_TOKEN_ENCRYPTION_KEY}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
     ports:
       - "3000:3000"
     depends_on:

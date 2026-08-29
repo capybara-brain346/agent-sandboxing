@@ -1,5 +1,7 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../src/config";
+import { AUTH_COOKIE_NAME, signSessionToken } from "../src/services/auth/auth";
 
 vi.mock("../src/db/prisma", () => ({
   prisma: {
@@ -8,6 +10,16 @@ vi.mock("../src/db/prisma", () => ({
 }));
 
 const { createApp } = await import("../src/server");
+const testConfig = loadConfig();
+const authCookie = `${AUTH_COOKIE_NAME}=${await signSessionToken(
+  {
+    sub: "user_1",
+    login: "octo",
+    avatarUrl: "https://github.com/octo.png",
+    email: null,
+  },
+  testConfig.AUTH_COOKIE_SECRET,
+)}`;
 
 describe("HTTP wiring", () => {
   const app = createApp();
@@ -23,6 +35,8 @@ describe("HTTP wiring", () => {
   it("exposes strict chat-session routes", async () => {
     const response = await request(app)
       .post("/chat-sessions")
+      .set("Cookie", authCookie)
+      .set("Origin", new URL(testConfig.APP_BASE_URL).origin)
       .send({
         repo: { source: "fixture", ref: "./repo" },
         unexpected: true,

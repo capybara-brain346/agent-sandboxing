@@ -9,6 +9,7 @@ import { takeUtf8Prefix } from "../../shared/utf8";
 import type {
   RuntimeOutput,
   RuntimeResult,
+  SandboxProvisioningSource,
   SimpleExecOptions,
   SimpleExecResult,
 } from "../../types/sandbox.types";
@@ -80,7 +81,7 @@ export class SandboxRuntime {
   ): Promise<SimpleExecResult> {
     if (options.signal?.aborted) throw abortError();
 
-    const args = ["exec", "-i", "-w", cwd];
+    const args = ["exec", "-i", "-u", "node", "-w", cwd];
     for (const [key, value] of Object.entries(options.env ?? {}))
       args.push("-e", `${key}=${value}`);
     args.push(containerName, "sh", "-lc", command);
@@ -131,7 +132,7 @@ export class SandboxRuntime {
 
       try {
         child = spawn("docker", args, {
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
         });
       } catch (error) {
         rejectWith(error);
@@ -148,6 +149,7 @@ export class SandboxRuntime {
         if (!timedOut) rejectWith(error);
       });
       child.once("close", (code) => resolveResult(code));
+      child.stdin?.end(options.stdin);
 
       if (options.signal) {
         options.signal.addEventListener("abort", onAbort, { once: true });
@@ -168,29 +170,32 @@ export class SandboxRuntime {
     sandboxId: string,
     containerName: string,
     image: string,
-    fixturePath: string,
+    source: SandboxProvisioningSource,
   ): Promise<{ containerId: string }> {
-    const root = await realpath(fixturePath).catch(() => {
-      throw new ServiceError(
-        "fixture_missing",
-        "Local fixture repo was not found",
-        500,
-      );
-    });
-    const stat = await lstat(root);
-    if (!stat.isDirectory())
-      throw new ServiceError(
-        "fixture_invalid",
-        "Local fixture repo must be a directory",
-        500,
-      );
-    await access(path.join(root, ".")).catch(() => {
-      throw new ServiceError(
-        "fixture_unreadable",
-        "Local fixture repo is not readable",
-        500,
-      );
-    });
+    let root: string | undefined;
+    if (source.source === "fixture") {
+      root = await realpath(source.fixtureRepoPath).catch(() => {
+        throw new ServiceError(
+          "fixture_missing",
+          "Local fixture repo was not found",
+          500,
+        );
+      });
+      const stat = await lstat(root);
+      if (!stat.isDirectory())
+        throw new ServiceError(
+          "fixture_invalid",
+          "Local fixture repo must be a directory",
+          500,
+        );
+      await access(path.join(root, ".")).catch(() => {
+        throw new ServiceError(
+          "fixture_unreadable",
+          "Local fixture repo is not readable",
+          500,
+        );
+      });
+    }
     const labels = [
       "--label",
       "com.agent-sandboxing.service=sandbox-service",
@@ -219,19 +224,15 @@ export class SandboxRuntime {
       { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
     );
     const containerId = created.stdout.trim();
-    try {
-      await execFile("docker", ["start", containerId], {
-        timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
-      });
-      await execFile("docker", [
-        "exec",
-        "-u",
-        "0",
-        containerId,
-        "mkdir",
-        "-p",
-        "/workspace/repo",
-      ]);
+    await execFile("docker", ["start", containerId], {
+      timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
+    });
+    await execFile(
+      "docker",
+      ["exec", "-u", "0", containerId, "mkdir", "-p", "/workspace/repo"],
+      { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+    );
+    if (source.source === "fixture") {
       await execFile(
         "docker",
         ["cp", `${root}/.`, `${containerId}:/workspace/repo/`],
@@ -239,16 +240,118 @@ export class SandboxRuntime {
           timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS,
         },
       );
-      await execFile("docker", [
-        "exec",
-        "-u",
-        "0",
-        containerId,
-        "test",
-        "-e",
-        "/workspace/repo/.git",
-      ]);
-      await execFile("docker", [
+    } else {
+      try {
+        await execFile(
+          "docker",
+          ["exec", "-u", "0", containerId, "git", "--version"],
+          { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+        );
+      } catch {
+        throw new ServiceError(
+          "github_git_unavailable",
+          "The sandbox image does not include Git",
+          500,
+        );
+      }
+      const safeCloneUrl = new URL(source.cloneUrl);
+      safeCloneUrl.username = "";
+      safeCloneUrl.password = "";
+      const authenticatedUrl = new URL(safeCloneUrl);
+      authenticatedUrl.username = "x-access-token";
+      authenticatedUrl.password = source.token;
+      try {
+        await execFile(
+          "docker",
+          [
+            "exec",
+            "-u",
+            "0",
+            containerId,
+            "git",
+            "clone",
+            "--no-checkout",
+            authenticatedUrl.toString(),
+            "/workspace/repo",
+          ],
+          { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+        );
+        await execFile(
+          "docker",
+          [
+            "exec",
+            "-u",
+            "0",
+            containerId,
+            "git",
+            "-C",
+            "/workspace/repo",
+            "remote",
+            "set-url",
+            "origin",
+            safeCloneUrl.toString(),
+          ],
+          { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+        );
+      } catch {
+        await execFile(
+          "docker",
+          [
+            "exec",
+            "-u",
+            "0",
+            containerId,
+            "git",
+            "-C",
+            "/workspace/repo",
+            "remote",
+            "set-url",
+            "origin",
+            safeCloneUrl.toString(),
+          ],
+          { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+        ).catch(() => undefined);
+        throw new ServiceError(
+          "github_clone_failed",
+          "GitHub repository could not be cloned",
+          502,
+        );
+      }
+      try {
+        await execFile(
+          "docker",
+          [
+            "exec",
+            "-u",
+            "0",
+            containerId,
+            "git",
+            "-C",
+            "/workspace/repo",
+            "checkout",
+            "--force",
+            "-B",
+            source.baseBranch,
+            `origin/${source.baseBranch}`,
+          ],
+          { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+        );
+      } catch {
+        throw new ServiceError(
+          "github_checkout_failed",
+          "GitHub base branch could not be checked out",
+          502,
+        );
+      }
+    }
+    await execFile(
+      "docker",
+      ["exec", "-u", "0", containerId, "test", "-e", "/workspace/repo/.git"],
+      { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+    );
+    await execFile(
+      "docker",
+      [
         "exec",
         "-u",
         "0",
@@ -257,12 +360,26 @@ export class SandboxRuntime {
         "-R",
         "node:node",
         "/workspace/repo",
-      ]);
-      return { containerId };
-    } catch (error) {
-      await this.stop(containerName, 1000).catch(() => undefined);
-      throw error;
-    }
+      ],
+      { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+    );
+    await execFile(
+      "docker",
+      [
+        "exec",
+        "-u",
+        "node",
+        containerId,
+        "git",
+        "config",
+        "--global",
+        "--add",
+        "safe.directory",
+        "/workspace/repo",
+      ],
+      { timeout: this.config.SANDBOX_PROVISION_TIMEOUT_MS },
+    );
+    return { containerId };
   }
 
   async run(

@@ -5,7 +5,7 @@ import type {
   OrchestratorContext,
   WorkerResult,
 } from "../../types/harness.types";
-import { buildWorkerBrief, type WorkerCorrection } from "./worker-brief";
+import { buildWorkerBrief } from "./worker-brief";
 import { getPromptText } from "../../prompts/load-prompt";
 import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 import { recordModelUsage } from "../eval/model-usage";
@@ -20,7 +20,7 @@ export type OrchestratorAgentInput = {
   recentToolActivity: string[];
   workspace: OrchestratorContext["workspace"];
   message: string;
-  runId?: string;
+  messageId?: string;
   signal: AbortSignal;
   delegate: (brief: string) => Promise<WorkerResult>;
 };
@@ -52,7 +52,7 @@ const ORCHESTRATOR_SYSTEM_PROMPT = getPromptText("orchestrator");
 
 const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
   const delegations: WorkerResult[] = [];
-  let lastCorrection: WorkerCorrection | undefined;
+  let lastCorrection: string | undefined;
 
   const delegateTool = tool({
     description:
@@ -71,10 +71,6 @@ const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
         const blocked: WorkerResult = {
           status: "blocked",
           summary: "Delegation budget for this turn is exhausted.",
-          changedFiles: [],
-          testsRun: [],
-          blockers: ["max_delegations_reached"],
-          suggestedNextStep: "",
         };
         delegations.push(blocked);
         return blocked;
@@ -84,13 +80,7 @@ const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
       const fullBrief = buildWorkerBrief(context, brief, correction);
       const result = await delegate(fullBrief);
       delegations.push(result);
-      lastCorrection =
-        result.status === "blocked"
-          ? {
-              blockers: result.blockers,
-              suggestedNextStep: result.suggestedNextStep,
-            }
-          : undefined;
+      lastCorrection = result.status === "blocked" ? result.summary : undefined;
       return result;
     },
   });
@@ -98,13 +88,6 @@ const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
   return { delegateTool, delegations };
 };
 
-/**
- * Production agent: one context-aware generateText call that decides,
- * via real tool-calling, whether to reply directly or delegate to the
- * CodeWorker. changedFiles/blockers/workerReport are always derived by the
- * caller from the delegations actually observed here, never from the
- * model's own prose.
- */
 export class ModelOrchestratorAgent implements OrchestratorAgent {
   constructor(
     private readonly model: LanguageModel,
@@ -145,13 +128,13 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
       });
     } catch (error) {
       logger.debug("orchestrator_model_failed", {
-        runId: input.runId ?? null,
+        messageId: input.messageId ?? null,
         durationMs: Date.now() - startedAt,
         outcome: input.signal.aborted ? "cancelled" : "failed",
       });
       recordModelUsage({
         recorder: this.recorder,
-        runId: input.runId,
+        messageId: input.messageId,
         stage: "orchestrator",
         model: this.model,
         startedAt,
@@ -161,14 +144,14 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
     }
     recordModelUsage({
       recorder: this.recorder,
-      runId: input.runId,
+      messageId: input.messageId,
       stage: "orchestrator",
       model: this.model,
       startedAt,
       result,
     });
     logger.debug("orchestrator_model_completed", {
-      runId: input.runId ?? null,
+      messageId: input.messageId ?? null,
       durationMs: Date.now() - startedAt,
       delegationCount: delegations.length,
       replyPresent: result.text.trim().length > 0,

@@ -16,7 +16,7 @@ const compactedSummarySchema = z
   })
   .strict();
 export type CompactionInput = {
-  runId?: string;
+  messageId?: string;
   previousSummary: string;
   recentMessages: OrchestratorChatMessage[];
   recentToolActivity: string[];
@@ -71,13 +71,13 @@ export class ModelSessionSummaryCompactor implements SessionSummaryCompactor {
       });
     } catch (error) {
       logger.debug("session_summary_compaction_failed", {
-        runId: input.runId ?? null,
+        messageId: input.messageId ?? null,
         durationMs: Date.now() - startedAt,
         outcome: input.signal.aborted ? "cancelled" : "failed",
       });
       recordModelUsage({
         recorder: this.recorder,
-        runId: input.runId,
+        messageId: input.messageId,
         stage: "summaryCompaction",
         model: this.model,
         startedAt,
@@ -87,7 +87,7 @@ export class ModelSessionSummaryCompactor implements SessionSummaryCompactor {
     }
     recordModelUsage({
       recorder: this.recorder,
-      runId: input.runId,
+      messageId: input.messageId,
       stage: "summaryCompaction",
       model: this.model,
       startedAt,
@@ -133,7 +133,7 @@ export class ModelSessionSummaryCompactor implements SessionSummaryCompactor {
       summary = `${summary.trimEnd()}…`;
     }
     logger.debug("session_summary_compaction_completed", {
-      runId: input.runId ?? null,
+      messageId: input.messageId ?? null,
       durationMs: Date.now() - startedAt,
       summaryBytes: Buffer.byteLength(summary),
       fileCount: currentFiles.length,

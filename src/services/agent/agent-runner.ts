@@ -1,7 +1,6 @@
 import {
   generateText,
   isStepCount,
-  tool,
   type LanguageModel,
   type ToolSet,
 } from "ai";
@@ -12,8 +11,7 @@ import type { PublicEvent } from "../../types/event.types";
 import type { WorkerResult } from "../../types/harness.types";
 import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
-import { workerResultSchema } from "../../types/harness.types";
-import type { TaskRunContext } from "../task/task-runner";
+import type { MessageProcessingContext } from "../../types/message-processing.types";
 import { createAgentToolRegistry } from "./tools/registry";
 import type { AgentToolConfig } from "./tools/config";
 import type { CodeWorker } from "./code-worker";
@@ -30,6 +28,7 @@ import type { ArtifactRecorder } from "../artifacts/artifact-store";
 import { getPromptText } from "../../prompts/load-prompt";
 import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 import { recordModelUsage } from "../eval/model-usage";
+import type { AgentGitHubTools } from "./tools/registry";
 
 export const AGENT_SYSTEM_PROMPT = getPromptText("code-worker");
 
@@ -53,6 +52,7 @@ export type AgentRunnerDependencies = {
   publish: PublishEvent;
   artifacts?: ArtifactRecorder;
   traceRecorder?: EvalTraceRecorderLike;
+  github?: AgentGitHubTools;
 };
 
 class SerialExecutor {
@@ -92,17 +92,16 @@ export const serializeToolRegistry = <TOOLS extends ToolSet>(
 export class AgentRunner implements CodeWorker {
   constructor(private readonly dependencies: AgentRunnerDependencies) {}
 
-  async run(context: TaskRunContext): Promise<WorkerResult> {
+  async process(context: MessageProcessingContext): Promise<WorkerResult> {
     throwIfAborted(context.signal);
     const executionStartedAt = Date.now();
     logger.debug("agent_worker_started", {
       sessionId: context.sessionId,
-      runId: context.taskId,
+      messageId: context.messageId,
       sandboxId: context.sandboxId,
     });
     const target = await this.dependencies.sandbox.getAgentToolTarget(
       context.sessionId,
-      context.taskId,
       context.sandboxId,
     );
     throwIfAborted(context.signal);
@@ -113,20 +112,10 @@ export class AgentRunner implements CodeWorker {
         target.containerName,
         toolConfig(this.dependencies.config),
         context.signal,
+        { sessionId: context.sessionId, messageId: context.messageId },
+        this.dependencies.github,
       ),
     );
-    let finalResult: WorkerResult | undefined;
-    const allTools = {
-      ...tools,
-      finish: tool({
-        description: "Submit the structured result for this worker attempt.",
-        inputSchema: workerResultSchema,
-        execute: async (input) => {
-          finalResult = workerResultSchema.parse(input);
-          return { accepted: true };
-        },
-      }),
-    };
     const relay = new ToolEventRelay({
       events: this.dependencies.events,
       publish: this.dependencies.publish,
@@ -135,7 +124,7 @@ export class AgentRunner implements CodeWorker {
         : {}),
     } satisfies ToolEventRelayDependencies);
     const callbacks = relay.callbacks<ToolSet>({
-      taskId: context.taskId,
+      messageId: context.messageId,
       sandboxId: context.sandboxId,
       sessionId: context.sessionId,
     });
@@ -147,24 +136,21 @@ export class AgentRunner implements CodeWorker {
         model: this.dependencies.model,
         system: AGENT_SYSTEM_PROMPT,
         messages: [{ role: "user", content: context.instructions }],
-        tools: allTools,
+        tools,
         abortSignal: context.signal,
-        stopWhen: [
-          () => finalResult !== undefined,
-          isStepCount(this.dependencies.config.AGENT_MAX_STEPS + 1),
-        ],
+        stopWhen: isStepCount(this.dependencies.config.AGENT_MAX_STEPS),
         onToolExecutionStart: async (event) => {
-          if (event.toolCall.toolName !== "finish")
-            await callbacks.onToolExecutionStart(event);
+          if (!event) return;
+          await callbacks.onToolExecutionStart(event);
         },
         onToolExecutionEnd: async (event) => {
-          if (event.toolCall.toolName !== "finish")
-            await callbacks.onToolExecutionEnd(event);
+          if (!event) return;
+          await callbacks.onToolExecutionEnd(event as never);
         },
       });
       recordModelUsage({
         recorder: this.dependencies.traceRecorder,
-        runId: context.taskId,
+        messageId: context.messageId,
         stage: "worker",
         model: this.dependencies.model,
         startedAt,
@@ -172,47 +158,26 @@ export class AgentRunner implements CodeWorker {
       });
       usageRecorded = true;
 
-      const changedFiles = [
-        ...new Set(
-          result.toolCalls
-            .filter(
-              (call) => call.toolName === "write" || call.toolName === "edit",
-            )
-            .map((call) => (call.input as { path: string }).path),
-        ),
-      ];
-      const workerResult =
-        finalResult ??
-        ({
-          status: "blocked",
-          summary: "Worker did not submit a structured result.",
-          changedFiles: [],
-          testsRun: [],
-          blockers: ["worker_result_not_submitted"],
-          suggestedNextStep: "Retry the worker attempt with a smaller scope.",
-        } satisfies WorkerResult);
+      const workerResult: WorkerResult = {
+        status: "completed",
+        summary:
+          result.text.trim() || "Worker completed without a final report.",
+      };
 
       logger.debug("agent_worker_completed", {
         sessionId: context.sessionId,
-        runId: context.taskId,
+        messageId: context.messageId,
         sandboxId: context.sandboxId,
         durationMs: Date.now() - executionStartedAt,
         status: workerResult.status,
-        finishSubmitted: finalResult !== undefined,
         toolCallCount: result.toolCalls.length,
-        changedFileCount: changedFiles.length,
       });
-      return {
-        ...workerResult,
-        changedFiles: changedFiles.length
-          ? changedFiles
-          : workerResult.changedFiles,
-      };
+      return workerResult;
     } catch (error) {
       const cancelled = isAbortError(error) || context.signal.aborted;
       logger.debug("agent_worker_failed", {
         sessionId: context.sessionId,
-        runId: context.taskId,
+        messageId: context.messageId,
         sandboxId: context.sandboxId,
         durationMs: Date.now() - executionStartedAt,
         outcome: cancelled ? "cancelled" : "failed",
@@ -222,7 +187,7 @@ export class AgentRunner implements CodeWorker {
       if (!usageRecorded)
         recordModelUsage({
           recorder: this.dependencies.traceRecorder,
-          runId: context.taskId,
+          messageId: context.messageId,
           stage: "worker",
           model: this.dependencies.model,
           startedAt,
@@ -231,7 +196,11 @@ export class AgentRunner implements CodeWorker {
       if (isAbortError(error)) throw error;
       if (context.signal.aborted) throw createAbortError();
       if (error instanceof ServiceError) throw error;
-      throw new ServiceError("agent_run_failed", "Agent run failed", 502);
+      throw new ServiceError(
+        "agent_processing_failed",
+        "Agent processing failed",
+        502,
+      );
     }
   }
 }

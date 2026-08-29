@@ -21,7 +21,7 @@ const baseInput = (
   previousSummary: "",
   recentMessages: [],
   recentToolActivity: [],
-  runId: "run_1",
+  messageId: "msg_1",
   signal: new AbortController().signal,
   ...overrides,
 });
@@ -91,7 +91,7 @@ describe("ModelSessionSummaryCompactor", () => {
 
     expect(recorder.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({
-        runId: "run_1",
+        messageId: "msg_1",
         stage: "summaryCompaction",
         usage: expect.objectContaining({ inputTokens: 5, outputTokens: 3 }),
       }),

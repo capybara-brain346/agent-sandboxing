@@ -11,8 +11,7 @@ import type {
   ChatMessage,
   CreateMessageResponse,
   CreateSessionResponse,
-  RunResult,
-  RunSnapshot,
+  SessionResult,
 } from "../../src/types/chat.types";
 import type { PublicEvent } from "../../src/types/event.types";
 import type { WorkerResult } from "../../src/types/harness.types";
@@ -40,10 +39,6 @@ vi.mock("ai", async (importOriginal) => {
 const workerReport: WorkerResult = {
   status: "completed",
   summary: "Updated README.md",
-  changedFiles: ["README.md"],
-  testsRun: [],
-  blockers: [],
-  suggestedNextStep: "",
 };
 
 const subjectiveScores = {
@@ -54,29 +49,14 @@ const subjectiveScores = {
   blocker_honesty_1_to_5: 5,
 } as const;
 
-const snapshot = (runId: string): RunSnapshot => ({
-  taskRunId: runId,
-  chatSessionId: "chat_eval",
-  triggerMessageId: `msg_${runId}`,
-  status: "completed",
-  sandboxId: "sbox_eval",
-  resultUrl: `/chat-sessions/chat_eval/runs/${runId}/result`,
-  eventsUrl: `/chat-sessions/chat_eval/runs/${runId}/events`,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  provisioningAt: "2026-01-01T00:00:00.000Z",
-  runningAt: "2026-01-01T00:00:00.000Z",
-  completedAt: "2026-01-01T00:00:01.000Z",
-  failure: null,
-});
-
-const event = (runId: string, sandboxId = "sbox_eval"): PublicEvent => ({
-  id: `evt_${runId}`,
-  streamId: runId,
-  streamScope: "run",
+const event = (messageId: string, sandboxId = "sbox_eval"): PublicEvent => ({
+  id: `evt_${messageId}`,
+  streamId: "chat_eval",
+  streamScope: "session",
   domain: "sandbox",
   sessionId: "chat_eval",
-  runId,
-  taskId: null,
+  messageId,
+  artifactId: null,
   sandboxId,
   commandId: null,
   sequence: 1,
@@ -89,14 +69,18 @@ const event = (runId: string, sandboxId = "sbox_eval"): PublicEvent => ({
 });
 
 const message = (
-  runId: string,
+  messageId: string,
   content = "Updated README.md and completed the requested change.",
 ): ChatMessage => ({
-  messageId: `assistant_${runId}`,
+  messageId: `assistant_${messageId}`,
   chatSessionId: "chat_eval",
   role: "assistant",
   content,
-  taskRunId: runId,
+  processingStatus: null,
+  processingStartedAt: null,
+  processingCompletedAt: null,
+  failure: null,
+  agentSummary: null,
   createdAt: "2026-01-01T00:00:01.000Z",
 });
 
@@ -118,18 +102,19 @@ const fakeService = (
       repoId: null,
       defaultBranch: null,
       installationId: null,
+      baseBranch: null,
+      baseSha: null,
     },
     status: "active",
     sandboxId: null,
     eventsUrl: "/chat-sessions/chat_eval/events",
     messagesUrl: "/chat-sessions/chat_eval/messages",
-    latestRun: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
-  const runId = "run_eval";
-  const result: RunResult = {
-    taskRunId: runId,
+  const messageId = "msg_eval";
+  const result: SessionResult = {
+    messageId,
     chatSessionId: "chat_eval",
     status: "completed",
     diff: resultDiff,
@@ -143,8 +128,7 @@ const fakeService = (
         redacted: false,
       } satisfies ArtifactPointer,
     ],
-    assistantMessageId: message(runId).messageId,
-    agentSummary: message(runId, assistantContent).content,
+    agentSummary: message(messageId, assistantContent).content,
     exitReason: "completed",
     failure: null,
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -153,7 +137,7 @@ const fakeService = (
   const workerArtifact: ArtifactContent = {
     artifactId: "art_worker",
     sessionId: "chat_eval",
-    runId,
+    messageId,
     kind: "worker_report",
     contentType: "application/json",
     content: JSON.stringify(workerReport),
@@ -164,37 +148,40 @@ const fakeService = (
   };
 
   return {
-    createSession: vi.fn(async (input) => {
+    createSession: vi.fn(async (_userId, input) => {
       repositoryPaths.push(input.repo.ref);
       return { ...session, repo: { ...session.repo, ref: input.repo.ref } };
     }),
     appendMessage: vi.fn(async (): Promise<CreateMessageResponse> => ({
       message: {
-        messageId: "msg_run_eval",
+        messageId,
         chatSessionId: "chat_eval",
         role: "user",
         content: "Append the sentence.",
-        taskRunId: runId,
+        processingStatus: "queued",
+        processingStartedAt: null,
+        processingCompletedAt: null,
+        failure: null,
+        agentSummary: null,
         createdAt: "2026-01-01T00:00:00.000Z",
       },
-      run: { ...snapshot(runId), sandboxId: snapshotSandboxId },
-      eventsUrl: snapshot(runId).eventsUrl,
+      sessionUrl: "/chat-sessions/chat_eval",
+      messagesUrl: "/chat-sessions/chat_eval/messages",
+      eventsUrl: "/chat-sessions/chat_eval/events",
     })),
-    getRun: vi.fn(async () => ({
-      ...snapshot(runId),
-      sandboxId: snapshotSandboxId,
-    })),
-    result: vi.fn(async () => result),
+    sessionResult: vi.fn(async () => result),
     listMessages: vi.fn(
       async (): Promise<{
         items: ChatMessage[];
         nextCursor: string | null;
       }> => ({
-        items: [message(runId, assistantContent)],
+        items: [message(messageId, assistantContent)],
         nextCursor: null,
       }),
     ),
-    runEventsAfter: vi.fn(async (): Promise<PublicEvent[]> => [event(runId)]),
+    sessionEventsAfter: vi.fn(async (): Promise<PublicEvent[]> => [
+      event(messageId, snapshotSandboxId ?? "sbox_eval"),
+    ]),
     getArtifact: vi.fn(async (): Promise<ArtifactContent> => workerArtifact),
   };
 };
@@ -212,16 +199,16 @@ describe("repo eval suite", () => {
     );
     if (!testCase) throw new Error("repo case not found");
     const observed: RepoObserved = {
-      runStatus: "completed",
+      processingStatus: "completed",
       workerStatus: "completed",
       delegationCount: 1,
       changedFiles: ["README.md"],
       diff: "diff --git a/README.md b/README.md\n+Acme Tools is ready for teams.",
       testsRun: [],
-      postRunChecks: [],
+      postProcessingChecks: [],
       workerReports: [workerReport],
       toolEvents: [],
-      runIds: ["run_1"],
+      messageIds: ["msg_1"],
       finalMessage: "Updated README.md and completed the requested change.",
       assistantMessages: [
         "Updated README.md and completed the requested change.",
@@ -232,7 +219,7 @@ describe("repo eval suite", () => {
     expect(changedFilesFromDiff(observed.diff)).toEqual(["README.md"]);
   });
 
-  it("collects a run, writes JSONL, and removes the copied repository", async () => {
+  it("collects message processing, writes JSONL, and removes the copied repository", async () => {
     const directory = await mkdtemp(join(tmpdir(), "repo-evals-test-"));
     const resultsDir = join(directory, "results");
     const paths: string[] = [];
@@ -324,7 +311,7 @@ describe("repo eval suite", () => {
         ...base.expect,
         changedFiles: ["eval-marker.txt"],
         diffMustContain: ["marker"],
-        postRunCommands: ["grep -F marker eval-marker.txt"],
+        postProcessingCommands: ["grep -F marker eval-marker.txt"],
       },
     };
     const markerDiff =
@@ -342,8 +329,8 @@ describe("repo eval suite", () => {
       };
       const first = await runRepoEvals(options);
       expect(first.results[0]?.status).toBe("passed");
-      expect(first.results[0]?.observed.postRunChecks).toMatchObject([
-        { passed: true, command: testCase.expect.postRunCommands[0] },
+      expect(first.results[0]?.observed.postProcessingChecks).toMatchObject([
+        { passed: true, command: testCase.expect.postProcessingCommands[0] },
       ]);
 
       const second = await runRepoEvals({ ...options, resume: true });
@@ -357,7 +344,7 @@ describe("repo eval suite", () => {
     }
   });
 
-  it("uses run event sandbox id for post-run checks", async () => {
+  it("uses session event sandbox id for post-processing checks", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "repo-evals-event-sandbox-"),
     );
@@ -370,7 +357,7 @@ describe("repo eval suite", () => {
       ...base,
       expect: {
         ...base.expect,
-        postRunCommands: ["python -m pytest tests/test_cli.py"],
+        postProcessingCommands: ["python -m pytest tests/test_cli.py"],
       },
     };
     try {
@@ -381,7 +368,7 @@ describe("repo eval suite", () => {
         "Verified with pytest.",
         null,
       );
-      service.runPostRunCommand = vi.fn(async () => ({
+      service.postProcessingCommand = vi.fn(async () => ({
         exitCode: 0,
         timedOut: false,
         stdout: "",
@@ -398,7 +385,7 @@ describe("repo eval suite", () => {
         pollIntervalMs: 1,
       });
 
-      expect(service.runPostRunCommand).toHaveBeenCalledWith(
+      expect(service.postProcessingCommand).toHaveBeenCalledWith(
         expect.objectContaining({ sandboxId: "sbox_eval" }),
       );
     } finally {

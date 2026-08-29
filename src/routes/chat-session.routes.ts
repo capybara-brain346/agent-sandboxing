@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { loadConfig } from "../config";
 import { ServiceError } from "../shared/errors";
 import { logger } from "../logger";
 import { chatSessionService } from "../services/chat/chat-session";
@@ -8,22 +9,34 @@ import {
   createMessageSchema,
   listSessionQuerySchema,
   messagePageQuerySchema,
-  pageQuerySchema,
   updateChatSessionSchema,
 } from "../types/chat.types";
 import { parseSseCursor, startSseKeepalive, writeSseEvent } from "./sse";
+import {
+  requireAuth,
+  requireSameOrigin,
+  sessionClaims,
+} from "../services/auth/auth";
 
 export const chatSessionRouter = Router();
+const chatRouteConfig = loadConfig();
+chatSessionRouter.use("/chat-sessions", requireAuth(chatRouteConfig));
 
 const invalidRequest = (error: { issues: unknown[] }): ServiceError =>
   new ServiceError("invalid_request", "Request is invalid", 400, {
     issues: error.issues,
   });
 
+const routeParam = (request: Request, name: string): string => {
+  const value = request.params[name];
+  if (typeof value !== "string")
+    throw new ServiceError("invalid_request", "Request is invalid", 400);
+  return value;
+};
+
 const sse = async (
   request: Request,
   response: Response,
-  scope: "session" | "run",
   streamId: string,
   eventsAfter: (
     after: number,
@@ -47,10 +60,9 @@ const sse = async (
     if (closed || !subscribed) return;
     closed = true;
     clearKeepalive();
-    if (client !== undefined) sseHub.unsubscribe(scope, streamId, client);
+    if (client !== undefined) sseHub.unsubscribe(streamId, client);
     logger.debug("sse_connection_closed", {
       requestId: request.id,
-      scope,
       streamId,
       after,
       replayCompleted,
@@ -70,11 +82,10 @@ const sse = async (
           : "invalid";
     after = parseSseCursor(rawAfter);
     lastSequence = after;
-    client = sseHub.subscribe(scope, streamId, response, after);
+    client = sseHub.subscribe(streamId, response, after);
     subscribed = true;
     logger.debug("sse_subscribed", {
       requestId: request.id,
-      scope,
       streamId,
       after,
     });
@@ -83,7 +94,7 @@ const sse = async (
     replayEventCount = events.length;
     lastSequence = events.at(-1)?.sequence ?? after;
     if (closed || response.writableEnded || response.destroyed) {
-      sseHub.unsubscribe(scope, streamId, client);
+      sseHub.unsubscribe(streamId, client);
       return;
     }
     response.status(200).set({
@@ -94,16 +105,10 @@ const sse = async (
     });
     response.flushHeaders();
     for (const event of events) writeSseEvent(response, event);
-    sseHub.finishReplay(
-      scope,
-      streamId,
-      client,
-      events.at(-1)?.sequence ?? after,
-    );
+    sseHub.finishReplay(streamId, client, events.at(-1)?.sequence ?? after);
     replayCompleted = true;
     logger.debug("sse_replay_completed", {
       requestId: request.id,
-      scope,
       streamId,
       after,
       eventCount: events.length,
@@ -119,23 +124,37 @@ const sse = async (
   }
 };
 
-chatSessionRouter.post("/chat-sessions", async (request, response, next) => {
-  try {
-    const parsed = createChatSessionSchema.safeParse(request.body ?? {});
-    if (!parsed.success) throw invalidRequest(parsed.error);
-    response
-      .status(201)
-      .json(await chatSessionService.createSession(parsed.data));
-  } catch (error) {
-    next(error);
-  }
-});
+chatSessionRouter.post(
+  "/chat-sessions",
+  requireSameOrigin(chatRouteConfig),
+  async (request, response, next) => {
+    try {
+      const parsed = createChatSessionSchema.safeParse(request.body ?? {});
+      if (!parsed.success) throw invalidRequest(parsed.error);
+      response
+        .status(201)
+        .json(
+          await chatSessionService.createSession(
+            sessionClaims(request).sub,
+            parsed.data,
+          ),
+        );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 chatSessionRouter.get("/chat-sessions", async (request, response, next) => {
   try {
     const parsed = listSessionQuerySchema.safeParse(request.query);
     if (!parsed.success) throw invalidRequest(parsed.error);
-    response.json(await chatSessionService.listSessions(parsed.data));
+    response.json(
+      await chatSessionService.listSessions(
+        sessionClaims(request).sub,
+        parsed.data,
+      ),
+    );
   } catch (error) {
     next(error);
   }
@@ -146,7 +165,10 @@ chatSessionRouter.get(
   async (request, response, next) => {
     try {
       response.json(
-        await chatSessionService.getSession(request.params.sessionId),
+        await chatSessionService.getSession(
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
+        ),
       );
     } catch (error) {
       next(error);
@@ -156,14 +178,32 @@ chatSessionRouter.get(
 
 chatSessionRouter.patch(
   "/chat-sessions/:sessionId",
+  requireSameOrigin(chatRouteConfig),
   async (request, response, next) => {
     try {
       const parsed = updateChatSessionSchema.safeParse(request.body ?? {});
       if (!parsed.success) throw invalidRequest(parsed.error);
       response.json(
         await chatSessionService.updateSession(
-          request.params.sessionId,
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
           parsed.data,
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+chatSessionRouter.get(
+  "/chat-sessions/:sessionId/pull-request",
+  async (request, response, next) => {
+    try {
+      response.json(
+        await chatSessionService.currentPullRequest(
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
         ),
       );
     } catch (error) {
@@ -180,7 +220,8 @@ chatSessionRouter.get(
       if (!parsed.success) throw invalidRequest(parsed.error);
       response.json(
         await chatSessionService.listMessages(
-          request.params.sessionId,
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
           parsed.data,
         ),
       );
@@ -192,15 +233,17 @@ chatSessionRouter.get(
 
 chatSessionRouter.post(
   "/chat-sessions/:sessionId/messages",
+  requireSameOrigin(chatRouteConfig),
   async (request, response, next) => {
     try {
       const parsed = createMessageSchema.safeParse(request.body ?? {});
       if (!parsed.success) throw invalidRequest(parsed.error);
       const result = await chatSessionService.appendMessage(
-        request.params.sessionId,
+        sessionClaims(request).sub,
+        routeParam(request, "sessionId"),
         parsed.data,
       );
-      response.status(result.run ? 202 : 201).json(result);
+      response.status(202).json(result);
     } catch (error) {
       next(error);
     }
@@ -208,15 +251,13 @@ chatSessionRouter.post(
 );
 
 chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs",
+  "/chat-sessions/:sessionId/result",
   async (request, response, next) => {
     try {
-      const parsed = pageQuerySchema.safeParse(request.query);
-      if (!parsed.success) throw invalidRequest(parsed.error);
       response.json(
-        await chatSessionService.listRuns(
-          request.params.sessionId,
-          parsed.data,
+        await chatSessionService.sessionResult(
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
         ),
       );
     } catch (error) {
@@ -225,45 +266,14 @@ chatSessionRouter.get(
   },
 );
 
-chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs/:runId",
+chatSessionRouter.post(
+  "/chat-sessions/:sessionId/cancel",
+  requireSameOrigin(chatRouteConfig),
   async (request, response, next) => {
     try {
-      response.json(
-        await chatSessionService.getRun(
-          request.params.sessionId,
-          request.params.runId,
-        ),
-      );
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs/:runId/result",
-  async (request, response, next) => {
-    try {
-      response.json(
-        await chatSessionService.result(
-          request.params.sessionId,
-          request.params.runId,
-        ),
-      );
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-chatSessionRouter.delete(
-  "/chat-sessions/:sessionId/runs/:runId",
-  async (request, response, next) => {
-    try {
-      const result = await chatSessionService.cancelRun(
-        request.params.sessionId,
-        request.params.runId,
+      const result = await chatSessionService.cancelCurrentMessage(
+        sessionClaims(request).sub,
+        routeParam(request, "sessionId"),
       );
       response.status(result.status === "cancelling" ? 202 : 200).json(result);
     } catch (error) {
@@ -276,16 +286,12 @@ chatSessionRouter.get(
   "/chat-sessions/:sessionId/events",
   async (request, response, next) => {
     try {
-      await sse(
-        request,
-        response,
-        "session",
-        request.params.sessionId,
-        (after) =>
-          chatSessionService.sessionEventsAfter(
-            request.params.sessionId,
-            after,
-          ),
+      await sse(request, response, routeParam(request, "sessionId"), (after) =>
+        chatSessionService.sessionEventsAfter(
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
+          after,
+        ),
       );
     } catch (error) {
       next(error);
@@ -299,25 +305,9 @@ chatSessionRouter.get(
     try {
       response.json(
         await chatSessionService.getArtifact(
-          request.params.sessionId,
-          request.params.artifactId,
-        ),
-      );
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-chatSessionRouter.get(
-  "/chat-sessions/:sessionId/runs/:runId/events",
-  async (request, response, next) => {
-    try {
-      await sse(request, response, "run", request.params.runId, (after) =>
-        chatSessionService.runEventsAfter(
-          request.params.sessionId,
-          request.params.runId,
-          after,
+          sessionClaims(request).sub,
+          routeParam(request, "sessionId"),
+          routeParam(request, "artifactId"),
         ),
       );
     } catch (error) {

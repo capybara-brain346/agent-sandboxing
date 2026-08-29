@@ -3,15 +3,19 @@ import type { ToolExecutionEndEvent, ToolExecutionStartEvent } from "ai";
 import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
 import { ToolEventRelay } from "../src/services/agent/tool-event-relay";
+import { ServiceError } from "../src/shared/errors";
 
-const startEvent = (input: unknown): ToolExecutionStartEvent =>
+const startEvent = (
+  input: unknown,
+  toolName = "bash",
+): ToolExecutionStartEvent =>
   ({
     callId: "call_42",
     messages: [],
     toolCall: {
       type: "tool-call",
       toolCallId: "tool-call-42",
-      toolName: "bash",
+      toolName,
       input,
     },
     toolContext: undefined,
@@ -20,6 +24,7 @@ const startEvent = (input: unknown): ToolExecutionStartEvent =>
 const endEvent = (
   toolOutput: Record<string, unknown>,
   toolExecutionMs = 12.4,
+  toolName = "bash",
 ): ToolExecutionEndEvent =>
   ({
     callId: "call_42",
@@ -27,7 +32,7 @@ const endEvent = (
     toolCall: {
       type: "tool-call",
       toolCallId: "tool-call-42",
-      toolName: "bash",
+      toolName,
       input: { command: "pwd" },
     },
     toolContext: undefined,
@@ -37,21 +42,24 @@ const endEvent = (
 
 const makeEvent = (input: { type: PublicEvent["type"] }): PublicEvent => ({
   id: `evt_${input.type}`,
-  streamId: "task_1",
-  taskId: "task_1",
+  streamId: "chat_1",
+  streamScope: "session",
+  domain: "agent",
+  sessionId: "chat_1",
+  messageId: "msg_1",
   sandboxId: "sbox_1",
   commandId: null,
   sequence: 1,
   type: input.type,
   producerService: "agent",
-  producerId: "task_1",
+  producerId: "msg_1",
   correlationId: "call_42",
   payload: {},
   createdAt: "2026-01-01T00:00:00.000Z",
 });
 
 describe("ToolEventRelay", () => {
-  it("appends task-scoped call and result events with correlation IDs", async () => {
+  it("appends session-scoped call and result events with correlation IDs", async () => {
     const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
       makeEvent(input),
     );
@@ -61,8 +69,9 @@ describe("ToolEventRelay", () => {
       publish,
     });
     const callbacks = relay.callbacks({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
     });
 
     await callbacks.onToolExecutionStart(startEvent({ command: "pwd" }));
@@ -78,10 +87,11 @@ describe("ToolEventRelay", () => {
       "agent_tool_result",
     ]);
     expect(append.mock.calls[0]?.[0]).toMatchObject({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
       producerService: "agent",
-      producerId: "task_1",
+      producerId: "msg_1",
       correlationId: "call_42",
       payload: { tool_name: "bash", args: { command: "pwd" } },
     });
@@ -110,8 +120,9 @@ describe("ToolEventRelay", () => {
       publish: vi.fn(),
     });
     const callbacks = relay.callbacks({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
     });
 
     await callbacks.onToolExecutionStart(startEvent({ command: "pwd" }));
@@ -131,7 +142,7 @@ describe("ToolEventRelay", () => {
     ]);
   });
 
-  it("bounds results on UTF-8 boundaries and sanitizes tool errors", async () => {
+  it("does not persist pull request publication bodies", async () => {
     const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
       makeEvent(input),
     );
@@ -140,8 +151,41 @@ describe("ToolEventRelay", () => {
       publish: vi.fn(),
     });
     const callbacks = relay.callbacks({
-      taskId: "task_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
+      sessionId: "chat_1",
+    });
+
+    await callbacks.onToolExecutionStart(
+      startEvent(
+        {
+          title: "Fix it",
+          body: "private body",
+        },
+        "publish_pull_request",
+      ),
+    );
+
+    expect(append.mock.calls[0]?.[0].payload).toEqual({
+      tool_name: "publish_pull_request",
+      args: {
+        title: "Fix it",
+      },
+    });
+  });
+
+  it("bounds results on UTF-8 boundaries and sanitizes unknown tool errors", async () => {
+    const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      makeEvent(input),
+    );
+    const relay = new ToolEventRelay({
+      events: { append } as unknown as Pick<EventStore, "append">,
+      publish: vi.fn(),
+    });
+    const callbacks = relay.callbacks({
+      messageId: "msg_1",
+      sandboxId: "sbox_1",
+      sessionId: "chat_1",
     });
 
     await callbacks.onToolExecutionEnd(
@@ -162,11 +206,42 @@ describe("ToolEventRelay", () => {
     );
     const safe = append.mock.calls[1]?.[0].payload;
     expect(safe).toMatchObject({
-      result_snippet: "Tool execution failed",
+      result_snippet: JSON.stringify({
+        error: { message: "Tool execution failed" },
+      }),
       exit_code: null,
       truncated: false,
+      error: true,
     });
     expect(JSON.stringify(safe)).not.toContain("provider secret");
+  });
+
+  it("includes safe service error details in failed tool results", async () => {
+    const append = vi.fn(async (input: { type: PublicEvent["type"] }) =>
+      makeEvent(input),
+    );
+    const relay = new ToolEventRelay({
+      events: { append } as unknown as Pick<EventStore, "append">,
+      publish: vi.fn(),
+    });
+
+    await relay.onToolExecutionEnd(
+      { messageId: "msg_1", sandboxId: "sbox_1", sessionId: "chat_1" },
+      endEvent({
+        type: "tool-error",
+        error: new ServiceError("unsafe_command", "Malformed command grammar"),
+      }),
+    );
+
+    expect(append.mock.calls[0]?.[0].payload).toMatchObject({
+      result_snippet: JSON.stringify({
+        error: {
+          code: "unsafe_command",
+          message: "Malformed command grammar",
+        },
+      }),
+      error: true,
+    });
   });
 
   it("publishes only after append commits and propagates append failures", async () => {
@@ -185,7 +260,7 @@ describe("ToolEventRelay", () => {
     });
 
     await relay.onToolExecutionStart(
-      { taskId: "task_1", sandboxId: "sbox_1" },
+      { messageId: "msg_1", sandboxId: "sbox_1", sessionId: "chat_1" },
       startEvent({}),
     );
     expect(publish).toHaveBeenCalledWith(event);
@@ -194,7 +269,7 @@ describe("ToolEventRelay", () => {
     append.mockRejectedValueOnce(failure);
     await expect(
       relay.onToolExecutionStart(
-        { taskId: "task_1", sandboxId: "sbox_1" },
+        { messageId: "msg_1", sandboxId: "sbox_1", sessionId: "chat_1" },
         startEvent({}),
       ),
     ).rejects.toBe(failure);
@@ -220,7 +295,7 @@ describe("ToolEventRelay", () => {
       artifacts: { create },
     });
     const callbacks = relay.callbacks({
-      taskId: "run_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
       sessionId: "chat_1",
     });
@@ -235,7 +310,7 @@ describe("ToolEventRelay", () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "chat_1",
-        runId: "run_1",
+        messageId: "msg_1",
         kind: "tool_output",
       }),
     );
@@ -256,7 +331,7 @@ describe("ToolEventRelay", () => {
       artifacts: { create },
     });
     const callbacks = relay.callbacks({
-      taskId: "run_1",
+      messageId: "msg_1",
       sandboxId: "sbox_1",
       sessionId: "chat_1",
     });

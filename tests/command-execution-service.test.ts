@@ -80,12 +80,16 @@ describe("command execution rules", () => {
     expect(takeUtf8Prefix("ééé", 5)).toBe("éé");
   });
 
-  it("runs commands through a task-owned sandbox and persists task events", async () => {
+  it("runs commands through a session-owned sandbox and persists session events", async () => {
     let sequence = 1;
     const event = (type: PublicEvent["type"]): PublicEvent => ({
       id: `evt_${sequence}`,
-      streamId: "task_1",
-      taskId: "task_1",
+      streamId: "session_1",
+      streamScope: "session",
+      domain: "command",
+      sessionId: "session_1",
+      messageId: null,
+      artifactId: null,
       sandboxId: "sbox_1",
       commandId: "cmd_1",
       sequence: sequence++,
@@ -165,10 +169,10 @@ describe("command execution rules", () => {
     );
 
     await expect(
-      service.runCommand("task_1", { command: "printf hello" }),
+      service.runCommand("session_1", { command: "printf hello" }),
     ).resolves.toEqual({
       commandId: "cmd_1",
-      taskId: "task_1",
+      sessionId: "session_1",
       status: "running",
     });
     await vi.waitFor(() =>
@@ -187,6 +191,14 @@ describe("command execution rules", () => {
     expect(
       events.appendInTransaction.mock.calls.map(([, input]) => input.type),
     ).toEqual(["command_started", "command_completed"]);
+    expect(
+      events.appendInTransaction.mock.calls.every(
+        ([, input]) => input.domain === "command",
+      ),
+    ).toBe(true);
+    expect(
+      events.append.mock.calls.every(([input]) => input.domain === "command"),
+    ).toBe(true);
     expect(events.append.mock.calls.map(([input]) => input.type)).toEqual([
       "command_output",
     ]);

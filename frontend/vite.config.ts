@@ -1,24 +1,21 @@
-import type { IncomingMessage } from "node:http";
-import { defineConfig, type ProxyOptions } from "vite";
+import path from "node:path";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-
-const bypassNavigationRequests: ProxyOptions["bypass"] = (
-  req: IncomingMessage,
-) => {
-  if (req.headers.accept?.includes("text/html")) {
-    return "/index.html";
-  }
-};
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": path.resolve(import.meta.dirname, "./src"),
+    },
+  },
   server: {
     proxy: {
-      "/chat-sessions": {
-        target: "http://localhost:3000",
-        bypass: bypassNavigationRequests,
-      },
+      "/chat-sessions": "http://localhost:3000",
       "/health": "http://localhost:3000",
+      "/auth": "http://localhost:3000",
+      "/github": "http://localhost:3000",
     },
   },
 });

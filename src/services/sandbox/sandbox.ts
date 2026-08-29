@@ -6,13 +6,15 @@ import { prisma } from "../../db/prisma";
 import type {
   EventType,
   SandboxDiffResult,
+  SandboxProvisioningSource,
   SandboxStatus as SandboxStatusType,
-  TaskSandboxInput,
+  SandboxCreationInput,
 } from "../../types/sandbox.types";
 import type { PublicEvent } from "../../types/event.types";
 import { safeError, ServiceError, notFound } from "../../shared/errors";
 import { logQueryFailure, runQuery } from "../../shared/query-logging";
 import { logger } from "../../logger";
+import { githubSessionBranch, sameGitBranch } from "../github/branch";
 import { workspaceRoot } from "./workspace";
 import { CommandExecutionService } from "./command-execution";
 import { EventStore } from "../events/event-store";
@@ -33,7 +35,10 @@ export const canTransition = (
   to: SandboxStatusType,
 ): boolean => transitions[from].includes(to);
 
-export type TaskSandboxCreation = {
+const shellQuote = (value: string): string =>
+  `'${value.replaceAll("'", "'\\''")}'`;
+
+export type SandboxCreation = {
   sandboxId: string;
   containerName: string;
   workspacePath: string;
@@ -50,7 +55,10 @@ export type AgentToolTarget = {
 
 export type SessionSandboxCollaborator = Pick<
   SandboxService,
-  "createForSessionInTransaction" | "ensureReadyForSession" | "diffForSession"
+  | "createForSessionInTransaction"
+  | "ensureReadyForSession"
+  | "prepareSessionBranchForSession"
+  | "diffForSession"
 >;
 
 export class SandboxService {
@@ -74,13 +82,13 @@ export class SandboxService {
 
   async createForSessionInTransaction(
     tx: Prisma.TransactionClient,
-    input: TaskSandboxInput,
+    input: SandboxCreationInput,
     options: { sessionId: string },
-  ): Promise<TaskSandboxCreation> {
+  ): Promise<SandboxCreation> {
     const sandboxId = `sbox_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
     const containerName = `sandbox-${sandboxId}`;
     const fixtureRepoPath =
-      input.fixtureRepoPath ?? this.config.FIXTURE_REPO_PATH;
+      input.source.source === "fixture" ? input.source.fixtureRepoPath : "";
     const image = input.image ?? this.config.SANDBOX_IMAGE;
     const sandbox = await tx.sandbox.create({
       data: {
@@ -102,8 +110,9 @@ export class SandboxService {
 
   async ensureReadyForSession(
     sessionId: string,
-    runId: string,
+    messageId: string,
     sandboxId: string,
+    source?: SandboxProvisioningSource,
   ): Promise<SandboxProvisionResult> {
     const sandbox = await runQuery(
       "get_session_sandbox_for_provision",
@@ -134,17 +143,17 @@ export class SandboxService {
 
     return this.provisionForSession(
       sessionId,
-      runId,
+      messageId,
       sandbox.id,
       sandbox.containerName,
       sandbox.image,
-      sandbox.fixtureRepoPath,
+      source ?? { source: "fixture", fixtureRepoPath: sandbox.fixtureRepoPath },
     );
   }
 
   async diffForSession(
     sessionId: string,
-    runId: string,
+    messageId: string,
     sandboxId: string,
   ): Promise<SandboxDiffResult> {
     const startedAt = process.hrtime.bigint();
@@ -163,9 +172,9 @@ export class SandboxService {
         "Workspace is not available",
         409,
       );
-    await this.emitRun({
+    await this.emitSession({
       sessionId,
-      runId,
+      messageId,
       sandboxId,
       type: "git_diff_requested",
       producerService: "sandbox",
@@ -174,9 +183,9 @@ export class SandboxService {
     });
     try {
       const diff = await this.runtime.diff(sandbox.containerName);
-      await this.emitRun({
+      await this.emitSession({
         sessionId,
-        runId,
+        messageId,
         sandboxId,
         type: "git_diff_completed",
         producerService: "runtime",
@@ -185,7 +194,7 @@ export class SandboxService {
       });
       logger.debug("sandbox_diff_completed", {
         sessionId,
-        runId,
+        messageId,
         sandboxId,
         durationMs: Math.round(
           Number(process.hrtime.bigint() - startedAt) / 1e6,
@@ -196,7 +205,7 @@ export class SandboxService {
     } catch (error) {
       logger.debug("sandbox_diff_failed", {
         sessionId,
-        runId,
+        messageId,
         sandboxId,
         durationMs: Math.round(
           Number(process.hrtime.bigint() - startedAt) / 1e6,
@@ -210,41 +219,179 @@ export class SandboxService {
     }
   }
 
+  async prepareSessionBranchForSession(
+    sessionId: string,
+    sandboxId: string,
+    input: { baseBranch: string; defaultBranch: string | null },
+  ): Promise<void> {
+    const branch = githubSessionBranch(sessionId);
+    if (
+      sameGitBranch(input.baseBranch, branch) ||
+      sameGitBranch(input.defaultBranch, branch)
+    )
+      throw new ServiceError(
+        "protected_git_branch",
+        "Refusing to use the session base branch as the working branch",
+        409,
+      );
+    const sandbox = await runQuery(
+      "get_session_sandbox_for_branch",
+      { sessionId, sandboxId },
+      () =>
+        this.prisma.sandbox.findFirst({
+          where: { id: sandboxId, sessionId },
+          select: { containerName: true, status: true },
+        }),
+    );
+    if (!sandbox) throw notFound("sandbox_not_found", "Sandbox was not found");
+    if (sandbox.status !== "ready")
+      throw new ServiceError("sandbox_not_ready", "Sandbox is not ready", 409);
+    const current = await this.runtime.simpleExec(
+      sandbox.containerName,
+      "git branch --show-current",
+      workspaceRoot,
+      { timeoutMs: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
+    );
+    if (current.timedOut || current.exitCode !== 0)
+      throw new ServiceError(
+        "github_branch_setup_failed",
+        "GitHub working branch could not be prepared",
+        502,
+      );
+    if (sameGitBranch(current.stdout.trim(), branch)) return;
+    const dirty = await this.runtime.simpleExec(
+      sandbox.containerName,
+      "git status --porcelain=v1",
+      workspaceRoot,
+      { timeoutMs: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
+    );
+    if (dirty.timedOut || dirty.exitCode !== 0)
+      throw new ServiceError(
+        "github_branch_setup_failed",
+        "GitHub working branch could not be prepared",
+        502,
+      );
+    if (dirty.stdout.trim())
+      throw new ServiceError(
+        "github_workspace_dirty",
+        "Workspace changes are on the wrong Git branch",
+        409,
+      );
+    const existing = await this.runtime.simpleExec(
+      sandbox.containerName,
+      `git show-ref --verify --quiet ${shellQuote(`refs/heads/${branch}`)}`,
+      workspaceRoot,
+      { timeoutMs: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
+    );
+    if (
+      existing.timedOut ||
+      (existing.exitCode !== 0 && existing.exitCode !== 1)
+    )
+      throw new ServiceError(
+        "github_branch_setup_failed",
+        "GitHub working branch could not be prepared",
+        502,
+      );
+    const checkoutCommand =
+      existing.exitCode === 0
+        ? `git checkout ${shellQuote(branch)}`
+        : sameGitBranch(current.stdout.trim(), input.baseBranch)
+          ? `git checkout -b ${shellQuote(branch)}`
+          : null;
+    if (!checkoutCommand)
+      throw new ServiceError(
+        "github_branch_setup_failed",
+        "GitHub working branch could not be prepared",
+        502,
+      );
+    const checkout = await this.runtime.simpleExec(
+      sandbox.containerName,
+      checkoutCommand,
+      workspaceRoot,
+      { timeoutMs: this.config.SANDBOX_COMMAND_TIMEOUT_MS },
+    );
+    if (checkout.timedOut || checkout.exitCode !== 0)
+      throw new ServiceError(
+        "github_branch_setup_failed",
+        "GitHub working branch could not be prepared",
+        502,
+      );
+  }
+
   private async provisionForSession(
     sessionId: string,
-    runId: string,
+    messageId: string,
     sandboxId: string,
     containerName: string,
     image: string,
-    fixturePath: string,
+    source: SandboxProvisioningSource,
   ): Promise<SandboxProvisionResult> {
     const startedAt = process.hrtime.bigint();
-    logger.debug("sandbox_provision_started", { sessionId, runId, sandboxId });
+    logger.debug("sandbox_provision_started", {
+      sessionId,
+      messageId,
+      sandboxId,
+    });
     try {
-      await this.emitRun({
+      await this.emitSession({
         sessionId,
-        runId,
+        messageId,
         sandboxId,
         type: "sandbox_provisioning_started",
         producerService: "sandbox",
         producerId: sandboxId,
         payload: {},
       });
-      await this.emitRun({
-        sessionId,
-        runId,
-        sandboxId,
-        type: "fixture_repo_copy_started",
-        producerService: "sandbox",
-        producerId: sandboxId,
-        payload: { fixture_repo_path: fixturePath },
-      });
+      if (source.source === "fixture")
+        await this.emitSession({
+          sessionId,
+          messageId,
+          sandboxId,
+          type: "fixture_repo_copy_started",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: { fixture_repo_path: source.fixtureRepoPath },
+        });
+      if (source.source === "github")
+        await this.emitSession({
+          sessionId,
+          messageId,
+          sandboxId,
+          type: "repo_clone_started",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: { owner: source.owner, name: source.name },
+        });
       const provisioned = await this.runtime.provision(
         sandboxId,
         containerName,
         image,
-        fixturePath,
+        source,
       );
+      if (source.source === "github") {
+        await this.emitSession({
+          sessionId,
+          messageId,
+          sandboxId,
+          type: "repo_clone_completed",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: { owner: source.owner, name: source.name },
+        });
+        await this.emitSession({
+          sessionId,
+          messageId,
+          sandboxId,
+          type: "repo_checkout_completed",
+          producerService: "sandbox",
+          producerId: sandboxId,
+          payload: {
+            owner: source.owner,
+            name: source.name,
+            branch: source.baseBranch,
+          },
+        });
+      }
       const events = await runQuery(
         "mark_session_sandbox_ready",
         { sandboxId },
@@ -258,35 +405,41 @@ export class SandboxService {
                 readyAt: new Date(),
               },
             });
-            const copied = await this.events.appendRunEventInTransaction(tx, {
-              sessionId,
-              runId,
-              sandboxId,
-              type: "fixture_repo_copied",
-              producerService: "sandbox",
-              producerId: sandboxId,
-              correlationId: randomUUID(),
-              domain: "sandbox",
-              payload: { workspace_path: workspaceRoot },
-            });
-            const ready = await this.events.appendRunEventInTransaction(tx, {
-              sessionId,
-              runId,
-              sandboxId,
-              type: "sandbox_ready",
-              producerService: "sandbox",
-              producerId: sandboxId,
-              correlationId: randomUUID(),
-              domain: "sandbox",
-              payload: { container_id: provisioned.containerId },
-            });
-            return [copied, ready];
+            const copied =
+              source.source === "fixture"
+                ? await this.events.appendSessionEventInTransaction(tx, {
+                    sessionId,
+                    messageId,
+                    sandboxId,
+                    type: "fixture_repo_copied",
+                    producerService: "sandbox",
+                    producerId: sandboxId,
+                    correlationId: randomUUID(),
+                    domain: "sandbox",
+                    payload: { workspace_path: workspaceRoot },
+                  })
+                : null;
+            const ready = await this.events.appendSessionEventInTransaction(
+              tx,
+              {
+                sessionId,
+                messageId,
+                sandboxId,
+                type: "sandbox_ready",
+                producerService: "sandbox",
+                producerId: sandboxId,
+                correlationId: randomUUID(),
+                domain: "sandbox",
+                payload: { container_id: provisioned.containerId },
+              },
+            );
+            return copied ? [copied, ready] : [ready];
           }),
       );
       events.forEach((event) => this.publish(event));
       logger.debug("sandbox_provision_completed", {
         sessionId,
-        runId,
+        messageId,
         sandboxId,
         durationMs: Math.round(
           Number(process.hrtime.bigint() - startedAt) / 1e6,
@@ -297,14 +450,22 @@ export class SandboxService {
     } catch (error) {
       logQueryFailure("provision_session_sandbox", { sandboxId }, error);
       const safe = safeError(error, "provision");
+      const failure =
+        source.source === "github" && safe.code === "unknown"
+          ? {
+              ...safe,
+              code: "github_provision_failed",
+              message: "GitHub sandbox provisioning failed",
+            }
+          : safe;
       logger.debug("sandbox_provision_failed", {
         sessionId,
-        runId,
+        messageId,
         sandboxId,
         durationMs: Math.round(
           Number(process.hrtime.bigint() - startedAt) / 1e6,
         ),
-        failureCode: safe.code,
+        failureCode: failure.code,
       });
       await runQuery("mark_session_sandbox_failed", { sandboxId }, () =>
         this.prisma.$transaction(async (tx) => {
@@ -313,32 +474,31 @@ export class SandboxService {
             data: {
               status: "failed",
               failedAt: new Date(),
-              failureCode: safe.code,
-              failureMessage: safe.message,
+              failureCode: failure.code,
+              failureMessage: failure.message,
             },
           });
-          return this.events.appendRunEventInTransaction(tx, {
+          return this.events.appendSessionEventInTransaction(tx, {
             sessionId,
-            runId,
+            messageId,
             sandboxId,
             type: "sandbox_failed",
             producerService: "sandbox",
             producerId: sandboxId,
             correlationId: randomUUID(),
             domain: "sandbox",
-            payload: safe,
+            payload: failure,
           });
         }),
       )
         .then((event) => this.publish(event))
         .catch(() => undefined);
-      return { status: "failed", failure: safe };
+      return { status: "failed", failure };
     }
   }
 
   async getAgentToolTarget(
     sessionId: string,
-    runId: string,
     sandboxId: string,
   ): Promise<AgentToolTarget> {
     const sandbox = await runQuery(
@@ -361,16 +521,16 @@ export class SandboxService {
     };
   }
 
-  private async emitRun(input: {
+  private async emitSession(input: {
     sessionId: string;
-    runId: string;
+    messageId: string;
     sandboxId: string;
     type: EventType;
     producerService: "sandbox" | "runtime" | "cleanup" | "command";
     producerId: string;
     payload: Record<string, unknown>;
   }): Promise<void> {
-    const event = await this.events.appendRunEvent({
+    const event = await this.events.appendSessionEvent({
       ...input,
       domain: "sandbox",
       correlationId: randomUUID(),
