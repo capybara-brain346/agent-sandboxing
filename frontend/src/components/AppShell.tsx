@@ -95,7 +95,7 @@ const RepoBranchSwitcher = () => {
     if (branchesByRepo[repository.repoId]) return;
     setLoadingBranchesFor(repository.repoId);
     try {
-      const branches = await getGitHubBranches(repository.repoId);
+      const branches = await getGitHubBranches(repository);
       setBranchesByRepo((previous) => ({
         ...previous,
         [repository.repoId]: branches,

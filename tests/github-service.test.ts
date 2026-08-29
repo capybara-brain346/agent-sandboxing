@@ -1036,67 +1036,101 @@ describe("GitHubService", () => {
   });
 
   it("loads branches for one selected repository", async () => {
-    const encrypted = encryptToken(
-      "oauth-token",
-      config.AUTH_TOKEN_ENCRYPTION_KEY,
-    );
     const api: GitHubApi = {
-      listAppInstallations: vi.fn(async () => []),
-      listOAuthRepositories: vi.fn(async () => [
-        {
-          id: "1",
-          ownerId: "42",
-          ownerLogin: "octo",
-          ownerType: "User",
-          name: "repo",
-          fullName: "octo/repo",
-          private: true,
-          defaultBranch: "main",
-        },
-      ]),
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
       getInstallation: vi.fn(),
       createInstallationToken: vi.fn(),
-      listInstallationRepositories: vi.fn(async () => [
-        {
-          id: "1",
-          ownerId: "42",
-          ownerLogin: "octo",
-          ownerType: "User",
-          name: "repo",
-          fullName: "octo/repo",
-          private: true,
-          defaultBranch: "main",
-        },
-      ]),
+      listInstallationRepositories: vi.fn(),
       listBranches: vi.fn(async () => [
         { name: "main", sha: "abc", protected: false },
       ]),
     };
     const prisma = {
-      user: { findUnique: vi.fn(async () => ({ githubUserId: "42" })) },
-      gitHubOAuthToken: {
-        findUnique: vi.fn(async () => ({
-          accessTokenCiphertext: encrypted.ciphertext,
-          accessTokenIv: encrypted.iv,
-          accessTokenTag: encrypted.tag,
-        })),
-      },
       gitHubInstallation: {
-        findMany: vi.fn(async () => [
-          {
-            installationId: "10",
-            accountLogin: "octo",
-            accountType: "User",
-          },
-        ]),
+        findUnique: vi.fn(async () => ({ installationId: "10" })),
       },
     } as unknown as PrismaClient;
     const service = new GitHubService(prisma, config, api);
 
-    await expect(service.branches("user_1", "1")).resolves.toEqual([
-      { name: "main", sha: "abc", protected: false },
-    ]);
+    await expect(
+      service.branches("user_1", {
+        repoId: "1",
+        owner: "octo",
+        name: "repo",
+        installationId: "10",
+      }),
+    ).resolves.toEqual([{ name: "main", sha: "abc", protected: false }]);
+    expect(prisma.gitHubInstallation.findUnique).toHaveBeenCalledWith({
+      where: {
+        userId_installationId: { userId: "user_1", installationId: "10" },
+      },
+      select: { installationId: true },
+    });
     expect(api.listBranches).toHaveBeenCalledWith("10", "octo", "repo");
+    expect(api.listAppInstallations).not.toHaveBeenCalled();
+    expect(api.listOAuthRepositories).not.toHaveBeenCalled();
+    expect(api.listInstallationRepositories).not.toHaveBeenCalled();
+  });
+
+  it("rejects branches for an installation not owned by the user", async () => {
+    const listBranches = vi.fn();
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+      listBranches,
+    };
+    const prisma = {
+      gitHubInstallation: {
+        findUnique: vi.fn(async () => null),
+      },
+    } as unknown as PrismaClient;
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(
+      service.branches("user_1", {
+        repoId: "1",
+        owner: "octo",
+        name: "repo",
+        installationId: "10",
+      }),
+    ).rejects.toMatchObject({
+      code: "github_repository_not_found",
+      status: 404,
+    });
+    expect(listBranches).not.toHaveBeenCalled();
+  });
+
+  it("rejects incomplete or unsafe branch metadata before querying GitHub", async () => {
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(),
+      listOAuthRepositories: vi.fn(),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+      listBranches: vi.fn(),
+    };
+    const prisma = {
+      gitHubInstallation: { findUnique: vi.fn() },
+    } as unknown as PrismaClient;
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(
+      service.branches("user_1", {
+        repoId: "1",
+        owner: "octo/other",
+        name: "repo",
+        installationId: "not-numeric",
+      }),
+    ).rejects.toMatchObject({
+      code: "github_repository_metadata_invalid",
+      status: 400,
+    });
+    expect(prisma.gitHubInstallation.findUnique).not.toHaveBeenCalled();
+    expect(api.listBranches).not.toHaveBeenCalled();
   });
 
   it("mints an installation token through the GitHub App seam", async () => {

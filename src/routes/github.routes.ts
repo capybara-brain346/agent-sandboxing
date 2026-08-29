@@ -85,7 +85,12 @@ githubRouter.get(
           404,
         );
       response.json(
-        await githubService.branches(sessionClaims(request).sub, repoId),
+        await githubService.branches(sessionClaims(request).sub, {
+          repoId,
+          owner: queryString(request.query.owner),
+          name: queryString(request.query.name),
+          installationId: queryString(request.query.installationId),
+        }),
       );
     } catch (error) {
       next(error);

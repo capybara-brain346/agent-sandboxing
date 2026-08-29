@@ -10,6 +10,7 @@ import type {
   CreateMessageResponse,
   GitHubRepositoriesResponse,
   GitHubBranch,
+  GitHubRepository,
   Page,
   PullRequestMetadata,
   MessageCancellationResponse,
@@ -83,8 +84,21 @@ export const getGitHubRepositories = ({
   return nextRequest;
 };
 
-export const getGitHubBranches = (repoId: string): Promise<GitHubBranch[]> =>
-  request(`/github/repositories/${repoId}/branches`);
+export const getGitHubBranches = (
+  repository: Pick<
+    GitHubRepository,
+    "repoId" | "owner" | "name" | "installationId"
+  >,
+): Promise<GitHubBranch[]> => {
+  const query = new URLSearchParams({
+    owner: repository.owner,
+    name: repository.name,
+    installationId: repository.installationId,
+  });
+  return request(
+    `/github/repositories/${encodeURIComponent(repository.repoId)}/branches?${query}`,
+  );
+};
 
 export const createChatSession = (
   input: CreateChatSessionRequest,

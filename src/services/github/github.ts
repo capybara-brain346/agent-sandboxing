@@ -64,6 +64,11 @@ export type GitHubRepositorySelection = {
   baseSha?: string | null | undefined;
 };
 
+const isGitHubPathComponent = (
+  value: string | null | undefined,
+): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+
 export type GitHubPullRequestActionInput = GitHubPullRequestInput & {
   action: "create" | "update" | "comment" | "close" | "reopen";
   comment?: string;
@@ -736,9 +741,14 @@ export class GitHubService {
       );
     if (selection.baseBranch || selection.baseSha) {
       const baseBranch = selection.baseBranch ?? repository.defaultBranch;
-      const branch = (await this.branches(userId, repository.repoId)).find(
-        (candidate) => candidate.name === baseBranch,
-      );
+      const branch = (
+        await this.branches(userId, {
+          repoId: repository.repoId,
+          owner: repository.owner,
+          name: repository.name,
+          installationId: repository.installationId,
+        })
+      ).find((candidate) => candidate.name === baseBranch);
       if (
         !branch ||
         (selection.baseSha !== undefined &&
@@ -2023,68 +2033,35 @@ export class GitHubService {
     }
   }
 
-  async branches(userId: string, repoId: string): Promise<GitHubBranch[]> {
-    try {
-      const [user, token] = await Promise.all([
-        this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { githubUserId: true },
-        }),
-        this.prisma.gitHubOAuthToken.findUnique({
-          where: { userId },
-          select: {
-            accessTokenCiphertext: true,
-            accessTokenIv: true,
-            accessTokenTag: true,
-          },
-        }),
-      ]);
-      if (!user || !token)
-        throw new ServiceError(
-          "github_reconnect_required",
-          "Reconnect GitHub to refresh repository access",
-          401,
-        );
-      const installations = await this.installationsForUser(
-        userId,
-        user.githubUserId,
-      );
-      const accessToken = decryptToken(
-        {
-          ciphertext: token.accessTokenCiphertext,
-          iv: token.accessTokenIv,
-          tag: token.accessTokenTag,
-        },
-        this.config.AUTH_TOKEN_ENCRYPTION_KEY,
-      );
-      const visible = new Set(
-        (await this.api.listOAuthRepositories(accessToken))
-          .filter(
-            (repository) =>
-              repository.ownerType.toLowerCase() === "user" &&
-              repository.ownerId === user.githubUserId,
-          )
-          .map((repository) => repository.id),
-      );
-      for (const installation of installations) {
-        const installed = await this.api.listInstallationRepositories(
-          installation.installationId,
-        );
-        const repository = installed.find(
-          (candidate) => candidate.id === repoId && visible.has(candidate.id),
-        );
-        if (repository)
-          return this.api.listBranches(
-            installation.installationId,
-            repository.ownerLogin,
-            repository.name,
-          );
-      }
+  async branches(
+    userId: string,
+    selection: GitHubRepositorySelection,
+  ): Promise<GitHubBranch[]> {
+    const { repoId, owner, name, installationId } = selection;
+    if (
+      !repoId?.trim() ||
+      !isGitHubPathComponent(owner) ||
+      !isGitHubPathComponent(name) ||
+      !installationId ||
+      !/^\d+$/.test(installationId)
+    )
       throw new ServiceError(
-        "github_repository_not_found",
-        "Repository was not found",
-        404,
+        "github_repository_metadata_invalid",
+        "GitHub repository metadata is invalid",
+        400,
       );
+    try {
+      const installation = await this.prisma.gitHubInstallation.findUnique({
+        where: { userId_installationId: { userId, installationId } },
+        select: { installationId: true },
+      });
+      if (!installation)
+        throw new ServiceError(
+          "github_repository_not_found",
+          "Repository was not found",
+          404,
+        );
+      return this.api.listBranches(installationId, owner, name);
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(

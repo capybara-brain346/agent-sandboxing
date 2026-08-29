@@ -194,7 +194,7 @@ export const RepoSelectPage = () => {
     setLoadError(null);
     setReconnectRequired(false);
     try {
-      setBranches(await getGitHubBranches(repository.repoId));
+      setBranches(await getGitHubBranches(repository));
     } catch (caught) {
       if (isSessionAuthFailure(caught)) {
         navigate("/login", { replace: true });

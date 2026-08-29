@@ -16,6 +16,8 @@ tokens.
 - `/repos` selects a repository and branch, then creates a chat session.
 - `/sessions/:sessionId` renders messages and the current message-processing
   inspector.
+- `/github/repositories/:repoId/branches` receives `owner`, `name`, and
+  `installationId` from the selected repository metadata.
 - `POST /chat-sessions/:sessionId/messages` submits a message.
 - `GET /chat-sessions/:sessionId/events` provides the single session event
   stream and replay cursor.

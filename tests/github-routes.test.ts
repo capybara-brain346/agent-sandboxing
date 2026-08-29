@@ -82,17 +82,25 @@ describe("GitHub routes", () => {
   });
 
   it("returns branches for one repository", async () => {
-    vi.spyOn(githubService, "branches").mockResolvedValue([
-      { name: "main", sha: "abc", protected: true },
-    ]);
+    const branches = vi
+      .spyOn(githubService, "branches")
+      .mockResolvedValue([{ name: "main", sha: "abc", protected: true }]);
     const response = await request(makeApp())
-      .get("/github/repositories/1/branches")
+      .get(
+        "/github/repositories/1/branches?owner=octo&name=repo&installationId=10",
+      )
       .set("Cookie", authCookie);
     expect(response.status).toBe(200);
     expect(response.body[0]).toEqual({
       name: "main",
       sha: "abc",
       protected: true,
+    });
+    expect(branches).toHaveBeenCalledWith("user_1", {
+      repoId: "1",
+      owner: "octo",
+      name: "repo",
+      installationId: "10",
     });
   });
 
