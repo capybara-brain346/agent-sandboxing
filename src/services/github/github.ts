@@ -3,6 +3,7 @@ import { App } from "@octokit/app";
 import { Octokit } from "@octokit/rest";
 import type { PrismaClient } from "@prisma/client";
 import type { Config } from "../../config";
+import { logger } from "../../logger";
 import { ServiceError } from "../../shared/errors";
 import type {
   GitHubBranch,
@@ -32,6 +33,7 @@ export type GitHubRepositoryRecord = {
   fullName: string;
   private: boolean;
   defaultBranch: string;
+  updatedAt: string;
 };
 
 export type GitHubBranchRecord = GitHubBranch;
@@ -62,6 +64,11 @@ export type GitHubRepositorySelection = {
   baseBranch?: string | null | undefined;
   baseSha?: string | null | undefined;
 };
+
+export const isGitHubPathComponent = (
+  value: string | null | undefined,
+): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
 
 export type GitHubPullRequestActionInput = GitHubPullRequestInput & {
   action: "create" | "update" | "comment" | "close" | "reopen";
@@ -118,7 +125,10 @@ type PullRequestRow = {
 
 export type GitHubApi = {
   listAppInstallations(): Promise<GitHubAppInstallationRecord[]>;
-  listOAuthRepositories(accessToken: string): Promise<GitHubRepositoryRecord[]>;
+  listOAuthRepositories(
+    accessToken: string,
+    options?: { page?: number; perPage?: number },
+  ): Promise<GitHubRepositoryRecord[]>;
   getInstallation(installationId: string): Promise<GitHubInstallationRecord>;
   createInstallationToken(installationId: string): Promise<string>;
   listInstallationRepositories(
@@ -173,6 +183,44 @@ type InstallationOctokit = {
   ) => Promise<{ data: unknown }>;
 };
 
+const timedGitHubApiCall = <T>(
+  operation: string,
+  fields: Record<string, unknown>,
+  call: () => Promise<T>,
+): Promise<T> => {
+  const startedAt = process.hrtime.bigint();
+  return call().finally(() => {
+    logger.debug("github_api_call_timing", {
+      operation,
+      durationMs: Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6),
+      ...fields,
+    });
+  });
+};
+
+const githubCacheTtlMs = 30_000;
+
+type GitHubCacheEntry<T> = {
+  expiresAt: number;
+  promise: Promise<T>;
+};
+
+const cachedGitHubRequest = <T>(
+  cache: Map<string, GitHubCacheEntry<T>>,
+  key: string,
+  load: () => Promise<T>,
+): Promise<T> => {
+  const existing = cache.get(key);
+  if (existing && existing.expiresAt > Date.now()) return existing.promise;
+  if (existing) cache.delete(key);
+  const promise = load();
+  cache.set(key, { expiresAt: Date.now() + githubCacheTtlMs, promise });
+  void promise.catch(() => {
+    if (cache.get(key)?.promise === promise) cache.delete(key);
+  });
+  return promise;
+};
+
 class OctokitGitHubApi implements GitHubApi {
   private readonly app: App;
 
@@ -185,54 +233,74 @@ class OctokitGitHubApi implements GitHubApi {
 
   async listAppInstallations(): Promise<GitHubAppInstallationRecord[]> {
     const installations: GitHubAppInstallationRecord[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await this.app.octokit.request(
-        "GET /app/installations",
-        {
-          per_page: 100,
-          page,
-        },
-      );
-      const data = response.data as Array<{
-        id: number;
-        account: { id: number; login: string; type: string } | null;
-      }>;
-      installations.push(
-        ...data.flatMap((installation) =>
-          installation.account
-            ? [
-                {
-                  installationId: String(installation.id),
-                  accountId: String(installation.account.id),
-                  accountLogin: installation.account.login,
-                  accountType: installation.account.type,
-                },
-              ]
-            : [],
-        ),
-      );
-      if (data.length < 100) return installations;
-    }
+    const timing = { pageCount: 0, resultCount: 0 };
+    return timedGitHubApiCall("listAppInstallations", timing, async () => {
+      for (let page = 1; ; page += 1) {
+        timing.pageCount = page;
+        const response = await this.app.octokit.request(
+          "GET /app/installations",
+          {
+            per_page: 100,
+            page,
+          },
+        );
+        const data = response.data as Array<{
+          id: number;
+          account: { id: number; login: string; type: string } | null;
+        }>;
+        installations.push(
+          ...data.flatMap((installation) =>
+            installation.account
+              ? [
+                  {
+                    installationId: String(installation.id),
+                    accountId: String(installation.account.id),
+                    accountLogin: installation.account.login,
+                    accountType: installation.account.type,
+                  },
+                ]
+              : [],
+          ),
+        );
+        timing.resultCount = installations.length;
+        if (data.length < 100) return installations;
+      }
+    });
   }
 
   async listOAuthRepositories(
     accessToken: string,
+    options: { page?: number; perPage?: number } = {},
   ): Promise<GitHubRepositoryRecord[]> {
-    const octokit = new Octokit({ auth: accessToken });
-    const repositories = await octokit.paginate(
-      octokit.rest.repos.listForAuthenticatedUser,
-      { affiliation: "owner", per_page: 100, visibility: "all" },
-    );
-    return repositories.map((repository) => ({
-      id: String(repository.id),
-      ownerId: String(repository.owner.id),
-      ownerLogin: repository.owner.login,
-      ownerType: repository.owner.type,
-      name: repository.name,
-      fullName: repository.full_name,
-      private: repository.private,
-      defaultBranch: repository.default_branch,
-    }));
+    const page = options.page ?? 1;
+    const perPage = options.perPage ?? 20;
+    const timing = { page, perPage, pageCount: 0, resultCount: 0 };
+    return timedGitHubApiCall("listOAuthRepositories", timing, async () => {
+      const octokit = new Octokit({ auth: accessToken });
+      const response = await octokit.rest.repos.listForAuthenticatedUser({
+        affiliation: "owner",
+        visibility: "all",
+        sort: "updated",
+        direction: "desc",
+        per_page: perPage,
+        page,
+      });
+      timing.pageCount = 1;
+      const repositories = response.data;
+      const result = repositories.map((repository) => ({
+        id: String(repository.id),
+        ownerId: String(repository.owner.id),
+        ownerLogin: repository.owner.login,
+        ownerType: repository.owner.type,
+        name: repository.name,
+        fullName: repository.full_name,
+        private: repository.private,
+        defaultBranch: repository.default_branch,
+        updatedAt: repository.updated_at ?? "",
+      }));
+      timing.resultCount = result.length;
+      return result;
+    });
   }
 
   async getInstallation(
@@ -253,36 +321,51 @@ class OctokitGitHubApi implements GitHubApi {
   }
 
   async createInstallationToken(installationId: string): Promise<string> {
-    const octokit = await this.app.getInstallationOctokit(
-      Number(installationId),
+    return timedGitHubApiCall(
+      "createInstallationToken",
+      { installationId },
+      async () => {
+        const octokit = await this.app.getInstallationOctokit(
+          Number(installationId),
+        );
+        const authentication = (await octokit.auth({
+          type: "installation",
+        })) as { token?: unknown };
+        if (typeof authentication.token !== "string" || !authentication.token)
+          throw new Error("GitHub installation token was missing");
+        return authentication.token;
+      },
     );
-    const authentication = (await octokit.auth({
-      type: "installation",
-    })) as { token?: unknown };
-    if (typeof authentication.token !== "string" || !authentication.token)
-      throw new Error("GitHub installation token was missing");
-    return authentication.token;
   }
 
   async listInstallationRepositories(
     installationId: string,
   ): Promise<GitHubRepositoryRecord[]> {
     const repositories: GitHubRepositoryRecord[] = [];
-    for await (const item of this.app.eachRepository.iterator({
-      installationId: Number(installationId),
-    })) {
-      repositories.push({
-        id: String(item.repository.id),
-        ownerId: String(item.repository.owner.id),
-        ownerLogin: item.repository.owner.login,
-        ownerType: item.repository.owner.type,
-        name: item.repository.name,
-        fullName: item.repository.full_name,
-        private: item.repository.private,
-        defaultBranch: item.repository.default_branch,
-      });
-    }
-    return repositories;
+    const timing = { installationId, resultCount: 0 };
+    return timedGitHubApiCall(
+      "listInstallationRepositories",
+      timing,
+      async () => {
+        for await (const item of this.app.eachRepository.iterator({
+          installationId: Number(installationId),
+        })) {
+          repositories.push({
+            id: String(item.repository.id),
+            ownerId: String(item.repository.owner.id),
+            ownerLogin: item.repository.owner.login,
+            ownerType: item.repository.owner.type,
+            name: item.repository.name,
+            fullName: item.repository.full_name,
+            private: item.repository.private,
+            defaultBranch: item.repository.default_branch,
+            updatedAt: item.repository.updated_at ?? "",
+          });
+          timing.resultCount = repositories.length;
+        }
+        return repositories;
+      },
+    );
   }
 
   async listBranches(
@@ -290,34 +373,45 @@ class OctokitGitHubApi implements GitHubApi {
     owner: string,
     name: string,
   ): Promise<GitHubBranchRecord[]> {
-    const octokit = (await this.app.getInstallationOctokit(
-      Number(installationId),
-    )) as unknown as InstallationOctokit;
     const branches: GitHubBranchRecord[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await octokit.request(
-        "GET /repos/{owner}/{repo}/branches",
-        {
-          owner,
-          repo: name,
-          per_page: 100,
-          page,
-        },
-      );
-      const data = response.data as Array<{
-        name: string;
-        commit: { sha: string };
-        protected: boolean;
-      }>;
-      branches.push(
-        ...data.map((branch) => ({
-          name: branch.name,
-          sha: branch.commit.sha,
-          protected: branch.protected,
-        })),
-      );
-      if (data.length < 100) return branches;
-    }
+    const timing = {
+      installationId,
+      owner,
+      repo: name,
+      pageCount: 0,
+      resultCount: 0,
+    };
+    return timedGitHubApiCall("listBranches", timing, async () => {
+      const octokit = (await this.app.getInstallationOctokit(
+        Number(installationId),
+      )) as unknown as InstallationOctokit;
+      for (let page = 1; ; page += 1) {
+        timing.pageCount = page;
+        const response = await octokit.request(
+          "GET /repos/{owner}/{repo}/branches",
+          {
+            owner,
+            repo: name,
+            per_page: 100,
+            page,
+          },
+        );
+        const data = response.data as Array<{
+          name: string;
+          commit: { sha: string };
+          protected: boolean;
+        }>;
+        branches.push(
+          ...data.map((branch) => ({
+            name: branch.name,
+            sha: branch.commit.sha,
+            protected: branch.protected,
+          })),
+        );
+        timing.resultCount = branches.length;
+        if (data.length < 100) return branches;
+      }
+    });
   }
 
   private async installationRequest(
@@ -582,6 +676,14 @@ const pullRequestMetadata = (row: PullRequestRow): PullRequestMetadata => ({
 
 export class GitHubService {
   private readonly api: GitHubApi;
+  private readonly repositoryCache = new Map<
+    string,
+    GitHubCacheEntry<GitHubRepositoriesResponse>
+  >();
+  private readonly branchCache = new Map<
+    string,
+    GitHubCacheEntry<GitHubBranch[]>
+  >();
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -598,6 +700,14 @@ export class GitHubService {
 
   installUrl(): string {
     return this.config.GITHUB_APP_INSTALL_URL;
+  }
+
+  private clearRepositoryCache(userId: string): void {
+    for (const key of this.repositoryCache.keys()) {
+      if (key === userId || key.startsWith(`${userId}:`))
+        this.repositoryCache.delete(key);
+    }
+    this.branchCache.clear();
   }
 
   async createInstallationToken(installationId: string): Promise<string> {
@@ -657,45 +767,6 @@ export class GitHubService {
       baseBranch: session.repoBaseBranch,
       defaultBranch: session.repoDefaultBranch,
     };
-  }
-
-  async validateRepository(
-    userId: string,
-    selection: GitHubRepositorySelection,
-  ): Promise<void> {
-    const visible = await this.repositories(userId);
-    const repository = visible.repositories.find(
-      (candidate) =>
-        candidate.installationId === selection.installationId &&
-        (selection.repoId === undefined ||
-          selection.repoId === null ||
-          candidate.repoId === selection.repoId) &&
-        candidate.owner.toLowerCase() === selection.owner?.toLowerCase() &&
-        candidate.name.toLowerCase() === selection.name?.toLowerCase(),
-    );
-    if (!repository)
-      throw new ServiceError(
-        "github_repository_not_found",
-        "Repository was not found",
-        404,
-      );
-    if (selection.baseBranch || selection.baseSha) {
-      const baseBranch = selection.baseBranch ?? repository.defaultBranch;
-      const branch = (await this.branches(userId, repository.repoId)).find(
-        (candidate) => candidate.name === baseBranch,
-      );
-      if (
-        !branch ||
-        (selection.baseSha !== undefined &&
-          selection.baseSha !== null &&
-          branch.sha !== selection.baseSha)
-      )
-        throw new ServiceError(
-          "github_branch_not_found",
-          "Branch was not found",
-          404,
-        );
-    }
   }
 
   async currentPullRequest(
@@ -1808,6 +1879,7 @@ export class GitHubService {
           accountType: "User",
         },
       });
+      this.clearRepositoryCache(userId);
       return {
         installationId: saved.installationId,
         accountLogin: saved.accountLogin,
@@ -1882,7 +1954,27 @@ export class GitHubService {
     );
   }
 
-  async repositories(userId: string): Promise<GitHubRepositoriesResponse> {
+  async repositories(
+    userId: string,
+    options: { forceRefresh?: boolean; cursor?: string; limit?: number } = {},
+  ): Promise<GitHubRepositoriesResponse> {
+    if (options.forceRefresh) this.clearRepositoryCache(userId);
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 20);
+    const page =
+      options.cursor && /^\d+$/.test(options.cursor)
+        ? Math.max(Number(options.cursor), 1)
+        : 1;
+    return cachedGitHubRequest(
+      this.repositoryCache,
+      `${userId}:${page}:${limit}`,
+      () => this.loadRepositories(userId, { page, limit }),
+    );
+  }
+
+  private async loadRepositories(
+    userId: string,
+    options: { page: number; limit: number },
+  ): Promise<GitHubRepositoriesResponse> {
     try {
       const [user, token] = await Promise.all([
         this.prisma.user.findUnique({
@@ -1917,7 +2009,10 @@ export class GitHubService {
         this.config.AUTH_TOKEN_ENCRYPTION_KEY,
       );
       const oauthRepositories = (
-        await this.api.listOAuthRepositories(accessToken)
+        await this.api.listOAuthRepositories(accessToken, {
+          page: options.page,
+          perPage: options.limit,
+        })
       ).filter(
         (repository) =>
           repository.ownerType.toLowerCase() === "user" &&
@@ -1943,6 +2038,7 @@ export class GitHubService {
             private: oauthRepository.private,
             defaultBranch: repository.defaultBranch,
             installationId: installation.installationId,
+            updatedAt: oauthRepository.updatedAt,
             branches: [],
           });
         }
@@ -1954,8 +2050,12 @@ export class GitHubService {
           accountType: "user" as const,
         })),
         repositories: [...repositories.values()].sort((left, right) =>
-          left.fullName.localeCompare(right.fullName),
+          right.updatedAt.localeCompare(left.updatedAt),
         ),
+        nextCursor:
+          oauthRepositories.length === options.limit
+            ? String(options.page + 1)
+            : null,
         installUrl: this.installUrl(),
       };
     } catch (error) {
@@ -1968,67 +2068,39 @@ export class GitHubService {
     }
   }
 
-  async branches(userId: string, repoId: string): Promise<GitHubBranch[]> {
-    try {
-      const [user, token] = await Promise.all([
-        this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { githubUserId: true },
-        }),
-        this.prisma.gitHubOAuthToken.findUnique({
-          where: { userId },
-          select: {
-            accessTokenCiphertext: true,
-            accessTokenIv: true,
-            accessTokenTag: true,
-          },
-        }),
-      ]);
-      if (!user || !token)
-        throw new ServiceError(
-          "github_reconnect_required",
-          "Reconnect GitHub to refresh repository access",
-          401,
-        );
-      const installations = await this.installationsForUser(
-        userId,
-        user.githubUserId,
-      );
-      const accessToken = decryptToken(
-        {
-          ciphertext: token.accessTokenCiphertext,
-          iv: token.accessTokenIv,
-          tag: token.accessTokenTag,
-        },
-        this.config.AUTH_TOKEN_ENCRYPTION_KEY,
-      );
-      const visible = new Set(
-        (await this.api.listOAuthRepositories(accessToken))
-          .filter(
-            (repository) =>
-              repository.ownerType.toLowerCase() === "user" &&
-              repository.ownerId === user.githubUserId,
-          )
-          .map((repository) => repository.id),
-      );
-      for (const installation of installations) {
-        const installed = await this.api.listInstallationRepositories(
-          installation.installationId,
-        );
-        const repository = installed.find(
-          (candidate) => candidate.id === repoId && visible.has(candidate.id),
-        );
-        if (repository)
-          return this.api.listBranches(
-            installation.installationId,
-            repository.ownerLogin,
-            repository.name,
-          );
-      }
+  async branches(
+    userId: string,
+    selection: GitHubRepositorySelection,
+    options: { forceRefresh?: boolean } = {},
+  ): Promise<GitHubBranch[]> {
+    const { repoId, owner, name, installationId } = selection;
+    if (
+      !repoId?.trim() ||
+      !isGitHubPathComponent(owner) ||
+      !isGitHubPathComponent(name) ||
+      !installationId ||
+      !/^\d+$/.test(installationId)
+    )
       throw new ServiceError(
-        "github_repository_not_found",
-        "Repository was not found",
-        404,
+        "github_repository_metadata_invalid",
+        "GitHub repository metadata is invalid",
+        400,
+      );
+    try {
+      const installation = await this.prisma.gitHubInstallation.findUnique({
+        where: { userId_installationId: { userId, installationId } },
+        select: { installationId: true },
+      });
+      if (!installation)
+        throw new ServiceError(
+          "github_repository_not_found",
+          "Repository was not found",
+          404,
+        );
+      const cacheKey = `${installationId}:${owner}:${name}`;
+      if (options.forceRefresh) this.branchCache.delete(cacheKey);
+      return await cachedGitHubRequest(this.branchCache, cacheKey, () =>
+        this.api.listBranches(installationId, owner, name),
       );
     } catch (error) {
       if (error instanceof ServiceError) throw error;

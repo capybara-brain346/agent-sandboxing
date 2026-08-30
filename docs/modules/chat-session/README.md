@@ -55,8 +55,14 @@ GET    /chat-sessions/:sessionId/artifacts/:artifactId
 
 Session creation and all reads are scoped to the authenticated user. Repository
 input is strict. Fixture repositories are restricted to explicitly enabled
-test, evaluation, and acceptance environments; GitHub repositories are
-revalidated against the authenticated user's current access.
+test, evaluation, and acceptance environments; GitHub repository branch lookup
+uses the selected repository's owner, name, and installation metadata. The
+backend checks installation ownership locally before making the direct branch
+request. GitHub session creation validates the selected metadata and installation
+ownership locally; repository and branch access are exercised during provisioning,
+where the selected base SHA is also verified when present.
+Repository and branch discovery responses use short-lived in-memory caches;
+explicit repository refresh and a newly connected installation invalidate them.
 
 Messages contain user, assistant, or system content plus processing metadata.
 Operational output stays in session events and artifacts. A message result
@@ -85,6 +91,29 @@ reset after publication so the message result can retain its workspace diff;
 later publications synchronize the session branch from its remote pull request
 branch before committing new changes. GitHub and Git failures are persisted as
 safe pull request metadata and session events.
+
+GitHub API adapter calls emit structured debug timing events with operation,
+duration, pagination, result counts, and safe repository context. Tokens and
+other secret values are never included.
+
+## GitHub latency verification
+
+The response-time regression coverage is split across
+`tests/github-service.test.ts`, `tests/github-routes.test.ts`,
+`tests/github-api-timing.test.ts`, `tests/chat-session-service.test.ts`, and
+`tests/message-processing.test.ts`. Run it with:
+
+```bash
+npm test -- tests/github-service.test.ts tests/github-routes.test.ts tests/github-api-timing.test.ts tests/chat-session-service.test.ts tests/message-processing.test.ts
+```
+
+For a deployment rollout, set `LOG_LEVEL=debug` and capture one journey through
+repository discovery, branch selection, session creation, and the first
+message. Compare `request_completed` durations with the `github_api_call_timing`
+events for `listAppInstallations`, `listOAuthRepositories`,
+`listInstallationRepositories`, `listBranches`, and
+`createInstallationToken`. Session creation should have no GitHub API timing
+events; provisioning should still include token creation and repository setup.
 
 ## Agent and artifacts
 

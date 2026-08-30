@@ -42,7 +42,7 @@ import type {
   MessageProcessingStatus,
 } from "../../types/message-processing.types";
 import type { PullRequestMetadata } from "../../types/github.types";
-import type { GitHubService } from "../github/github";
+import { isGitHubPathComponent, type GitHubService } from "../github/github";
 
 type SessionRow = {
   id: string;
@@ -129,6 +129,54 @@ const failure = (message: MessageRow): MessageProcessingFailure | null =>
         message: message.failureMessage ?? "Message processing failed",
       }
     : null;
+
+const gitShaPattern = /^[0-9a-f]{7,64}$/i;
+
+const invalidGitHubRepository = (): ServiceError =>
+  new ServiceError(
+    "github_repository_metadata_invalid",
+    "GitHub repository metadata is invalid",
+    400,
+  );
+
+const normalizeGitHubRepo = (
+  selection: CreateChatSessionRequest["repo"],
+): RepoScope & { installationId: string } => {
+  const owner = selection.owner?.trim();
+  const name = selection.name?.trim();
+  const repoId = selection.repoId?.trim();
+  const defaultBranch = selection.defaultBranch?.trim();
+  const installationId = selection.installationId?.trim();
+  const baseBranch = selection.baseBranch?.trim();
+  const baseSha = selection.baseSha?.trim() || null;
+  if (
+    selection.source !== "github" ||
+    selection.provider !== "github" ||
+    !repoId ||
+    !isGitHubPathComponent(owner) ||
+    !isGitHubPathComponent(name) ||
+    !defaultBranch ||
+    !installationId ||
+    !/^\d+$/.test(installationId) ||
+    !baseBranch ||
+    (selection.baseSha !== undefined &&
+      selection.baseSha !== null &&
+      (!baseSha || !gitShaPattern.test(baseSha)))
+  )
+    throw invalidGitHubRepository();
+  return {
+    source: "github",
+    ref: `github:${owner}/${name}`,
+    provider: "github",
+    owner,
+    name,
+    repoId,
+    defaultBranch,
+    installationId,
+    baseBranch,
+    baseSha,
+  };
+};
 
 const repo = (session: SessionRow): RepoScope => ({
   source: session.repoSource as RepoScope["source"],
@@ -240,10 +288,7 @@ export class ChatSessionService {
       prisma,
     ),
     private readonly fixtureReposEnabled = false,
-    private readonly github?: Pick<
-      GitHubService,
-      "currentPullRequest" | "validateRepository"
-    >,
+    private readonly github?: Pick<GitHubService, "currentPullRequest">,
   ) {}
 
   async currentPullRequest(
@@ -264,15 +309,26 @@ export class ChatSessionService {
         "Fixture repositories are not available in the product path",
         403,
       );
-    if (input.repo.source === "github") {
-      if (!this.github)
+    const githubRepo =
+      input.repo.source === "github" ? normalizeGitHubRepo(input.repo) : null;
+    if (githubRepo) {
+      const installation = await this.prisma.gitHubInstallation.findUnique({
+        where: {
+          userId_installationId: {
+            userId,
+            installationId: githubRepo.installationId,
+          },
+        },
+        select: { installationId: true },
+      });
+      if (!installation)
         throw new ServiceError(
           "github_repository_not_found",
           "Repository was not found",
           404,
         );
-      await this.github.validateRepository(userId, input.repo);
     }
+    const selectedRepo = githubRepo ?? input.repo;
 
     const sessionId = id("chat");
     const result = await runQuery("create_chat_session", { sessionId }, () =>
@@ -282,16 +338,16 @@ export class ChatSessionService {
             id: sessionId,
             userId,
             title: input.title ?? null,
-            repoRef: input.repo.ref,
-            repoSource: input.repo.source,
-            repoProvider: input.repo.provider ?? null,
-            repoOwner: input.repo.owner ?? null,
-            repoName: input.repo.name ?? null,
-            repoId: input.repo.repoId ?? null,
-            repoDefaultBranch: input.repo.defaultBranch ?? null,
-            repoInstallationId: input.repo.installationId ?? null,
-            repoBaseBranch: input.repo.baseBranch ?? null,
-            repoBaseSha: input.repo.baseSha ?? null,
+            repoRef: selectedRepo.ref,
+            repoSource: selectedRepo.source,
+            repoProvider: selectedRepo.provider ?? null,
+            repoOwner: selectedRepo.owner ?? null,
+            repoName: selectedRepo.name ?? null,
+            repoId: selectedRepo.repoId ?? null,
+            repoDefaultBranch: selectedRepo.defaultBranch ?? null,
+            repoInstallationId: selectedRepo.installationId ?? null,
+            repoBaseBranch: selectedRepo.baseBranch ?? null,
+            repoBaseSha: selectedRepo.baseSha ?? null,
             image: input.image ?? null,
           },
         });
@@ -302,8 +358,8 @@ export class ChatSessionService {
           producerId: sessionId,
           correlationId: id("cor").slice(0, 24),
           payload: {
-            repo_source: input.repo.source,
-            repo_ref: input.repo.ref,
+            repo_source: selectedRepo.source,
+            repo_ref: selectedRepo.ref,
           },
         });
         return { session, event };

@@ -78,13 +78,51 @@ const RepoBranchSwitcher = () => {
   const [loadingBranchesFor, setLoadingBranchesFor] = useState<string | null>(
     null,
   );
+  const [loadingRepositories, setLoadingRepositories] = useState(false);
+  const [loadingMoreRepositories, setLoadingMoreRepositories] = useState(false);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    getGitHubRepositories()
+    if (!open || connection || loadingRepositories) return;
+    setLoadingRepositories(true);
+    getGitHubRepositories({ limit: 20 })
       .then(setConnection)
-      .catch(() => setConnection(null));
-  }, []);
+      .catch(() => setConnection(null))
+      .finally(() => setLoadingRepositories(false));
+  }, [connection, loadingRepositories, open]);
+
+  const loadMoreRepositories = async () => {
+    if (!connection?.nextCursor || loadingMoreRepositories) return;
+    setLoadingMoreRepositories(true);
+    try {
+      const page = await getGitHubRepositories({
+        cursor: connection.nextCursor,
+        limit: 20,
+      });
+      setConnection((previous) => {
+        if (!previous) return page;
+        const seen = new Set(
+          previous.repositories.map((repository) => repository.repoId),
+        );
+        return {
+          ...page,
+          installations: previous.installations,
+          repositories: [
+            ...previous.repositories,
+            ...page.repositories.filter(
+              (repository) => !seen.has(repository.repoId),
+            ),
+          ],
+        };
+      });
+    } catch {
+      setConnection((previous) =>
+        previous ? { ...previous, nextCursor: null } : previous,
+      );
+    } finally {
+      setLoadingMoreRepositories(false);
+    }
+  };
 
   const toggleRepo = async (repository: GitHubRepository) => {
     if (expandedRepoId === repository.repoId) {
@@ -95,7 +133,7 @@ const RepoBranchSwitcher = () => {
     if (branchesByRepo[repository.repoId]) return;
     setLoadingBranchesFor(repository.repoId);
     try {
-      const branches = await getGitHubBranches(repository.repoId);
+      const branches = await getGitHubBranches(repository);
       setBranchesByRepo((previous) => ({
         ...previous,
         [repository.repoId]: branches,
@@ -161,8 +199,25 @@ const RepoBranchSwitcher = () => {
           <div className="border-b border-border-subtle px-3 py-2 text-2xs font-medium uppercase tracking-wide text-fg-subtle">
             Repositories
           </div>
-          <div className="max-h-80 overflow-y-auto p-1">
-            {connection === null && (
+          <div
+            className="max-h-80 overflow-y-auto p-1"
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              if (
+                element.scrollHeight -
+                  element.scrollTop -
+                  element.clientHeight <
+                48
+              )
+                void loadMoreRepositories();
+            }}
+          >
+            {loadingRepositories && (
+              <p className="px-2 py-3 text-xs text-fg-subtle">
+                Loading repositories…
+              </p>
+            )}
+            {!loadingRepositories && connection === null && (
               <p className="px-2 py-3 text-xs text-fg-subtle">
                 Connect GitHub from the repos page to switch context here.
               </p>
@@ -211,6 +266,12 @@ const RepoBranchSwitcher = () => {
                 )}
               </div>
             ))}
+            {loadingMoreRepositories && (
+              <div className="flex items-center gap-2 px-2 py-2 text-xs text-fg-subtle">
+                <Loader2 className="size-3.5 animate-spin" />
+                Loading more…
+              </div>
+            )}
           </div>
           <div className="border-t border-border-subtle px-3 py-2">
             <Link

@@ -12,6 +12,12 @@ export const githubRouter = Router();
 const queryString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
+const queryInt = (value: unknown): number | undefined => {
+  const text = queryString(value);
+  if (!text || !/^\d+$/.test(text)) return undefined;
+  return Number(text);
+};
+
 const frontendUrl = (path: string): string =>
   new URL(path, githubConfig.APP_BASE_URL).toString();
 
@@ -63,8 +69,16 @@ githubRouter.get(
   requireAuth(githubConfig),
   async (request, response, next) => {
     try {
+      const userId = sessionClaims(request).sub;
+      const forceRefresh = queryString(request.query.forceRefresh) === "true";
+      const cursor = queryString(request.query.cursor);
+      const limit = queryInt(request.query.limit);
       response.json(
-        await githubService.repositories(sessionClaims(request).sub),
+        await githubService.repositories(userId, {
+          ...(forceRefresh ? { forceRefresh: true } : {}),
+          ...(cursor ? { cursor } : {}),
+          ...(limit ? { limit } : {}),
+        }),
       );
     } catch (error) {
       next(error);
@@ -85,7 +99,12 @@ githubRouter.get(
           404,
         );
       response.json(
-        await githubService.branches(sessionClaims(request).sub, repoId),
+        await githubService.branches(sessionClaims(request).sub, {
+          repoId,
+          owner: queryString(request.query.owner),
+          name: queryString(request.query.name),
+          installationId: queryString(request.query.installationId),
+        }),
       );
     } catch (error) {
       next(error);

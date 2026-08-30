@@ -69,9 +69,11 @@ describe("GitHub routes", () => {
           private: true,
           defaultBranch: "main",
           installationId: "10",
+          updatedAt: "2026-01-02T00:00:00Z",
           branches: [],
         },
       ],
+      nextCursor: null,
       installUrl: config.GITHUB_APP_INSTALL_URL,
     });
     const response = await request(makeApp())
@@ -81,18 +83,63 @@ describe("GitHub routes", () => {
     expect(response.body.repositories[0].branches).toEqual([]);
   });
 
-  it("returns branches for one repository", async () => {
-    vi.spyOn(githubService, "branches").mockResolvedValue([
-      { name: "main", sha: "abc", protected: true },
-    ]);
+  it("passes repository refresh requests through to the service", async () => {
+    const repositories = vi
+      .spyOn(githubService, "repositories")
+      .mockResolvedValue({
+        installations: [],
+        repositories: [],
+        nextCursor: null,
+        installUrl: config.GITHUB_APP_INSTALL_URL,
+      });
     const response = await request(makeApp())
-      .get("/github/repositories/1/branches")
+      .get("/github/repositories?forceRefresh=true")
+      .set("Cookie", authCookie);
+    expect(response.status).toBe(200);
+    expect(repositories).toHaveBeenCalledWith("user_1", {
+      forceRefresh: true,
+    });
+  });
+
+  it("passes repository pagination requests through to the service", async () => {
+    const repositories = vi
+      .spyOn(githubService, "repositories")
+      .mockResolvedValue({
+        installations: [],
+        repositories: [],
+        nextCursor: null,
+        installUrl: config.GITHUB_APP_INSTALL_URL,
+      });
+    const response = await request(makeApp())
+      .get("/github/repositories?cursor=2&limit=20")
+      .set("Cookie", authCookie);
+    expect(response.status).toBe(200);
+    expect(repositories).toHaveBeenCalledWith("user_1", {
+      cursor: "2",
+      limit: 20,
+    });
+  });
+
+  it("returns branches for one repository", async () => {
+    const branches = vi
+      .spyOn(githubService, "branches")
+      .mockResolvedValue([{ name: "main", sha: "abc", protected: true }]);
+    const response = await request(makeApp())
+      .get(
+        "/github/repositories/1/branches?owner=octo&name=repo&installationId=10",
+      )
       .set("Cookie", authCookie);
     expect(response.status).toBe(200);
     expect(response.body[0]).toEqual({
       name: "main",
       sha: "abc",
       protected: true,
+    });
+    expect(branches).toHaveBeenCalledWith("user_1", {
+      repoId: "1",
+      owner: "octo",
+      name: "repo",
+      installationId: "10",
     });
   });
 

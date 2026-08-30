@@ -10,6 +10,7 @@ import type {
   CreateMessageResponse,
   GitHubRepositoriesResponse,
   GitHubBranch,
+  GitHubRepository,
   Page,
   PullRequestMetadata,
   MessageCancellationResponse,
@@ -61,11 +62,61 @@ export const getAuthMe = (): Promise<AuthMe> => request("/auth/me");
 export const logout = (): Promise<void> =>
   request("/auth/logout", { method: "POST" });
 
-export const getGitHubRepositories = (): Promise<GitHubRepositoriesResponse> =>
-  request("/github/repositories");
+const githubRepositoriesRequests = new Map<
+  string,
+  Promise<GitHubRepositoriesResponse>
+>();
 
-export const getGitHubBranches = (repoId: string): Promise<GitHubBranch[]> =>
-  request(`/github/repositories/${repoId}/branches`);
+export const getGitHubRepositories = ({
+  forceRefresh = false,
+  cursor,
+  limit,
+}: {
+  forceRefresh?: boolean;
+  cursor?: string | null;
+  limit?: number;
+} = {}): Promise<GitHubRepositoriesResponse> => {
+  const query = new URLSearchParams();
+  if (forceRefresh) query.set("forceRefresh", "true");
+  if (cursor) query.set("cursor", cursor);
+  if (limit) query.set("limit", String(limit));
+  const suffix = query.toString();
+  const path = `/github/repositories${suffix ? `?${suffix}` : ""}`;
+  if (!forceRefresh) {
+    const existing = githubRepositoriesRequests.get(path);
+    if (existing) return existing;
+  }
+
+  const nextRequest = request<GitHubRepositoriesResponse>(path);
+  githubRepositoriesRequests.set(path, nextRequest);
+  void nextRequest.then(
+    () => {
+      if (githubRepositoriesRequests.get(path) === nextRequest)
+        githubRepositoriesRequests.delete(path);
+    },
+    () => {
+      if (githubRepositoriesRequests.get(path) === nextRequest)
+        githubRepositoriesRequests.delete(path);
+    },
+  );
+  return nextRequest;
+};
+
+export const getGitHubBranches = (
+  repository: Pick<
+    GitHubRepository,
+    "repoId" | "owner" | "name" | "installationId"
+  >,
+): Promise<GitHubBranch[]> => {
+  const query = new URLSearchParams({
+    owner: repository.owner,
+    name: repository.name,
+    installationId: repository.installationId,
+  });
+  return request(
+    `/github/repositories/${encodeURIComponent(repository.repoId)}/branches?${query}`,
+  );
+};
 
 export const createChatSession = (
   input: CreateChatSessionRequest,

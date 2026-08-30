@@ -52,6 +52,7 @@ const makeService = () => {
         repoDefaultBranch: null,
         repoInstallationId: null,
         repoBaseBranch: null,
+        repoBaseSha: null,
         sandbox: null,
       })),
     },
@@ -175,6 +176,7 @@ describe("MessageProcessingService", () => {
         repoDefaultBranch: "main",
         repoInstallationId: "10",
         repoBaseBranch: "main",
+        repoBaseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         sandbox: null,
       },
       {
@@ -187,6 +189,7 @@ describe("MessageProcessingService", () => {
         repoDefaultBranch: "main",
         repoInstallationId: "10",
         repoBaseBranch: "main",
+        repoBaseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         sandbox: { id: "sbox_1", status: "ready" },
       },
     ];
@@ -246,12 +249,33 @@ describe("MessageProcessingService", () => {
     await vi.waitFor(() => expect(processor.process).toHaveBeenCalledTimes(2));
 
     expect(sandbox.createForSessionInTransaction).toHaveBeenCalledTimes(1);
+    expect(sandbox.createForSessionInTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        source: {
+          source: "github",
+          owner: "octo",
+          name: "repo",
+          installationId: "10",
+          cloneUrl: "https://github.com/octo/repo.git",
+          baseBranch: "main",
+          baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          token: "installation-token",
+        },
+        image: undefined,
+      },
+      { sessionId: "chat_1" },
+    );
     expect(sandbox.ensureReadyForSession).toHaveBeenNthCalledWith(
       1,
       "chat_1",
       "msg_1",
       "sbox_1",
-      expect.objectContaining({ source: "github", baseBranch: "main" }),
+      expect.objectContaining({
+        source: "github",
+        baseBranch: "main",
+        baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
     );
     expect(sandbox.ensureReadyForSession).toHaveBeenNthCalledWith(
       2,
@@ -271,6 +295,7 @@ describe("MessageProcessingService", () => {
       "sbox_1",
       { baseBranch: "main", defaultBranch: "main" },
     );
+    expect(github.createInstallationToken).toHaveBeenCalledWith("10");
     expect(github.createInstallationToken).toHaveBeenCalledTimes(1);
   });
 });

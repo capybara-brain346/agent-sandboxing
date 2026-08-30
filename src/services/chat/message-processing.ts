@@ -323,6 +323,7 @@ export class MessageProcessingService {
             repoDefaultBranch: true,
             repoInstallationId: true,
             repoBaseBranch: true,
+            repoBaseSha: true,
             sandbox: { select: { id: true, status: true } },
           },
         }),
@@ -345,6 +346,7 @@ export class MessageProcessingService {
       const owner = session.repoOwner?.trim();
       const name = session.repoName?.trim();
       const installationId = session.repoInstallationId?.trim();
+      const baseSha = session.repoBaseSha?.trim();
       if (!baseBranch)
         throw new ServiceError(
           "github_base_branch_missing",
@@ -386,6 +388,7 @@ export class MessageProcessingService {
         installationId,
         cloneUrl: `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}.git`,
         baseBranch,
+        ...(baseSha ? { baseSha } : {}),
         token,
       };
     };
