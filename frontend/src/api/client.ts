@@ -62,32 +62,41 @@ export const getAuthMe = (): Promise<AuthMe> => request("/auth/me");
 export const logout = (): Promise<void> =>
   request("/auth/logout", { method: "POST" });
 
-let githubRepositoriesRequest: Promise<GitHubRepositoriesResponse> | null =
-  null;
+const githubRepositoriesRequests = new Map<
+  string,
+  Promise<GitHubRepositoriesResponse>
+>();
 
 export const getGitHubRepositories = ({
   forceRefresh = false,
-}: { forceRefresh?: boolean } = {}): Promise<GitHubRepositoriesResponse> => {
-  if (!forceRefresh && githubRepositoriesRequest) {
-    return githubRepositoriesRequest;
+  cursor,
+  limit,
+}: {
+  forceRefresh?: boolean;
+  cursor?: string | null;
+  limit?: number;
+} = {}): Promise<GitHubRepositoriesResponse> => {
+  const query = new URLSearchParams();
+  if (forceRefresh) query.set("forceRefresh", "true");
+  if (cursor) query.set("cursor", cursor);
+  if (limit) query.set("limit", String(limit));
+  const suffix = query.toString();
+  const path = `/github/repositories${suffix ? `?${suffix}` : ""}`;
+  if (!forceRefresh) {
+    const existing = githubRepositoriesRequests.get(path);
+    if (existing) return existing;
   }
 
-  const nextRequest = request<GitHubRepositoriesResponse>(
-    forceRefresh
-      ? "/github/repositories?forceRefresh=true"
-      : "/github/repositories",
-  );
-  githubRepositoriesRequest = nextRequest;
+  const nextRequest = request<GitHubRepositoriesResponse>(path);
+  githubRepositoriesRequests.set(path, nextRequest);
   void nextRequest.then(
     () => {
-      if (githubRepositoriesRequest === nextRequest) {
-        githubRepositoriesRequest = null;
-      }
+      if (githubRepositoriesRequests.get(path) === nextRequest)
+        githubRepositoriesRequests.delete(path);
     },
     () => {
-      if (githubRepositoriesRequest === nextRequest) {
-        githubRepositoriesRequest = null;
-      }
+      if (githubRepositoriesRequests.get(path) === nextRequest)
+        githubRepositoriesRequests.delete(path);
     },
   );
   return nextRequest;

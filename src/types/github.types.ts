@@ -18,12 +18,14 @@ export type GitHubRepositoryView = {
   private: boolean;
   defaultBranch: string;
   installationId: string;
+  updatedAt: string;
   branches: GitHubBranch[];
 };
 
 export type GitHubRepositoriesResponse = {
   installations: GitHubInstallationView[];
   repositories: GitHubRepositoryView[];
+  nextCursor: string | null;
   installUrl: string;
 };
 

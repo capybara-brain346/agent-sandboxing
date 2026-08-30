@@ -277,11 +277,13 @@ export type GitHubRepository = {
   private: boolean;
   defaultBranch: string;
   installationId: string;
+  updatedAt: string;
   branches: GitHubBranch[];
 };
 
 export type GitHubRepositoriesResponse = {
   installations: GitHubInstallation[];
   repositories: GitHubRepository[];
+  nextCursor: string | null;
   installUrl: string;
 };

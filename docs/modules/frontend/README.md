@@ -14,6 +14,8 @@ tokens.
 
 - `/login` starts GitHub OAuth.
 - `/repos` selects a repository and branch, then creates a chat session.
+- `/github/repositories` returns GitHub repositories 20 at a time, sorted by
+  latest GitHub update, with `nextCursor` for loading more.
 - `/sessions/:sessionId` renders messages and the current message-processing
   inspector.
 - `/github/repositories/:repoId/branches` receives `owner`, `name`, and
@@ -38,9 +40,11 @@ rendered with `TimelineRow` and tool results use bounded event snippets.
 - `src/api/types.ts` mirrors the backend session, message, result, artifact, and
   event contracts.
 - `src/api/client.ts` is the credentialed fetch wrapper.
-- GitHub repository discovery reuses an in-flight request across the repository
-  picker and shell switcher; explicit refresh bypasses that request and the
-  backend's short-lived repository and branch caches.
+- GitHub repository discovery reuses matching in-flight requests across the
+  repository picker and shell switcher; explicit refresh bypasses that request
+  and the backend's short-lived repository and branch caches.
+- The shell repository switcher loads the first 20 repositories when opened and
+  fetches additional pages as the user scrolls.
 - Settled repository responses are not retained in the browser, so a later
   authenticated user cannot receive an earlier user's repository list.
 - `src/api/useEventStream.ts` opens the session SSE stream and deduplicates

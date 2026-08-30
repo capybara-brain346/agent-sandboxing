@@ -102,6 +102,7 @@ export const RepoSelectPage = () => {
   const [connection, setConnection] =
     useState<GitHubRepositoriesResponse | null>(null);
   const [loadingAccess, setLoadingAccess] = useState(true);
+  const [loadingMoreRepositories, setLoadingMoreRepositories] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedRepoId, setSelectedRepoId] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("");
@@ -113,7 +114,7 @@ export const RepoSelectPage = () => {
 
   useEffect(() => {
     let cancelled = false;
-    getGitHubRepositories()
+    getGitHubRepositories({ limit: 20 })
       .then((nextConnection) => {
         if (cancelled) return;
         setConnection(nextConnection);
@@ -166,7 +167,9 @@ export const RepoSelectPage = () => {
     setSelectedBranch("");
     setBranches([]);
     try {
-      setConnection(await getGitHubRepositories({ forceRefresh: true }));
+      setConnection(
+        await getGitHubRepositories({ forceRefresh: true, limit: 20 }),
+      );
     } catch (caught) {
       if (isSessionAuthFailure(caught)) {
         navigate("/login", { replace: true });
@@ -183,6 +186,49 @@ export const RepoSelectPage = () => {
       );
     } finally {
       setLoadingAccess(false);
+    }
+  };
+
+  const loadMoreRepositories = async () => {
+    if (!connection?.nextCursor || loadingMoreRepositories) return;
+    setLoadingMoreRepositories(true);
+    try {
+      const page = await getGitHubRepositories({
+        cursor: connection.nextCursor,
+        limit: 20,
+      });
+      setConnection((previous) => {
+        if (!previous) return page;
+        const seen = new Set(
+          previous.repositories.map((repository) => repository.repoId),
+        );
+        return {
+          ...page,
+          installations: previous.installations,
+          repositories: [
+            ...previous.repositories,
+            ...page.repositories.filter(
+              (repository) => !seen.has(repository.repoId),
+            ),
+          ],
+        };
+      });
+    } catch (caught) {
+      if (isSessionAuthFailure(caught)) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      setLoadError(
+        caught instanceof ApiError
+          ? caught.message
+          : "Failed to load GitHub repositories",
+      );
+      setReconnectRequired(
+        caught instanceof ApiError &&
+          caught.code === "github_reconnect_required",
+      );
+    } finally {
+      setLoadingMoreRepositories(false);
     }
   };
 
@@ -370,6 +416,18 @@ export const RepoSelectPage = () => {
               </p>
             )}
           </div>
+
+          {connection.nextCursor && !query.trim() && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              onClick={() => void loadMoreRepositories()}
+              disabled={loadingMoreRepositories || creating}
+            >
+              {loadingMoreRepositories ? "Loading more…" : "Load more"}
+            </Button>
+          )}
 
           {selectedRepo && (
             <BranchPicker

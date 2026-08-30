@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   appRequest: vi.fn(),
   getInstallationOctokit: vi.fn(),
   installationIterator: vi.fn(),
-  paginate: vi.fn(),
+  listForAuthenticatedUser: vi.fn(),
 }));
 
 vi.mock("@octokit/app", () => ({
@@ -17,8 +17,9 @@ vi.mock("@octokit/app", () => ({
 
 vi.mock("@octokit/rest", () => ({
   Octokit: vi.fn(() => ({
-    paginate: mocks.paginate,
-    rest: { repos: { listForAuthenticatedUser: vi.fn() } },
+    rest: {
+      repos: { listForAuthenticatedUser: mocks.listForAuthenticatedUser },
+    },
   })),
 }));
 
@@ -38,6 +39,7 @@ const repository = {
   full_name: "octo/repo",
   private: true,
   default_branch: "main",
+  updated_at: "2026-01-02T00:00:00Z",
 };
 
 const timingFields = (
@@ -60,7 +62,7 @@ describe("OctokitGitHubApi timing", () => {
     mocks.appRequest.mockReset();
     mocks.getInstallationOctokit.mockReset();
     mocks.installationIterator.mockReset();
-    mocks.paginate.mockReset();
+    mocks.listForAuthenticatedUser.mockReset();
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -77,9 +79,7 @@ describe("OctokitGitHubApi timing", () => {
       request: branchRequest,
       auth,
     });
-    mocks.paginate.mockImplementation(async (_route, _parameters, map) =>
-      map({ data: [repository] }, vi.fn()),
-    );
+    mocks.listForAuthenticatedUser.mockResolvedValue({ data: [repository] });
     mocks.installationIterator.mockReturnValue(
       (async function* () {
         yield { repository };
@@ -100,6 +100,8 @@ describe("OctokitGitHubApi timing", () => {
       resultCount: 1,
     });
     expect(timingFields(debug, "listOAuthRepositories")).toMatchObject({
+      page: 1,
+      perPage: 20,
       pageCount: 1,
       resultCount: 1,
     });

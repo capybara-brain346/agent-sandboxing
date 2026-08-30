@@ -12,6 +12,12 @@ export const githubRouter = Router();
 const queryString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
+const queryInt = (value: unknown): number | undefined => {
+  const text = queryString(value);
+  if (!text || !/^\d+$/.test(text)) return undefined;
+  return Number(text);
+};
+
 const frontendUrl = (path: string): string =>
   new URL(path, githubConfig.APP_BASE_URL).toString();
 
@@ -65,10 +71,14 @@ githubRouter.get(
     try {
       const userId = sessionClaims(request).sub;
       const forceRefresh = queryString(request.query.forceRefresh) === "true";
+      const cursor = queryString(request.query.cursor);
+      const limit = queryInt(request.query.limit);
       response.json(
-        await (forceRefresh
-          ? githubService.repositories(userId, { forceRefresh: true })
-          : githubService.repositories(userId)),
+        await githubService.repositories(userId, {
+          ...(forceRefresh ? { forceRefresh: true } : {}),
+          ...(cursor ? { cursor } : {}),
+          ...(limit ? { limit } : {}),
+        }),
       );
     } catch (error) {
       next(error);

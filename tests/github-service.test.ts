@@ -830,6 +830,7 @@ describe("GitHubService", () => {
           fullName: "octo/repo",
           private: true,
           defaultBranch: "main",
+          updatedAt: "2026-01-02T00:00:00Z",
         },
         {
           id: "2",
@@ -840,6 +841,7 @@ describe("GitHubService", () => {
           fullName: "org/ignored",
           private: true,
           defaultBranch: "main",
+          updatedAt: "2026-01-03T00:00:00Z",
         },
       ]),
       getInstallation: vi.fn(),
@@ -854,6 +856,7 @@ describe("GitHubService", () => {
           fullName: "octo/repo",
           private: false,
           defaultBranch: "trunk",
+          updatedAt: "2026-01-01T00:00:00Z",
         },
         {
           id: "2",
@@ -864,6 +867,7 @@ describe("GitHubService", () => {
           fullName: "org/ignored",
           private: true,
           defaultBranch: "main",
+          updatedAt: "2026-01-03T00:00:00Z",
         },
       ]),
       listBranches: vi.fn(async () => [
@@ -905,12 +909,110 @@ describe("GitHubService", () => {
           private: true,
           defaultBranch: "trunk",
           installationId: "10",
+          updatedAt: "2026-01-02T00:00:00Z",
           branches: [],
         },
       ],
+      nextCursor: null,
       installUrl: config.GITHUB_APP_INSTALL_URL,
     });
     expect(api.listBranches).not.toHaveBeenCalled();
+    expect(api.listOAuthRepositories).toHaveBeenCalledWith("oauth-token", {
+      page: 1,
+      perPage: 20,
+    });
+  });
+
+  it("sorts repository pages by latest updated and returns the next cursor", async () => {
+    const encrypted = encryptToken(
+      "oauth-token",
+      config.AUTH_TOKEN_ENCRYPTION_KEY,
+    );
+    const api: GitHubApi = {
+      listAppInstallations: vi.fn(async () => []),
+      listOAuthRepositories: vi.fn(async () => [
+        {
+          id: "1",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "old",
+          fullName: "octo/old",
+          private: true,
+          defaultBranch: "main",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "2",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "new",
+          fullName: "octo/new",
+          private: true,
+          defaultBranch: "main",
+          updatedAt: "2026-01-03T00:00:00Z",
+        },
+      ]),
+      getInstallation: vi.fn(),
+      createInstallationToken: vi.fn(),
+      listInstallationRepositories: vi.fn(async () => [
+        {
+          id: "1",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "old",
+          fullName: "octo/old",
+          private: true,
+          defaultBranch: "main",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "2",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "new",
+          fullName: "octo/new",
+          private: true,
+          defaultBranch: "main",
+          updatedAt: "2026-01-03T00:00:00Z",
+        },
+      ]),
+      listBranches: vi.fn(),
+    };
+    const prisma = {
+      user: { findUnique: vi.fn(async () => ({ githubUserId: "42" })) },
+      gitHubOAuthToken: {
+        findUnique: vi.fn(async () => ({
+          accessTokenCiphertext: encrypted.ciphertext,
+          accessTokenIv: encrypted.iv,
+          accessTokenTag: encrypted.tag,
+        })),
+      },
+      gitHubInstallation: {
+        findMany: vi.fn(async () => [
+          {
+            installationId: "10",
+            accountLogin: "octo",
+            accountType: "User",
+          },
+        ]),
+      },
+    } as unknown as PrismaClient;
+    const service = new GitHubService(prisma, config, api);
+
+    await expect(
+      service.repositories("user_1", { cursor: "3", limit: 2 }),
+    ).resolves.toMatchObject({
+      repositories: [{ fullName: "octo/new" }, { fullName: "octo/old" }],
+      nextCursor: "4",
+    });
+    expect(api.listOAuthRepositories).toHaveBeenCalledWith("oauth-token", {
+      page: 3,
+      perPage: 2,
+    });
   });
 
   it("only saves installations owned by the authenticated personal account", async () => {
@@ -986,6 +1088,7 @@ describe("GitHubService", () => {
           fullName: "octo/repo",
           private: true,
           defaultBranch: "main",
+          updatedAt: "2026-01-02T00:00:00Z",
         },
       ]),
       getInstallation: vi.fn(),
@@ -1000,6 +1103,7 @@ describe("GitHubService", () => {
           fullName: "octo/repo",
           private: true,
           defaultBranch: "main",
+          updatedAt: "2026-01-02T00:00:00Z",
         },
       ]),
       listBranches: vi.fn(async () => [

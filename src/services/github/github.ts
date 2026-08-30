@@ -33,6 +33,7 @@ export type GitHubRepositoryRecord = {
   fullName: string;
   private: boolean;
   defaultBranch: string;
+  updatedAt: string;
 };
 
 export type GitHubBranchRecord = GitHubBranch;
@@ -124,7 +125,10 @@ type PullRequestRow = {
 
 export type GitHubApi = {
   listAppInstallations(): Promise<GitHubAppInstallationRecord[]>;
-  listOAuthRepositories(accessToken: string): Promise<GitHubRepositoryRecord[]>;
+  listOAuthRepositories(
+    accessToken: string,
+    options?: { page?: number; perPage?: number },
+  ): Promise<GitHubRepositoryRecord[]>;
   getInstallation(installationId: string): Promise<GitHubInstallationRecord>;
   createInstallationToken(installationId: string): Promise<string>;
   listInstallationRepositories(
@@ -266,18 +270,23 @@ class OctokitGitHubApi implements GitHubApi {
 
   async listOAuthRepositories(
     accessToken: string,
+    options: { page?: number; perPage?: number } = {},
   ): Promise<GitHubRepositoryRecord[]> {
-    const timing = { pageCount: 0, resultCount: 0 };
+    const page = options.page ?? 1;
+    const perPage = options.perPage ?? 20;
+    const timing = { page, perPage, pageCount: 0, resultCount: 0 };
     return timedGitHubApiCall("listOAuthRepositories", timing, async () => {
       const octokit = new Octokit({ auth: accessToken });
-      const repositories = await octokit.paginate(
-        octokit.rest.repos.listForAuthenticatedUser,
-        { affiliation: "owner", per_page: 100, visibility: "all" },
-        (response) => {
-          timing.pageCount += 1;
-          return response.data;
-        },
-      );
+      const response = await octokit.rest.repos.listForAuthenticatedUser({
+        affiliation: "owner",
+        visibility: "all",
+        sort: "updated",
+        direction: "desc",
+        per_page: perPage,
+        page,
+      });
+      timing.pageCount = 1;
+      const repositories = response.data;
       const result = repositories.map((repository) => ({
         id: String(repository.id),
         ownerId: String(repository.owner.id),
@@ -287,6 +296,7 @@ class OctokitGitHubApi implements GitHubApi {
         fullName: repository.full_name,
         private: repository.private,
         defaultBranch: repository.default_branch,
+        updatedAt: repository.updated_at ?? "",
       }));
       timing.resultCount = result.length;
       return result;
@@ -349,6 +359,7 @@ class OctokitGitHubApi implements GitHubApi {
             fullName: item.repository.full_name,
             private: item.repository.private,
             defaultBranch: item.repository.default_branch,
+            updatedAt: item.repository.updated_at ?? "",
           });
           timing.resultCount = repositories.length;
         }
@@ -692,7 +703,10 @@ export class GitHubService {
   }
 
   private clearRepositoryCache(userId: string): void {
-    this.repositoryCache.delete(userId);
+    for (const key of this.repositoryCache.keys()) {
+      if (key === userId || key.startsWith(`${userId}:`))
+        this.repositoryCache.delete(key);
+    }
     this.branchCache.clear();
   }
 
@@ -1942,16 +1956,24 @@ export class GitHubService {
 
   async repositories(
     userId: string,
-    options: { forceRefresh?: boolean } = {},
+    options: { forceRefresh?: boolean; cursor?: string; limit?: number } = {},
   ): Promise<GitHubRepositoriesResponse> {
     if (options.forceRefresh) this.clearRepositoryCache(userId);
-    return cachedGitHubRequest(this.repositoryCache, userId, () =>
-      this.loadRepositories(userId),
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 20);
+    const page =
+      options.cursor && /^\d+$/.test(options.cursor)
+        ? Math.max(Number(options.cursor), 1)
+        : 1;
+    return cachedGitHubRequest(
+      this.repositoryCache,
+      `${userId}:${page}:${limit}`,
+      () => this.loadRepositories(userId, { page, limit }),
     );
   }
 
   private async loadRepositories(
     userId: string,
+    options: { page: number; limit: number },
   ): Promise<GitHubRepositoriesResponse> {
     try {
       const [user, token] = await Promise.all([
@@ -1987,7 +2009,10 @@ export class GitHubService {
         this.config.AUTH_TOKEN_ENCRYPTION_KEY,
       );
       const oauthRepositories = (
-        await this.api.listOAuthRepositories(accessToken)
+        await this.api.listOAuthRepositories(accessToken, {
+          page: options.page,
+          perPage: options.limit,
+        })
       ).filter(
         (repository) =>
           repository.ownerType.toLowerCase() === "user" &&
@@ -2013,6 +2038,7 @@ export class GitHubService {
             private: oauthRepository.private,
             defaultBranch: repository.defaultBranch,
             installationId: installation.installationId,
+            updatedAt: oauthRepository.updatedAt,
             branches: [],
           });
         }
@@ -2024,8 +2050,12 @@ export class GitHubService {
           accountType: "user" as const,
         })),
         repositories: [...repositories.values()].sort((left, right) =>
-          left.fullName.localeCompare(right.fullName),
+          right.updatedAt.localeCompare(left.updatedAt),
         ),
+        nextCursor:
+          oauthRepositories.length === options.limit
+            ? String(options.page + 1)
+            : null,
         installUrl: this.installUrl(),
       };
     } catch (error) {
