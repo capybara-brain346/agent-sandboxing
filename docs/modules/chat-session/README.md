@@ -123,7 +123,8 @@ The chat service injects Agent Service collaborators and contains no provider
 calls. The Agent Service owns model resolution, prompts, profile-driven tool
 execution, the single session-agent run, read-only subagent calls nested inside
 that run, and summary compaction. Subagent activity remains internal to the
-parent turn and is recorded in its trace.
+parent turn and is recorded in its trace. Traces are application/Langfuse
+observability data only; they are not persisted as database artifacts.
 
 `ArtifactStore` keeps bounded, redacted operational output outside the chat
 context. Artifact reads are scoped to the owning session. The context builder

@@ -8,7 +8,7 @@ import type {
   MessageProcessingResult,
   MessageProcessor,
 } from "../../types/message-processing.types";
-import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
 import type { SessionAgent } from "../agent/session-agent";
 import type { SessionContextBuilder } from "./session-context-builder";
 import type { SessionSummaryCompactor } from "../agent/session-summary-compactor";
@@ -51,7 +51,7 @@ export class SessionAgentProcessor implements MessageProcessor {
     private readonly contextBuilder: SessionContextBuilder,
     private readonly compactor: SessionSummaryCompactor,
     private readonly runner: SessionAgent,
-    private readonly traceRecorder?: EvalTraceRecorderLike,
+    private readonly traceRecorder?: TraceRecorderLike,
   ) {}
 
   async process(
@@ -75,7 +75,7 @@ export class SessionAgentProcessor implements MessageProcessor {
       hasPriorProcessing: sessionContext.workspace.hasPriorProcessing,
       shouldCompact: sessionContext.shouldCompact,
     });
-    this.traceRecorder?.recordOrchestratorContext({
+    this.traceRecorder?.recordContext({
       messageId: context.messageId,
       contextSummary: {
         summaryPresent: Boolean(sessionContext.summary),
@@ -104,12 +104,6 @@ export class SessionAgentProcessor implements MessageProcessor {
         context.instructions,
       ),
     });
-    this.traceRecorder?.recordOrchestratorReply({
-      messageId: context.messageId,
-      reply: result.finalText,
-      delegated: false,
-    });
-
     if (sessionContext.shouldCompact)
       await this.compactSummary(
         sessionId,

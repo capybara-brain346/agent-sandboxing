@@ -5,7 +5,7 @@ import { AgentRunner } from "../src/services/agent/agent-runner";
 import type { EventStore } from "../src/services/events/event-store";
 import type { PublicEvent } from "../src/types/event.types";
 import type { MessageProcessingContext } from "../src/types/message-processing.types";
-import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
+import type { TraceRecorderLike } from "../src/services/tracing/trace-recorder";
 import { logger } from "../src/logger";
 import type { ToolProfileName } from "../src/services/agent/tools/profile-loader";
 
@@ -85,7 +85,7 @@ const makeRunner = (
   const traceRecorder = {
     recordUsage: vi.fn(),
     recordSubagent: vi.fn(),
-  } as unknown as EvalTraceRecorderLike;
+  } as unknown as TraceRecorderLike;
   const runner = new AgentRunner({
     config: { ...config, ...overrides },
     sandbox,

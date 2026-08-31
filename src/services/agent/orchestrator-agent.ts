@@ -7,8 +7,8 @@ import type {
 } from "../../types/harness.types";
 import { buildWorkerBrief } from "./worker-brief";
 import { getPromptText } from "../../prompts/load-prompt";
-import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
-import { recordModelUsage } from "../eval/model-usage";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
+import { recordModelUsage } from "../tracing/model-usage";
 import { logger } from "../../logger";
 
 export const MAX_DELEGATIONS_PER_TURN = 2;
@@ -91,7 +91,7 @@ const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
 export class ModelOrchestratorAgent implements OrchestratorAgent {
   constructor(
     private readonly model: LanguageModel,
-    private readonly recorder?: EvalTraceRecorderLike,
+    private readonly recorder?: TraceRecorderLike,
   ) {}
 
   async decide(input: OrchestratorAgentInput): Promise<OrchestratorDecision> {
@@ -135,7 +135,7 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
       recordModelUsage({
         recorder: this.recorder,
         messageId: input.messageId,
-        stage: "orchestrator",
+        stage: "sessionAgent",
         model: this.model,
         startedAt,
         result: {},
@@ -145,7 +145,7 @@ export class ModelOrchestratorAgent implements OrchestratorAgent {
     recordModelUsage({
       recorder: this.recorder,
       messageId: input.messageId,
-      stage: "orchestrator",
+      stage: "sessionAgent",
       model: this.model,
       startedAt,
       result,

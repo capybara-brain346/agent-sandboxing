@@ -1,6 +1,6 @@
 import type { LanguageModel } from "ai";
-import type { EvalTraceRecorderLike } from "./eval-trace-recorder";
-import type { EvalTraceStage, ModelUsage } from "../../types/eval-trace.types";
+import type { TraceRecorderLike } from "./trace-recorder";
+import type { ModelUsage, TraceModelStage } from "../../types/trace.types";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -14,9 +14,10 @@ const modelId = (model: LanguageModel): string | undefined => {
 };
 
 export const recordModelUsage = (input: {
-  recorder: EvalTraceRecorderLike | undefined;
+  recorder: TraceRecorderLike | undefined;
   messageId: string | undefined;
-  stage: EvalTraceStage;
+  stage: TraceModelStage;
+  agentRunId?: string;
   model: LanguageModel;
   startedAt: number;
   result: unknown;
@@ -57,5 +58,6 @@ export const recordModelUsage = (input: {
     messageId: input.messageId,
     stage: input.stage,
     usage,
+    ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
   });
 };

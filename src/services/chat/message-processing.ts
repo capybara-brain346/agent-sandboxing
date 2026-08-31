@@ -16,8 +16,8 @@ import type {
   MessageProcessor,
 } from "../../types/message-processing.types";
 import type { ArtifactPreview } from "../../types/artifact.types";
-import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
-import type { EvalTraceMessageFacts } from "../../types/eval-trace.types";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
+import type { TraceMessageFacts } from "../../types/trace.types";
 import type { SandboxProvisioningSource } from "../../types/sandbox.types";
 
 type PublishEvent = (event: PublicEvent) => void;
@@ -72,7 +72,7 @@ export class MessageProcessingService {
     private readonly processor: MessageProcessor,
     private readonly publish: PublishEvent = () => undefined,
     private readonly artifacts: ArtifactRecorder = noopArtifactRecorder,
-    private readonly traceRecorder?: EvalTraceRecorderLike,
+    private readonly traceRecorder?: TraceRecorderLike,
     private readonly github?: GitHubInstallationTokenProvider,
   ) {}
 
@@ -761,6 +761,11 @@ export class MessageProcessingService {
           truncated: artifact.truncated,
           redacted: artifact.redacted,
         })),
+        error: {
+          code: failure.code,
+          message: failure.message,
+          stage: operation,
+        },
       });
     return events.length > 0;
   }
@@ -838,18 +843,20 @@ export class MessageProcessingService {
   private async finalizeTrace(
     sessionId: string,
     activeMessageId: string,
-    terminal: EvalTraceMessageFacts,
+    terminal: TraceMessageFacts,
   ): Promise<void> {
     if (!this.traceRecorder) return;
     try {
-      const events = await this.events.listSessionEvents(sessionId, 0);
+      const events = (await this.events.listSessionEvents(sessionId, 0)).filter(
+        (event) => event.messageId === activeMessageId,
+      );
       await this.traceRecorder.finishProcessing({
         messageId: activeMessageId,
         terminal,
         events,
       });
     } catch (error) {
-      logger.warn("eval_trace_finalize_failed", {
+      logger.warn("trace_finalize_failed", {
         messageId: activeMessageId,
         error: error instanceof Error ? error.message : String(error),
       });

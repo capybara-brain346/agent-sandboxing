@@ -27,8 +27,8 @@ import {
 } from "./tool-event-relay";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
 import { getPromptText } from "../../prompts/load-prompt";
-import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
-import { recordModelUsage } from "../eval/model-usage";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
+import { recordModelUsage } from "../tracing/model-usage";
 import type { AgentGitHubTools } from "./tools/registry";
 import type { ToolProfileName } from "./tools/profile-loader";
 import type { SubagentToolInput } from "./tools/subagent";
@@ -56,7 +56,10 @@ export type AgentRunnerDependencies = {
   publish: PublishEvent;
   profile: ToolProfileName;
   artifacts?: ArtifactRecorder;
-  traceRecorder?: EvalTraceRecorderLike;
+  traceRecorder?: TraceRecorderLike;
+  agentRunId?: string;
+  subagentRunId?: string;
+  agentTask?: string;
   github?: AgentGitHubTools;
   emitToolEvents?: boolean;
 };
@@ -102,15 +105,51 @@ export class AgentRunner implements SessionAgent {
     throwIfAborted(context.signal);
     const executionStartedAt = Date.now();
     const startedAt = new Date().toISOString();
+    const agentRunId =
+      this.dependencies.agentRunId ??
+      this.dependencies.traceRecorder?.getAgentRunId?.(context.messageId) ??
+      `agent_${randomUUID()}`;
+    this.dependencies.traceRecorder?.startAgentRun?.({
+      messageId: context.messageId,
+      agentRunId,
+      startedAt,
+      input: context.instructions,
+      ...(this.dependencies.subagentRunId
+        ? { subagentRunId: this.dependencies.subagentRunId }
+        : {}),
+      ...(this.dependencies.agentTask
+        ? { task: this.dependencies.agentTask }
+        : {}),
+    });
     logger.debug("session_agent_started", {
       sessionId: context.sessionId,
       messageId: context.messageId,
       sandboxId: context.sandboxId,
     });
-    const target = await this.dependencies.sandbox.getAgentToolTarget(
-      context.sessionId,
-      context.sandboxId,
-    );
+    let target;
+    try {
+      target = await this.dependencies.sandbox.getAgentToolTarget(
+        context.sessionId,
+        context.sandboxId,
+      );
+    } catch (error) {
+      if (!isAbortError(error) && !context.signal.aborted)
+        this.dependencies.traceRecorder?.finishAgentRun?.({
+          messageId: context.messageId,
+          agentRunId,
+          completedAt: new Date().toISOString(),
+          error: {
+            message:
+              error instanceof ServiceError
+                ? error.message
+                : "Agent processing failed",
+            ...(error instanceof ServiceError ? { code: error.code } : {}),
+            stage: "sessionAgent",
+            agentRunId,
+          },
+        });
+      throw error;
+    }
     throwIfAborted(context.signal);
 
     const runSubagent =
@@ -129,6 +168,12 @@ export class AgentRunner implements SessionAgent {
                 model: this.dependencies.model,
                 publish: this.dependencies.publish,
                 profile: "subagent",
+                ...(this.dependencies.traceRecorder
+                  ? { traceRecorder: this.dependencies.traceRecorder }
+                  : {}),
+                agentRunId: subagentRunId,
+                subagentRunId,
+                agentTask: input.task,
                 ...(this.dependencies.artifacts
                   ? { artifacts: this.dependencies.artifacts }
                   : {}),
@@ -191,16 +236,18 @@ export class AgentRunner implements SessionAgent {
         runSubagent,
       ),
     );
-    const relay =
-      this.dependencies.emitToolEvents === false
-        ? undefined
-        : new ToolEventRelay({
-            events: this.dependencies.events,
-            publish: this.dependencies.publish,
-            ...(this.dependencies.artifacts
-              ? { artifacts: this.dependencies.artifacts }
-              : {}),
-          } satisfies ToolEventRelayDependencies);
+    const relay = new ToolEventRelay({
+      events: this.dependencies.events,
+      publish: this.dependencies.publish,
+      ...(this.dependencies.artifacts
+        ? { artifacts: this.dependencies.artifacts }
+        : {}),
+      ...(this.dependencies.traceRecorder
+        ? { traceRecorder: this.dependencies.traceRecorder }
+        : {}),
+      agentRunId,
+      emitEvents: this.dependencies.emitToolEvents !== false,
+    } satisfies ToolEventRelayDependencies);
     const callbacks = relay?.callbacks<ToolSet>({
       messageId: context.messageId,
       sandboxId: context.sandboxId,
@@ -233,6 +280,7 @@ export class AgentRunner implements SessionAgent {
         recorder: this.dependencies.traceRecorder,
         messageId: context.messageId,
         stage: "sessionAgent",
+        agentRunId,
         model: this.dependencies.model,
         startedAt: usageStartedAt,
         result,
@@ -246,6 +294,12 @@ export class AgentRunner implements SessionAgent {
         startedAt,
         completedAt: new Date().toISOString(),
       };
+      this.dependencies.traceRecorder?.finishAgentRun?.({
+        messageId: context.messageId,
+        agentRunId,
+        completedAt: agentResult.completedAt,
+        output: agentResult.finalText,
+      });
 
       logger.debug("session_agent_completed", {
         sessionId: context.sessionId,
@@ -272,10 +326,29 @@ export class AgentRunner implements SessionAgent {
           recorder: this.dependencies.traceRecorder,
           messageId: context.messageId,
           stage: "sessionAgent",
+          agentRunId,
           model: this.dependencies.model,
           startedAt: usageStartedAt,
           result: {},
         });
+      this.dependencies.traceRecorder?.finishAgentRun?.({
+        messageId: context.messageId,
+        agentRunId,
+        completedAt: new Date().toISOString(),
+        ...(cancelled
+          ? {}
+          : {
+              error: {
+                message:
+                  error instanceof ServiceError
+                    ? error.message
+                    : "Agent processing failed",
+                ...(error instanceof ServiceError ? { code: error.code } : {}),
+                stage: "sessionAgent",
+                agentRunId,
+              },
+            }),
+      });
       if (isAbortError(error)) throw error;
       if (context.signal.aborted) throw createAbortError();
       if (error instanceof ServiceError) throw error;

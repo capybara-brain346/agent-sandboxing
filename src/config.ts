@@ -73,11 +73,8 @@ const schema = z
     ),
     LANGFUSE_FLUSH_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
     LOCAL_TRACE_EXPORT_ENABLED: booleanEnv.default(false),
-    LOCAL_TRACE_EXPORT_PATH: z
-      .string()
-      .min(1)
-      .default(".data/eval-traces.jsonl"),
-    EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED: booleanEnv.default(false),
+    LOCAL_TRACE_EXPORT_PATH: z.string().min(1).default(".data/traces.jsonl"),
+    TRACE_CONTEXT_SNAPSHOT_ENABLED: booleanEnv.default(false),
     GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
     GITHUB_APP_PRIVATE_KEY: z
       .string()

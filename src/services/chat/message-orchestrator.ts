@@ -15,7 +15,7 @@ import type {
 import type { OrchestratorAgent } from "../agent/orchestrator-agent";
 import type { SessionContextBuilder } from "./session-context-builder";
 import type { SessionSummaryCompactor } from "../agent/session-summary-compactor";
-import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
 
 export class MessageOrchestrator implements MessageProcessor {
   constructor(
@@ -24,7 +24,7 @@ export class MessageOrchestrator implements MessageProcessor {
     private readonly compactor: SessionSummaryCompactor,
     private readonly worker: SessionAgent,
     private readonly agent: OrchestratorAgent,
-    private readonly traceRecorder?: EvalTraceRecorderLike,
+    private readonly traceRecorder?: TraceRecorderLike,
   ) {}
 
   async process(
@@ -49,7 +49,7 @@ export class MessageOrchestrator implements MessageProcessor {
       hasPriorProcessing: orchestratorContext.workspace.hasPriorProcessing,
       shouldCompact: orchestratorContext.shouldCompact,
     });
-    this.traceRecorder?.recordOrchestratorContext({
+    this.traceRecorder?.recordContext({
       messageId: context.messageId,
       contextSummary: {
         summaryPresent: Boolean(orchestratorContext.summary),
@@ -72,10 +72,6 @@ export class MessageOrchestrator implements MessageProcessor {
       },
     });
     const delegate = async (brief: string): Promise<SessionAgentResult> => {
-      this.traceRecorder?.recordWorkerBrief({
-        messageId: context.messageId,
-        brief,
-      });
       const agentResult = await this.worker.process({
         ...context,
         instructions: brief,
@@ -84,10 +80,6 @@ export class MessageOrchestrator implements MessageProcessor {
         status: "completed",
         summary: agentResult.finalText,
       };
-      this.traceRecorder?.recordWorkerResult({
-        messageId: context.messageId,
-        result,
-      });
       return result;
     };
 
@@ -103,11 +95,6 @@ export class MessageOrchestrator implements MessageProcessor {
     });
 
     const lastResult = decision.delegations.at(-1) ?? null;
-    this.traceRecorder?.recordOrchestratorReply({
-      messageId: context.messageId,
-      reply: decision.reply,
-      delegated: decision.delegations.length > 0,
-    });
     logger.debug("orchestrator_decision_completed", {
       sessionId,
       messageId: context.messageId,

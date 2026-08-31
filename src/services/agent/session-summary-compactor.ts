@@ -2,8 +2,8 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { OrchestratorChatMessage } from "../../types/harness.types";
 import { getPromptText } from "../../prompts/load-prompt";
-import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
-import { recordModelUsage } from "../eval/model-usage";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
+import { recordModelUsage } from "../tracing/model-usage";
 import { logger } from "../../logger";
 
 const compactedSummarySchema = z
@@ -38,7 +38,7 @@ const MAX_BLOCKERS = 5;
 export class ModelSessionSummaryCompactor implements SessionSummaryCompactor {
   constructor(
     private readonly model: LanguageModel,
-    private readonly recorder?: EvalTraceRecorderLike,
+    private readonly recorder?: TraceRecorderLike,
   ) {}
 
   async compact(input: CompactionInput): Promise<string> {

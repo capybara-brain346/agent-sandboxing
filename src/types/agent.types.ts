@@ -14,6 +14,7 @@ export const agentToolResultPayloadSchema = z
     tool_name: z.string(),
     result_snippet: z.string().max(500),
     truncated: z.boolean(),
+    error: z.boolean().optional(),
     exit_code: z.number().int().nullable(),
     duration_ms: z.number().int().nonnegative(),
     artifact_byte_size: z.number().int().nonnegative().optional(),

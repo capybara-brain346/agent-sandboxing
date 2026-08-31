@@ -28,6 +28,11 @@ Implementation:
   maintains bounded session context.
 - [`tool-event-relay.ts`](../../../src/services/agent/tool-event-relay.ts)
   persists safe tool call and result events.
+- [`trace-recorder.ts`](../../../src/services/tracing/trace-recorder.ts) builds
+  the strict session-agent trace, including context, run timing, full redacted
+  tool and subagent outputs, outcomes, and safe errors.
+- [`langfuse-trace-sink.ts`](../../../src/services/tracing/langfuse-trace-sink.ts)
+  exports the trace hierarchy to Langfuse without affecting message success.
 
 ## Session invariant
 
@@ -67,6 +72,9 @@ blockers, and capped file context.
 Subagent cancellation uses the parent message signal. Nested subagent run IDs,
 tasks, tool calls, reports, timing, and safe failures are recorded in the
 parent trace without creating a second user-facing transcript.
+Trace sections are `identity`, `context`, `sessionAgent`, `toolCalls`,
+`subagents`, `outcome`, and `errors`. The top-level, agent, subagent, and tool
+sections all include ISO timestamps and millisecond durations.
 
 ## Tool events and safety
 
@@ -87,6 +95,9 @@ provider commands.
 
 `AGENT_MODEL` and `OPENROUTER_API_KEY` are loaded centrally. The key remains in
 the control plane and is never forwarded to the sandbox.
+
+Local trace export, when enabled, writes JSONL to `.data/traces.jsonl` by
+default. Langfuse export uses the existing `LANGFUSE_*` configuration.
 
 ```bash
 npm run typecheck

@@ -39,6 +39,8 @@ describe("configuration", () => {
     expect(config.LANGFUSE_ENABLED).toBe(false);
     expect(config.LANGFUSE_FLUSH_TIMEOUT_MS).toBe(2000);
     expect(config.LOCAL_TRACE_EXPORT_ENABLED).toBe(false);
+    expect(config.LOCAL_TRACE_EXPORT_PATH).toBe(".data/traces.jsonl");
+    expect(config.TRACE_CONTEXT_SNAPSHOT_ENABLED).toBe(false);
     expect(config.LOG_LEVEL).toBe("error");
     expect(config.LOG_COLOR).toBe("auto");
   });

@@ -6,7 +6,7 @@ import {
   type OrchestratorAgentInput,
 } from "../src/services/agent/orchestrator-agent";
 import type { SessionAgentResult } from "../src/types/harness.types";
-import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
+import type { TraceRecorderLike } from "../src/services/tracing/trace-recorder";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -68,7 +68,7 @@ describe("ModelOrchestratorAgent", () => {
     });
     const recorder = {
       recordUsage: vi.fn(),
-    } as unknown as EvalTraceRecorderLike;
+    } as unknown as TraceRecorderLike;
     const agent = new ModelOrchestratorAgent({} as LanguageModel, recorder);
 
     await agent.decide(baseInput());
@@ -76,7 +76,7 @@ describe("ModelOrchestratorAgent", () => {
     expect(recorder.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({
         messageId: "msg_1",
-        stage: "orchestrator",
+        stage: "sessionAgent",
         usage: expect.objectContaining({
           inputTokens: 4,
           outputTokens: 2,
