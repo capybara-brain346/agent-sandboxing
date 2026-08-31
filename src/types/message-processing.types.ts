@@ -34,6 +34,7 @@ export type MessageProcessingContext = {
   sandboxId: string;
   instructions: string;
   signal: AbortSignal;
+  maxSteps?: number;
 };
 
 export type MessageProcessingResult = {

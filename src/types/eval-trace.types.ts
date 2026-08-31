@@ -27,6 +27,17 @@ export type EvalTraceToolEvent = {
   correlationId: string;
 };
 
+export type EvalTraceSubagent = {
+  subagentRunId: string;
+  task: string;
+  toolCalls: unknown[];
+  summary: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  error?: string;
+};
+
 export type EvalTraceContextSummary = {
   summaryPresent: boolean;
   summaryChars: number;
@@ -83,6 +94,7 @@ export type EvalTrace = {
   };
   usage: Array<{ stage: EvalTraceStage; usage: ModelUsage }>;
   tools: EvalTraceToolEvent[];
+  subagents: EvalTraceSubagent[];
   worker?: SessionAgentResult;
   processing?: EvalTraceMessageFacts;
 };

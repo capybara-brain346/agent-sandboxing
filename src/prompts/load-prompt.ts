@@ -14,7 +14,7 @@ const promptSchema = z.object({
 export type PromptDefinition = z.infer<typeof promptSchema>;
 
 export type PromptName =
-  "orchestrator" | "session-agent" | "session-summary-compactor";
+  "orchestrator" | "session-agent" | "session-summary-compactor" | "subagent";
 
 const PROMPTS_DIR = join(process.cwd(), "prompts");
 

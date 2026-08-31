@@ -13,6 +13,11 @@ import { createReadTool } from "../src/services/agent/tools/read";
 import { createToolRegistry } from "../src/services/agent/tools/registry";
 import { createWriteTool } from "../src/services/agent/tools/write";
 import {
+  boundSubagentReport,
+  createSubagentTool,
+  SUBAGENT_REPORT_MAX_CHARACTERS,
+} from "../src/services/agent/tools/subagent";
+import {
   getToolProfile,
   loadToolProfiles,
   validateToolProfiles,
@@ -56,12 +61,22 @@ const runtime = (...results: SimpleExecResult[]): RuntimeMock => {
 const signal = new AbortController().signal;
 
 describe("sandbox-proxied agent tools", () => {
-  it("registers exactly the seven internal tools", () => {
+  it("registers the main tools including the subagent", () => {
     const tools = createToolRegistry(
       runtime(success()),
       "sandbox-1",
       config,
       signal,
+      undefined,
+      undefined,
+      "main",
+      vi.fn(async () => ({
+        finalText: "report",
+        usage: {},
+        toolCalls: [],
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
+      })),
     );
     expect(Object.keys(tools)).toEqual([
       "read",
@@ -71,7 +86,40 @@ describe("sandbox-proxied agent tools", () => {
       "grep",
       "find",
       "ls",
+      "subagent",
     ]);
+  });
+
+  it("bounds subagent reports and honors cancellation", async () => {
+    const run = vi.fn(async () => ({
+      finalText: "x".repeat(SUBAGENT_REPORT_MAX_CHARACTERS + 100),
+      usage: {},
+      toolCalls: [],
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:01.000Z",
+    }));
+    const result = await execute(createSubagentTool(run, signal), {
+      task: "Inspect the repository",
+    });
+
+    expect(result).toContain("[truncated]");
+    expect((result as string).length).toBeLessThanOrEqual(
+      SUBAGENT_REPORT_MAX_CHARACTERS,
+    );
+    expect(boundSubagentReport(`${"a".repeat(19_987)}😀`)).not.toContain(
+      "\uFFFD",
+    );
+    expect(run).toHaveBeenCalledWith({ task: "Inspect the repository" });
+    expect(boundSubagentReport("short")).toBe("short");
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      execute(createSubagentTool(run, controller.signal), {
+        task: "Inspect the repository",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("loads the all-tools and restricted profiles", () => {

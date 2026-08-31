@@ -16,6 +16,8 @@ Implementation:
 - [`profile-loader.ts`](../../../src/services/agent/tools/profile-loader.ts)
   loads and validates the main and restricted tool profiles from
   [`profiles.yaml`](../../../src/services/agent/tools/profiles/profiles.yaml).
+- [`tools/subagent.ts`](../../../src/services/agent/tools/subagent.ts) exposes
+  the main agent's bounded, read-only repository investigation tool.
 - [`session-agent.ts`](../../../src/services/agent/session-agent.ts) defines
   the session-agent runner seam.
 - [`session-agent-processor.ts`](../../../src/services/chat/session-agent-processor.ts)
@@ -43,7 +45,11 @@ sessions also receive brokered pull request tools.
 The agent response is prose. Changed files, pull request state, artifacts, and
 terminal processing state are derived from persisted backend records rather than
 model claims. The main profile exposes all registered tools; restricted profiles
-expose only their explicit tool lists.
+expose only their explicit tool lists. The main agent can call `subagent` with
+only a task and optional step limit. Each subagent uses the static subagent
+prompt and the `read`, `grep`, `find`, and `ls` profile, so it cannot write,
+edit, run bash, or use pull request tools. Its report is capped at 20,000
+characters, and its work is internal to the parent turn.
 
 ## Processing behavior
 
@@ -57,6 +63,10 @@ failures become the safe `agent_processing_failed` error.
 Each user message runs the session agent once. Failed work is terminal. Summary
 compaction rewrites the bounded session summary with objective, state, result,
 blockers, and capped file context.
+
+Subagent cancellation uses the parent message signal. Nested subagent run IDs,
+tasks, tool calls, reports, timing, and safe failures are recorded in the
+parent trace without creating a second user-facing transcript.
 
 ## Tool events and safety
 

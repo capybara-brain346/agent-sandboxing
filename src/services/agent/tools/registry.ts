@@ -10,6 +10,7 @@ import { createReadTool } from "./read";
 import { createWriteTool } from "./write";
 import { createPublishPullRequestTool } from "./publish-pull-request";
 import { createPullRequestTool } from "./pull-request";
+import { createSubagentTool, type SubagentToolRunner } from "./subagent";
 import type { GitHubService } from "../../github/github";
 import {
   getToolProfile,
@@ -30,6 +31,7 @@ type ToolFactoryDependencies = {
   signal: AbortSignal;
   context?: { sessionId: string; messageId: string };
   github?: AgentGitHubTools;
+  subagent?: SubagentToolRunner;
 };
 
 type ToolFactory = (dependencies: ToolFactoryDependencies) => unknown;
@@ -82,6 +84,8 @@ const toolFactories = {
           github,
         )
       : undefined,
+  subagent: ({ signal, subagent }: ToolFactoryDependencies) =>
+    subagent ? createSubagentTool(subagent, signal) : undefined,
 } satisfies Record<string, ToolFactory>;
 
 const toolProfiles = loadToolProfiles();
@@ -95,6 +99,7 @@ export const createToolRegistry = (
   context?: { sessionId: string; messageId: string },
   github?: AgentGitHubTools,
   profile: ToolProfileName = "main",
+  subagent?: SubagentToolRunner,
 ) => {
   const selectedProfile = getToolProfile(toolProfiles, profile);
   const selectedNames =
@@ -110,6 +115,7 @@ export const createToolRegistry = (
       signal,
       ...(context ? { context } : {}),
       ...(github ? { github } : {}),
+      ...(subagent ? { subagent } : {}),
     });
     return tool === undefined ? [] : [[name, tool] as const];
   });

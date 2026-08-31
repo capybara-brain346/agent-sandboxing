@@ -116,6 +116,29 @@ const toolObservations = (parent: LangfuseSpan, trace: EvalTrace): void => {
   }
 };
 
+const subagentObservations = (parent: LangfuseSpan, trace: EvalTrace): void => {
+  for (const subagent of trace.subagents) {
+    const observation = parent.startObservation(
+      "subagent",
+      {
+        input: { task: subagent.task },
+        ...(subagent.error
+          ? { output: { error: subagent.error } }
+          : { output: subagent.summary }),
+        metadata: {
+          subagentRunId: subagent.subagentRunId,
+          toolCalls: subagent.toolCalls,
+          startedAt: subagent.startedAt,
+          completedAt: subagent.completedAt,
+          durationMs: subagent.durationMs,
+        },
+      },
+      { asType: "agent" },
+    );
+    observation.end();
+  }
+};
+
 export const langfuseTraceMetadata = (
   trace: EvalTrace,
 ): Record<string, unknown> => ({
@@ -133,6 +156,7 @@ export const langfuseTraceMetadata = (
       : {}),
   },
   ...(trace.processing ? { processing: trace.processing } : {}),
+  subagentCount: trace.subagents.length,
 });
 
 export class LangfuseTraceSink implements EvalTraceSink {
@@ -232,6 +256,8 @@ export class LangfuseTraceSink implements EvalTraceSink {
         if (output !== undefined) worker.update({ output });
         worker.end();
       }
+
+      subagentObservations(root, trace);
 
       const finalizer = root.startObservation("message.finalize", {
         output: trace.processing ?? {},

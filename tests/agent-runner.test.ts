@@ -84,6 +84,7 @@ const makeRunner = (
   const publish = vi.fn();
   const traceRecorder = {
     recordUsage: vi.fn(),
+    recordSubagent: vi.fn(),
   } as unknown as EvalTraceRecorderLike;
   const runner = new AgentRunner({
     config: { ...config, ...overrides },
@@ -147,6 +148,7 @@ describe("AgentRunner", () => {
       "grep",
       "find",
       "ls",
+      "subagent",
     ]);
     expect(harness.events.append).not.toHaveBeenCalled();
     expect(harness.traceRecorder.recordUsage).toHaveBeenCalledWith(
@@ -204,6 +206,66 @@ describe("AgentRunner", () => {
       "find",
       "ls",
     ]);
+  });
+
+  it("runs a read-only subagent with the requested step limit and records it", async () => {
+    const report = "investigation result";
+    aiMocks.generateText.mockImplementation(async (options) => {
+      if (Object.keys(options.tools).includes("subagent")) {
+        const subagentResult = await options.tools.subagent.execute(
+          { task: "Locate the greeting", maxSteps: 2 },
+          {},
+        );
+        expect(subagentResult).toBe(report);
+        return {
+          text: "I found the greeting",
+          toolCalls: [],
+          response: { messages: [] },
+        };
+      }
+      return {
+        text: report,
+        toolCalls: [{ toolName: "read", input: { path: "/workspace/repo/a" } }],
+        response: { messages: [] },
+      };
+    });
+    const harness = makeRunner();
+
+    await expect(harness.runner.process(makeContext())).resolves.toMatchObject({
+      finalText: "I found the greeting",
+    });
+
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+    const subagentOptions = aiMocks.generateText.mock.calls[1]?.[0];
+    expect(subagentOptions).toMatchObject({
+      system: expect.stringContaining("read-only investigation subagent"),
+      messages: [{ role: "user", content: "Locate the greeting" }],
+      stopWhen: "step-count-2",
+    });
+    expect(Object.keys(subagentOptions.tools)).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+    ]);
+    expect(harness.events.append).not.toHaveBeenCalled();
+    expect(harness.traceRecorder.recordSubagent).toHaveBeenCalledWith({
+      messageId: "msg_1",
+      subagent: expect.objectContaining({
+        task: "Locate the greeting",
+        summary: report,
+        toolCalls: [
+          {
+            toolName: "read",
+            input: { path: "/workspace/repo/a" },
+          },
+        ],
+        startedAt: expect.any(String),
+        completedAt: expect.any(String),
+        durationMs: expect.any(Number),
+        subagentRunId: expect.stringContaining("subagent_"),
+      }),
+    });
   });
 
   it("does not resolve the sandbox or call the model after cancellation", async () => {

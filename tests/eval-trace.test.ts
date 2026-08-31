@@ -133,6 +133,18 @@ describe("eval trace normalization", () => {
       brief: "Inspect and fix",
     });
     recorder.recordWorkerResult({ messageId: "msg_1", result: workerResult });
+    recorder.recordSubagent({
+      messageId: "msg_1",
+      subagent: {
+        subagentRunId: "subagent_1",
+        task: "Locate the greeting",
+        toolCalls: [{ toolName: "read" }],
+        summary: "The greeting is in src/greeting.ts",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1000,
+      },
+    });
     recorder.recordOrchestratorReply({
       messageId: "msg_1",
       reply: "Fixed it",
@@ -176,6 +188,17 @@ describe("eval trace normalization", () => {
           usage: { model: "test-model", inputTokens: 3, latencyMs: 8 },
         },
       ],
+      subagents: [
+        {
+          subagentRunId: "subagent_1",
+          task: "Locate the greeting",
+          toolCalls: [{ toolName: "read" }],
+          summary: "The greeting is in src/greeting.ts",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          completedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1000,
+        },
+      ],
     });
     expect(trace?.orchestrator.contextSnapshot?.summary).toBe("Objective: fix");
   });
@@ -196,6 +219,7 @@ describe("eval trace normalization", () => {
       },
       usage: [],
       tools: [],
+      subagents: [],
     });
     expect(metadata).toMatchObject({
       source: "chat",
@@ -229,6 +253,7 @@ describe("local trace export", () => {
         },
         usage: [],
         tools: [],
+        subagents: [],
       });
       const lines = (await readFile(path, "utf8")).trim().split("\n");
       expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({

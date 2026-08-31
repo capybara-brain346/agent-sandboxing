@@ -7,6 +7,7 @@ import type {
   EvalTrace,
   EvalTraceContextSnapshot,
   EvalTraceMessageFacts,
+  EvalTraceSubagent,
   EvalTraceSink,
   EvalTraceToolEvent,
   ModelUsage,
@@ -140,6 +141,7 @@ type TraceState = {
   contextSnapshot?: EvalTraceContextSnapshot;
   workerBriefs: string[];
   workerResults: SessionAgentResult[];
+  subagents: EvalTraceSubagent[];
   usage: Array<{ stage: EvalTraceStage; usage: ModelUsage }>;
   reply?: string;
   delegated: boolean;
@@ -158,6 +160,7 @@ export type EvalTraceRecorderLike = Pick<
   | "recordWorkerBrief"
   | "recordWorkerResult"
   | "recordOrchestratorReply"
+  | "recordSubagent"
   | "recordUsage"
   | "finishProcessing"
 >;
@@ -184,6 +187,7 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
       userPrompt: safeText(input.userPrompt),
       workerBriefs: [],
       workerResults: [],
+      subagents: [],
       usage: [],
       delegated: false,
     });
@@ -217,6 +221,25 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
     state.workerResults.push(safeWorkerResult(input.result));
     state.delegated = true;
     this.callSink("recordWorkerResult", input);
+  }
+
+  recordSubagent(input: {
+    messageId: string;
+    subagent: EvalTraceSubagent;
+  }): void {
+    const state = this.state(input.messageId);
+    state.subagents.push({
+      ...input.subagent,
+      task: safeText(input.subagent.task),
+      summary: safeText(input.subagent.summary, 20_000),
+      toolCalls: safeValue(input.subagent.toolCalls) as unknown[],
+      durationMs: Number.isFinite(input.subagent.durationMs)
+        ? Math.max(0, input.subagent.durationMs)
+        : 0,
+      ...(input.subagent.error
+        ? { error: safeText(input.subagent.error) }
+        : {}),
+    });
   }
 
   recordOrchestratorReply(input: {
@@ -272,6 +295,7 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
         diffPresent: state.processing.diffPresent,
         delegated: state.delegated,
         workerResultCount: state.workerResults.length,
+        subagentCount: state.subagents.length,
         toolEventCount: normalizeToolEvents(input.events).length,
       },
       orchestrator: {
@@ -288,6 +312,7 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
       },
       usage: state.usage,
       tools: normalizeToolEvents(input.events),
+      subagents: state.subagents,
       ...(lastWorker ? { worker: lastWorker } : {}),
       processing: state.processing,
     };
@@ -304,6 +329,7 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
       userPrompt: "",
       workerBriefs: [],
       workerResults: [],
+      subagents: [],
       usage: [],
       delegated: false,
     };
