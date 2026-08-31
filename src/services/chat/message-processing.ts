@@ -56,12 +56,6 @@ const processingFailure = (
   message: error instanceof ServiceError ? error.message : fallback.message,
 });
 
-const workerReportFrom = (error: unknown): string | null => {
-  if (!(error instanceof ServiceError)) return null;
-  const report = error.details.workerReport;
-  return typeof report === "string" ? report : null;
-};
-
 export class MessageProcessingService {
   private readonly executions = new Map<string, MessageExecution>();
 
@@ -161,7 +155,6 @@ export class MessageProcessingService {
           activeMessageId,
           outcome.failure,
           "sandbox_provision",
-          null,
         );
         return;
       }
@@ -189,7 +182,6 @@ export class MessageProcessingService {
         messageId: activeMessageId,
         sandboxId: sandbox.sandboxId,
         summaryPresent: processingResult.summary !== null,
-        workerReportPresent: Boolean(processingResult.workerReport),
       });
       if (await this.waitForCancellation(execution)) return;
 
@@ -216,7 +208,6 @@ export class MessageProcessingService {
           message: "Message processing failed",
         }),
         "message_processing",
-        workerReportFrom(error),
       ).catch(() => undefined);
     } finally {
       execution.processingFinished = true;
@@ -481,7 +472,6 @@ export class MessageProcessingService {
     sessionId: string,
     activeMessageId: string,
     diff: string,
-    workerReport: string | null | undefined,
   ): Promise<ArtifactPreview[]> {
     const jobs: Array<Promise<ArtifactPreview>> = [];
     if (diff.trim())
@@ -492,16 +482,6 @@ export class MessageProcessingService {
           kind: "diff",
           contentType: "text/x-diff",
           content: diff,
-        }),
-      );
-    if (workerReport)
-      jobs.push(
-        this.artifacts.create({
-          sessionId,
-          messageId: activeMessageId,
-          kind: "worker_report",
-          contentType: "application/json",
-          content: workerReport,
         }),
       );
     if (jobs.length === 0) return [];
@@ -561,7 +541,6 @@ export class MessageProcessingService {
       sessionId,
       activeMessageId,
       diff,
-      result.workerReport,
     );
     const assistantMessageId = messageId();
     const events = await runQuery(
@@ -673,11 +652,7 @@ export class MessageProcessingService {
     activeMessageId: string,
     failure: MessageProcessingFailure,
     operation: string,
-    workerReport: string | null,
   ): Promise<boolean> {
-    const artifacts = workerReport
-      ? await this.recordArtifacts(sessionId, activeMessageId, "", workerReport)
-      : [];
     const events = await runQuery(
       "fail_message_processing",
       { sessionId, messageId: activeMessageId, code: failure.code, operation },
@@ -735,16 +710,7 @@ export class MessageProcessingService {
               },
             },
           );
-          return [
-            processingFailed,
-            resultReady,
-            ...(await this.artifactCreatedEvents(
-              tx,
-              sessionId,
-              activeMessageId,
-              artifacts,
-            )),
-          ];
+          return [processingFailed, resultReady];
         }),
     );
     events.forEach((event) => this.publish(event));
@@ -754,13 +720,7 @@ export class MessageProcessingService {
         exitReason: "failed",
         diffBytes: 0,
         diffPresent: false,
-        artifacts: artifacts.map((artifact) => ({
-          artifactId: artifact.artifactId,
-          kind: artifact.kind,
-          byteSize: artifact.byteSize,
-          truncated: artifact.truncated,
-          redacted: artifact.redacted,
-        })),
+        artifacts: [],
         error: {
           code: failure.code,
           message: failure.message,

@@ -4,8 +4,8 @@ import { runQuery } from "../../shared/query-logging";
 import { boundUtf8 } from "../../shared/utf8";
 import type { EventStore } from "../events/event-store";
 import type {
-  OrchestratorChatMessage,
-  OrchestratorContext,
+  SessionChatMessage,
+  SessionContext,
   WorkspaceSnapshot,
 } from "../../types/harness.types";
 
@@ -70,9 +70,9 @@ export class SessionContextBuilder {
     private readonly events: SessionContextEventStore,
   ) {}
 
-  async build(sessionId: string): Promise<OrchestratorContext> {
+  async build(sessionId: string): Promise<SessionContext> {
     const session: SessionSummaryRow = await runQuery(
-      "build_orchestrator_context_session",
+      "build_session_context_session",
       { sessionId },
       () =>
         this.prisma.chatSession.findUnique({
@@ -88,7 +88,7 @@ export class SessionContextBuilder {
       throw notFound("chat_session_not_found", "Chat session was not found");
 
     const messageRows: MessageRow[] = await runQuery(
-      "build_orchestrator_context_messages",
+      "build_session_context_messages",
       { sessionId },
       () =>
         this.prisma.chatMessage.findMany({
@@ -100,13 +100,13 @@ export class SessionContextBuilder {
     );
 
     const messageCount = await runQuery(
-      "build_orchestrator_context_message_count",
+      "build_session_context_message_count",
       { sessionId },
       () => this.prisma.chatMessage.count({ where: { sessionId } }),
     );
 
     const lastMessage: LastMessageRow = await runQuery(
-      "build_orchestrator_context_last_message",
+      "build_session_context_last_message",
       { sessionId },
       () =>
         this.prisma.chatMessage.findFirst({
@@ -151,7 +151,7 @@ export class SessionContextBuilder {
           .map(toolActivityLine)
       : [];
 
-    const recentMessages: OrchestratorChatMessage[] = messageRows
+    const recentMessages: SessionChatMessage[] = messageRows
       .slice()
       .reverse()
       .map((message) => ({ role: message.role, content: message.content }));

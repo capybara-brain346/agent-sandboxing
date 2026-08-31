@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionAgentProcessor } from "../src/services/chat/session-agent-processor";
-import type { OrchestratorContext } from "../src/types/harness.types";
+import type { SessionContext } from "../src/types/harness.types";
 
-const sessionContext: OrchestratorContext = {
+const sessionContext: SessionContext = {
   sessionId: "chat_1",
   repoRef: "./repo",
   summary: "Objective: fix the greeting",

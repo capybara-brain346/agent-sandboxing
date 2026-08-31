@@ -39,7 +39,6 @@ export type MessageProcessingContext = {
 
 export type MessageProcessingResult = {
   summary: string | null;
-  workerReport?: string | null;
 };
 
 export type MessageProcessor = {

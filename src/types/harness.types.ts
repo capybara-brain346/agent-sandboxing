@@ -1,15 +1,3 @@
-export const SESSION_AGENT_STATUSES = [
-  "completed",
-  "blocked",
-  "failed",
-] as const;
-export type SessionAgentStatus = (typeof SESSION_AGENT_STATUSES)[number];
-
-export type SessionAgentResult = {
-  status: SessionAgentStatus;
-  summary: string;
-};
-
 export type AgentResult = {
   finalText: string;
   usage: unknown;
@@ -27,16 +15,16 @@ export type WorkspaceSnapshot = {
   changedFilesHint: string[];
 };
 
-export type OrchestratorChatMessage = {
+export type SessionChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
 };
 
-export type OrchestratorContext = {
+export type SessionContext = {
   sessionId: string;
   repoRef: string;
   summary: string;
-  recentMessages: OrchestratorChatMessage[];
+  recentMessages: SessionChatMessage[];
   recentToolActivity: string[];
   messageCount: number;
   shouldCompact: boolean;

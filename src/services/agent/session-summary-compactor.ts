@@ -1,6 +1,6 @@
 import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
-import type { OrchestratorChatMessage } from "../../types/harness.types";
+import type { SessionChatMessage } from "../../types/harness.types";
 import { getPromptText } from "../../prompts/load-prompt";
 import type { TraceRecorderLike } from "../tracing/trace-recorder";
 import { recordModelUsage } from "../tracing/model-usage";
@@ -18,7 +18,7 @@ const compactedSummarySchema = z
 export type CompactionInput = {
   messageId?: string;
   previousSummary: string;
-  recentMessages: OrchestratorChatMessage[];
+  recentMessages: SessionChatMessage[];
   recentToolActivity: string[];
   signal: AbortSignal;
 };

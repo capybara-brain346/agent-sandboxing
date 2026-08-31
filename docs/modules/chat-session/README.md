@@ -29,9 +29,9 @@ publishes its lifecycle events in the same transaction. The processor then:
 1. Claims the session's active message lock.
 2. Creates or reuses the session sandbox and makes it ready.
 3. Checks out the deterministic GitHub branch `agent/<sessionId>` when needed.
-4. Invokes the Session Agent Processor with the message and session-owned runtime.
-   The processor composes the five context sections and runs the session agent
-   once.
+4. Invokes `SessionAgentProcessor` with the message and session-owned runtime.
+   It composes the five context sections and runs `AgentRunner` once with the
+   main tool profile.
 5. Captures the diff and artifacts, writes the assistant message, and marks the
    user message completed or failed.
 6. Clears the active message lock without stopping the session sandbox.
@@ -126,15 +126,18 @@ that run, and summary compaction. Subagent activity remains internal to the
 parent turn and is recorded in its trace. Traces are application/Langfuse
 observability data only; they are not persisted as database artifacts.
 
-`ArtifactStore` keeps bounded, redacted operational output outside the chat
-context. Artifact reads are scoped to the owning session. The context builder
-does not read artifacts by default.
+`ArtifactStore` keeps bounded, redacted diffs and oversized tool output outside
+the chat context. Artifact reads are scoped to the owning session. The context
+builder does not read artifacts by default. The assistant message is the
+user-facing report; traces are the operator-facing report, and no separate
+agent report artifact is created.
 
 ## Verification
 
 From the repository root:
 
 ```bash
+npm test -- tests/agent-runner.test.ts tests/message-processing.test.ts tests/chat-session-service.test.ts
 npm run typecheck
 npm run lint
 npm test

@@ -35,7 +35,6 @@ trigger processing in that same workspace. There is no run resource.
 - [Remove run concept plan](planning/remove-run-concept-plan.md)
 - [Repo-scoped chat session agent harness Phase 0 decisions](planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)
 - [Repo-scoped chat session agent harness plan](planning/repo-scoped-chat-session-agent-harness-plan.md)
-- [Orchestrator and subagent eval plan](planning/orchestrator-subagent-eval-plan.md)
 - [Single agent harness cutover plan](planning/single-agent-harness-cutover-plan.md)
 - [Container lifecycle TTL upgrade plan](planning/container-lifecycle-ttl-upgrade-plan.md)
 - [Task Service Atomic MVP plan](planning/task-service-atomic-mvp-plan.md)

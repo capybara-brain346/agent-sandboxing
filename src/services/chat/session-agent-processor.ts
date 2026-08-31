@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { ServiceError } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
 import { logger } from "../../logger";
-import type { OrchestratorContext } from "../../types/harness.types";
+import type { SessionContext } from "../../types/harness.types";
 import type {
   MessageProcessingContext,
   MessageProcessingResult,
@@ -13,19 +13,19 @@ import type { SessionAgent } from "../agent/session-agent";
 import type { SessionContextBuilder } from "./session-context-builder";
 import type { SessionSummaryCompactor } from "../agent/session-summary-compactor";
 
-const recentConversation = (context: OrchestratorContext): string =>
+const recentConversation = (context: SessionContext): string =>
   context.recentMessages.length
     ? context.recentMessages
         .map((message) => `${message.role}: ${message.content}`)
         .join("\n")
     : "none.";
 
-const recentToolActivity = (context: OrchestratorContext): string =>
+const recentToolActivity = (context: SessionContext): string =>
   context.recentToolActivity.length
     ? context.recentToolActivity.join("\n")
     : "none.";
 
-const workspaceState = (context: OrchestratorContext): string =>
+const workspaceState = (context: SessionContext): string =>
   [
     `Prior processing: ${context.workspace.hasPriorProcessing ? "yes" : "no"}`,
     `Last processing status: ${context.workspace.lastProcessingStatus ?? "none"}`,
@@ -34,7 +34,7 @@ const workspaceState = (context: OrchestratorContext): string =>
   ].join("\n");
 
 export const composeSessionAgentMessage = (
-  context: OrchestratorContext,
+  context: SessionContext,
   request: string,
 ): string =>
   [
@@ -117,7 +117,7 @@ export class SessionAgentProcessor implements MessageProcessor {
 
   private async compactSummary(
     sessionId: string,
-    context: OrchestratorContext,
+    context: SessionContext,
     messageId: string,
     signal: AbortSignal,
   ): Promise<void> {

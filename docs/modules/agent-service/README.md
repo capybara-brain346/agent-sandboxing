@@ -56,6 +56,19 @@ prompt and the `read`, `grep`, `find`, and `ls` profile, so it cannot write,
 edit, run bash, or use pull request tools. Its report is capped at 20,000
 characters, and its work is internal to the parent turn.
 
+## Single-agent contract
+
+For each user message, `SessionAgentProcessor` builds bounded session context
+and invokes `AgentRunner` once with the `main` profile. `AgentRunner` returns
+the final text, usage, tool calls, and run timestamps to the processor. A
+`subagent` call creates a nested `AgentRunner` invocation with the restricted
+profile; it returns a bounded report to the main agent and never creates a
+separate user-facing message.
+
+Normal completion stores the workspace diff and oversized tool results as
+artifacts. The assistant response and trace contain the agent's report; no
+separate report artifact is created.
+
 ## Processing behavior
 
 The model receives the versioned session-agent prompt and one message containing
@@ -100,6 +113,9 @@ Local trace export, when enabled, writes JSONL to `.data/traces.jsonl` by
 default. Langfuse export uses the existing `LANGFUSE_*` configuration.
 
 ```bash
+npm test -- tests/agent-runner.test.ts tests/message-processing.test.ts tests/chat-session-service.test.ts
 npm run typecheck
-npm test -- tests/agent-runner.test.ts tests/session-agent-processor.test.ts tests/agent-tool-relay.test.ts tests/session-summary.test.ts tests/agent-tools.test.ts
+npm run lint
+npm test
+npm run build
 ```
