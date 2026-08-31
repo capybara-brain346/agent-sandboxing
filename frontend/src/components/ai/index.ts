@@ -1,5 +1,6 @@
 export { PromptBar } from "./PromptBar";
 export { MessageBubble } from "./MessageBubble";
+export { MarkdownMessage } from "./MarkdownMessage";
 export { StreamingText } from "./StreamingText";
 export { ThinkingBlock } from "./ThinkingBlock";
 export { TimelineRow } from "./TimelineRow";
