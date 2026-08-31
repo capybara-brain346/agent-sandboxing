@@ -1,4 +1,4 @@
-import type { WorkerResult } from "../../src/types/harness.types";
+import type { SessionAgentResult } from "../../src/types/harness.types";
 import {
   DATASET_SCORE_NAMES,
   type DatasetCase,
@@ -110,8 +110,8 @@ export const passesDatasetSuiteThreshold = (
     Math.ceil(results.length * 0.95);
 
 export const workerResult = (
-  overrides: Partial<WorkerResult> = {},
-): WorkerResult => ({
+  overrides: Partial<SessionAgentResult> = {},
+): SessionAgentResult => ({
   status: "blocked",
   summary: "No configured worker result was available.",
   ...overrides,

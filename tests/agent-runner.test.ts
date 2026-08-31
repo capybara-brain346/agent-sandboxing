@@ -97,11 +97,6 @@ describe("AgentRunner", () => {
     vi.clearAllMocks();
   });
 
-  const workerOutput = {
-    status: "completed" as const,
-    summary: "completed work",
-  };
-
   it("resolves the owned target and returns the model report text", async () => {
     aiMocks.generateText.mockImplementationOnce(async () => {
       return {
@@ -115,9 +110,13 @@ describe("AgentRunner", () => {
     const harness = makeRunner();
     const debug = vi.spyOn(logger, "debug");
 
-    await expect(harness.runner.process(makeContext())).resolves.toEqual(
-      workerOutput,
-    );
+    await expect(harness.runner.process(makeContext())).resolves.toEqual({
+      finalText: "completed work",
+      usage: undefined,
+      toolCalls: [],
+      startedAt: expect.any(String),
+      completedAt: expect.any(String),
+    });
 
     expect(harness.sandbox.getAgentToolTarget).toHaveBeenCalledWith(
       "chat_1",
@@ -146,16 +145,16 @@ describe("AgentRunner", () => {
     ]);
     expect(harness.events.append).not.toHaveBeenCalled();
     expect(harness.traceRecorder.recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ stage: "worker" }),
+      expect.objectContaining({ stage: "sessionAgent" }),
     );
     expect(debug).toHaveBeenCalledWith(
-      "agent_worker_completed",
+      "session_agent_completed",
       expect.objectContaining({
         sessionId: "chat_1",
         messageId: "msg_1",
         sandboxId: "sbox_1",
         durationMs: expect.any(Number),
-        status: "completed",
+        finalTextPresent: true,
         toolCallCount: 0,
       }),
     );
@@ -166,7 +165,7 @@ describe("AgentRunner", () => {
     debug.mockRestore();
   });
 
-  it("uses a safe report when the worker returns no text", async () => {
+  it("returns empty final text when the agent returns no text", async () => {
     aiMocks.generateText.mockResolvedValueOnce({
       text: "",
       toolCalls: [],
@@ -176,8 +175,10 @@ describe("AgentRunner", () => {
     await expect(
       makeRunner().runner.process(makeContext()),
     ).resolves.toMatchObject({
-      status: "completed",
-      summary: "Worker completed without a final report.",
+      finalText: "",
+      toolCalls: [],
+      startedAt: expect.any(String),
+      completedAt: expect.any(String),
     });
     expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
   });

@@ -1,4 +1,4 @@
-import type { WorkerResult } from "../../types/harness.types";
+import type { SessionAgentResult } from "../../types/harness.types";
 import type {
   EvalTrace,
   EvalTraceContextSummary,
@@ -36,7 +36,7 @@ export class CompositeTraceSink implements EvalTraceSink {
 
   recordWorkerResult(input: {
     messageId: string;
-    result: WorkerResult;
+    result: SessionAgentResult;
   }): void | Promise<void> {
     return this.call((sink) => sink.recordWorkerResult(input));
   }

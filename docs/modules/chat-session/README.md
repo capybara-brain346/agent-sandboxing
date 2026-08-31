@@ -13,8 +13,8 @@ Implementation:
 - [`message-processing.ts`](../../../src/services/chat/message-processing.ts)
   owns asynchronous processing, cancellation, sandbox coordination, and
   terminal result persistence.
-- [`message-orchestrator.ts`](../../../src/services/chat/message-orchestrator.ts)
-  owns context, delegation, and user-facing response construction.
+- [`session-agent-processor.ts`](../../../src/services/chat/session-agent-processor.ts)
+  composes context and invokes the session agent for each user message.
 
 ## Session invariant
 
@@ -29,7 +29,9 @@ publishes its lifecycle events in the same transaction. The processor then:
 1. Claims the session's active message lock.
 2. Creates or reuses the session sandbox and makes it ready.
 3. Checks out the deterministic GitHub branch `agent/<sessionId>` when needed.
-4. Invokes the Agent Service with the message and session-owned runtime.
+4. Invokes the Session Agent Processor with the message and session-owned runtime.
+   The processor composes the five context sections and runs the session agent
+   once.
 5. Captures the diff and artifacts, writes the assistant message, and marks the
    user message completed or failed.
 6. Clears the active message lock without stopping the session sandbox.
@@ -118,8 +120,8 @@ events; provisioning should still include token creation and repository setup.
 ## Agent and artifacts
 
 The chat service injects Agent Service collaborators and contains no provider
-calls. The Agent Service owns model resolution, prompts, tool execution,
-delegation, and summary compaction.
+calls. The Agent Service owns model resolution, prompts, tool execution, the
+single session-agent run, and summary compaction.
 
 `ArtifactStore` keeps bounded, redacted operational output outside the chat
 context. Artifact reads are scoped to the owning session. The context builder

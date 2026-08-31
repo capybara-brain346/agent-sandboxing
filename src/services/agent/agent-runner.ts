@@ -8,13 +8,13 @@ import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
 import { logger } from "../../logger";
 import type { PublicEvent } from "../../types/event.types";
-import type { WorkerResult } from "../../types/harness.types";
+import type { AgentResult } from "../../types/harness.types";
 import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
 import type { MessageProcessingContext } from "../../types/message-processing.types";
 import { createAgentToolRegistry } from "./tools/registry";
 import type { AgentToolConfig } from "./tools/config";
-import type { CodeWorker } from "./code-worker";
+import type { SessionAgent } from "./session-agent";
 import {
   createAbortError,
   isAbortError,
@@ -30,7 +30,7 @@ import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 import { recordModelUsage } from "../eval/model-usage";
 import type { AgentGitHubTools } from "./tools/registry";
 
-export const AGENT_SYSTEM_PROMPT = getPromptText("code-worker");
+export const AGENT_SYSTEM_PROMPT = getPromptText("session-agent");
 
 const toolConfig = (config: Config): AgentToolConfig => ({
   AGENT_BASH_TIMEOUT_MS: config.AGENT_BASH_TIMEOUT_MS,
@@ -89,13 +89,14 @@ export const serializeToolRegistry = <TOOLS extends ToolSet>(
   return Object.fromEntries(entries) as TOOLS;
 };
 
-export class AgentRunner implements CodeWorker {
+export class AgentRunner implements SessionAgent {
   constructor(private readonly dependencies: AgentRunnerDependencies) {}
 
-  async process(context: MessageProcessingContext): Promise<WorkerResult> {
+  async process(context: MessageProcessingContext): Promise<AgentResult> {
     throwIfAborted(context.signal);
     const executionStartedAt = Date.now();
-    logger.debug("agent_worker_started", {
+    const startedAt = new Date().toISOString();
+    logger.debug("session_agent_started", {
       sessionId: context.sessionId,
       messageId: context.messageId,
       sandboxId: context.sandboxId,
@@ -129,7 +130,7 @@ export class AgentRunner implements CodeWorker {
       sessionId: context.sessionId,
     });
 
-    const startedAt = Date.now();
+    const usageStartedAt = Date.now();
     let usageRecorded = false;
     try {
       const result = await generateText({
@@ -151,31 +152,33 @@ export class AgentRunner implements CodeWorker {
       recordModelUsage({
         recorder: this.dependencies.traceRecorder,
         messageId: context.messageId,
-        stage: "worker",
+        stage: "sessionAgent",
         model: this.dependencies.model,
-        startedAt,
+        startedAt: usageStartedAt,
         result,
       });
       usageRecorded = true;
 
-      const workerResult: WorkerResult = {
-        status: "completed",
-        summary:
-          result.text.trim() || "Worker completed without a final report.",
+      const agentResult: AgentResult = {
+        finalText: result.text.trim(),
+        usage: result.usage,
+        toolCalls: result.toolCalls,
+        startedAt,
+        completedAt: new Date().toISOString(),
       };
 
-      logger.debug("agent_worker_completed", {
+      logger.debug("session_agent_completed", {
         sessionId: context.sessionId,
         messageId: context.messageId,
         sandboxId: context.sandboxId,
         durationMs: Date.now() - executionStartedAt,
-        status: workerResult.status,
+        finalTextPresent: agentResult.finalText.length > 0,
         toolCallCount: result.toolCalls.length,
       });
-      return workerResult;
+      return agentResult;
     } catch (error) {
       const cancelled = isAbortError(error) || context.signal.aborted;
-      logger.debug("agent_worker_failed", {
+      logger.debug("session_agent_failed", {
         sessionId: context.sessionId,
         messageId: context.messageId,
         sandboxId: context.sandboxId,
@@ -188,9 +191,9 @@ export class AgentRunner implements CodeWorker {
         recordModelUsage({
           recorder: this.dependencies.traceRecorder,
           messageId: context.messageId,
-          stage: "worker",
+          stage: "sessionAgent",
           model: this.dependencies.model,
-          startedAt,
+          startedAt: usageStartedAt,
           result: {},
         });
       if (isAbortError(error)) throw error;

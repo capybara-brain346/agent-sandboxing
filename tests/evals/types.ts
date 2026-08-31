@@ -1,9 +1,9 @@
 import { z } from "zod";
-import type { WorkerResult } from "../../src/types/harness.types";
+import type { SessionAgentResult } from "../../src/types/harness.types";
 import type { MessageProcessingStatus } from "../../src/types/message-processing.types";
 
 const stringList = z.array(z.string().trim().min(1));
-export const workerResultSchema: z.ZodType<WorkerResult> = z
+export const workerResultSchema: z.ZodType<SessionAgentResult> = z
   .object({
     status: z.enum(["completed", "blocked", "failed"]),
     summary: z.string(),
@@ -65,7 +65,7 @@ export type DatasetCase = z.output<typeof datasetCaseSchema>;
 
 export type DatasetObserved = {
   reply: string;
-  delegations: WorkerResult[];
+  delegations: SessionAgentResult[];
   briefs: string[];
   error?: string;
 };
@@ -206,7 +206,7 @@ export type RepoObserved = {
   diff: string;
   testsRun: string[];
   postProcessingChecks: RepoPostProcessingCheck[];
-  workerReports: WorkerResult[];
+  workerReports: SessionAgentResult[];
   toolEvents: RepoToolEvent[];
   messageIds: string[];
   finalMessage: string;

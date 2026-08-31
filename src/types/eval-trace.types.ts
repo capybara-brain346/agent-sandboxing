@@ -1,7 +1,8 @@
-import type { WorkerResult } from "./harness.types";
+import type { SessionAgentResult } from "./harness.types";
 import type { MessageProcessingStatus } from "./message-processing.types";
 
-export type EvalTraceStage = "orchestrator" | "worker" | "summaryCompaction";
+export type EvalTraceStage =
+  "orchestrator" | "sessionAgent" | "summaryCompaction";
 
 export type ModelUsage = {
   model?: string;
@@ -77,12 +78,12 @@ export type EvalTrace = {
     contextSnapshot?: EvalTraceContextSnapshot;
     delegated: boolean;
     workerBriefs: string[];
-    workerResults: WorkerResult[];
+    workerResults: SessionAgentResult[];
     reply?: string;
   };
   usage: Array<{ stage: EvalTraceStage; usage: ModelUsage }>;
   tools: EvalTraceToolEvent[];
-  worker?: WorkerResult;
+  worker?: SessionAgentResult;
   processing?: EvalTraceMessageFacts;
 };
 
@@ -103,7 +104,7 @@ export type EvalTraceSink = {
   }): void | Promise<void>;
   recordWorkerResult(input: {
     messageId: string;
-    result: WorkerResult;
+    result: SessionAgentResult;
   }): void | Promise<void>;
   recordOrchestratorReply(input: {
     messageId: string;

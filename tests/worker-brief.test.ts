@@ -74,10 +74,12 @@ describe("buildWorkerBrief", () => {
     expect(brief).not.toContain("worker report");
   });
 
-  it("loads prompt contracts that prevent PR success laundering", () => {
-    expect(getPromptText("code-worker")).toContain(
-      "Pull request: published at <url>",
-    );
+  it("loads the session-agent prompt and preserves PR outcome contracts", () => {
+    const prompt = getPromptText("session-agent");
+    expect(prompt).toContain("You are the Session Agent");
+    expect(prompt).not.toContain("CodeWorker");
+    expect(prompt).not.toContain("orchestrator");
+    expect(prompt).toContain("Pull request: published at <url>");
     expect(getPromptText("orchestrator")).toContain(
       "unless the worker reported a published pull request URL",
     );

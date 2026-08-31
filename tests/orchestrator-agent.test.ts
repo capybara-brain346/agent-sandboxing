@@ -5,7 +5,7 @@ import {
   ModelOrchestratorAgent,
   type OrchestratorAgentInput,
 } from "../src/services/agent/orchestrator-agent";
-import type { WorkerResult } from "../src/types/harness.types";
+import type { SessionAgentResult } from "../src/types/harness.types";
 import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 
 const aiMocks = vi.hoisted(() => ({
@@ -17,7 +17,9 @@ vi.mock("ai", async (importOriginal) => {
   return { ...actual, generateText: aiMocks.generateText };
 });
 
-const workerResult = (overrides: Partial<WorkerResult> = {}): WorkerResult => ({
+const workerResult = (
+  overrides: Partial<SessionAgentResult> = {},
+): SessionAgentResult => ({
   status: "completed",
   summary: "Did the work",
   ...overrides,

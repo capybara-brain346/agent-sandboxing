@@ -10,10 +10,10 @@ import {
 import type { RepoObserved } from "./types";
 
 describe("dataset eval suite", () => {
-  it("contains ten cases", () => {
+  it("contains eleven cases", () => {
     const cases = loadDatasetCases();
-    expect(cases).toHaveLength(10);
-    expect(new Set(cases.map((testCase) => testCase.id)).size).toBe(10);
+    expect(cases).toHaveLength(11);
+    expect(new Set(cases.map((testCase) => testCase.id)).size).toBe(11);
   });
 
   it("scores a delegated brief and preserves the transcript boundary", () => {

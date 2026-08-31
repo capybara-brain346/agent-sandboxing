@@ -5,7 +5,7 @@ import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
 import type { PublicEvent } from "../../types/event.types";
 import { AgentRunner } from "../agent/agent-runner";
-import type { CodeWorker } from "../agent/code-worker";
+import type { SessionAgent } from "../agent/session-agent";
 import { resolveAgentModel } from "../agent/model";
 import { ArtifactStore } from "../artifacts/artifact-store";
 import { CompositeTraceSink } from "../eval/composite-trace-sink";
@@ -43,14 +43,17 @@ export const chatGithub = new GitHubService(
 );
 export const shutdownChatTracing = (): Promise<void> => langfuse.shutdown();
 
-const placeholderProcessor: CodeWorker = {
+const placeholderProcessor: SessionAgent = {
   process: async () => ({
-    status: "completed",
-    summary: "",
+    finalText: "",
+    usage: {},
+    toolCalls: [],
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
   }),
 };
 
-export const chatWorker: CodeWorker =
+export const chatAgentRunner: SessionAgent =
   config.NODE_ENV === "test"
     ? placeholderProcessor
     : new AgentRunner({

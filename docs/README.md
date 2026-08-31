@@ -14,7 +14,7 @@ trigger processing in that same workspace. There is no run resource.
 
 - [Chat Session Service](modules/chat-session/README.md) — the product
   boundary: repo-scoped chat, messages, message processing, artifacts, the
-  orchestrator-worker harness, and session SSE APIs.
+  single-agent harness, and session SSE APIs.
 - [Sandbox Service](modules/sandbox-service/README.md) — session-owned
   sandbox runtime, diff capture, and execution-plane behavior.
 - [Event Service](modules/event-service/README.md) — session event persistence,
@@ -36,8 +36,10 @@ trigger processing in that same workspace. There is no run resource.
 - [Repo-scoped chat session agent harness Phase 0 decisions](planning/repo-scoped-chat-session-agent-harness-phase-0-decision-record.md)
 - [Repo-scoped chat session agent harness plan](planning/repo-scoped-chat-session-agent-harness-plan.md)
 - [Orchestrator and subagent eval plan](planning/orchestrator-subagent-eval-plan.md)
+- [Single agent harness cutover plan](planning/single-agent-harness-cutover-plan.md)
 - [Container lifecycle TTL upgrade plan](planning/container-lifecycle-ttl-upgrade-plan.md)
 - [Task Service Atomic MVP plan](planning/task-service-atomic-mvp-plan.md)
 - [Sandbox Service Atomic MVP plan](planning/sandbox-service-atomic-mvp-plan.md)
 - [Agent Service Atomic MVP plan](planning/agent-service-atomic-mvp-plan.md)
 - [Task Service plan prompt](planning/task-service-plan-prompt.md)
+- [Evaluating Coding Agent Harnesses](research/evaluating-coding-agent-harnesses.md) — industry patterns, failure modes, and a practical eval stack for this project.

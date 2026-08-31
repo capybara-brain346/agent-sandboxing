@@ -2,7 +2,7 @@ import { redact } from "../artifacts/artifact-store";
 import { boundUtf8 } from "../../shared/utf8";
 import { logger } from "../../logger";
 import type { PublicEvent } from "../../types/event.types";
-import type { WorkerResult } from "../../types/harness.types";
+import type { SessionAgentResult } from "../../types/harness.types";
 import type {
   EvalTrace,
   EvalTraceContextSnapshot,
@@ -48,7 +48,7 @@ const safeArgs = (value: unknown): Record<string, unknown> => {
   return safeValue(value) as Record<string, unknown>;
 };
 
-const safeWorkerResult = (result: WorkerResult): WorkerResult => ({
+const safeWorkerResult = (result: SessionAgentResult): SessionAgentResult => ({
   status: result.status,
   summary: safeText(result.summary),
 });
@@ -139,7 +139,7 @@ type TraceState = {
   contextSummary?: EvalTrace["orchestrator"]["contextSummary"];
   contextSnapshot?: EvalTraceContextSnapshot;
   workerBriefs: string[];
-  workerResults: WorkerResult[];
+  workerResults: SessionAgentResult[];
   usage: Array<{ stage: EvalTraceStage; usage: ModelUsage }>;
   reply?: string;
   delegated: boolean;
@@ -209,7 +209,10 @@ export class EvalTraceRecorder implements EvalTraceRecorderLike {
     this.callSink("recordWorkerBrief", input);
   }
 
-  recordWorkerResult(input: { messageId: string; result: WorkerResult }): void {
+  recordWorkerResult(input: {
+    messageId: string;
+    result: SessionAgentResult;
+  }): void {
     const state = this.state(input.messageId);
     state.workerResults.push(safeWorkerResult(input.result));
     state.delegated = true;

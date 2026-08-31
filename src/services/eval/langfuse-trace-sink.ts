@@ -8,7 +8,7 @@ import {
 import { redact } from "../artifacts/artifact-store";
 import { logger } from "../../logger";
 import type { Config } from "../../config";
-import type { WorkerResult } from "../../types/harness.types";
+import type { SessionAgentResult } from "../../types/harness.types";
 import type {
   EvalTrace,
   EvalTraceSink,
@@ -55,7 +55,7 @@ const generation = (
   observation.end();
 };
 
-const workerOutput = (results: WorkerResult[]): unknown => {
+const workerOutput = (results: SessionAgentResult[]): unknown => {
   const result = results.at(-1);
   return result
     ? {
@@ -197,10 +197,18 @@ export class LangfuseTraceSink implements EvalTraceSink {
       });
 
       for (const item of trace.usage) {
-        if (item.stage !== "orchestrator" && item.stage !== "summaryCompaction")
+        if (
+          item.stage !== "orchestrator" &&
+          item.stage !== "summaryCompaction" &&
+          (item.stage !== "sessionAgent" || trace.orchestrator.delegated)
+        )
           continue;
         const output =
-          item.stage === "orchestrator" ? trace.orchestrator.reply : undefined;
+          item.stage === "orchestrator"
+            ? trace.orchestrator.reply
+            : item.stage === "sessionAgent"
+              ? (trace.output ?? trace.orchestrator.reply)
+              : undefined;
         generation(root, item.stage, item.usage, output);
       }
 
@@ -216,7 +224,7 @@ export class LangfuseTraceSink implements EvalTraceSink {
           { asType: "agent" },
         );
         for (const item of trace.usage) {
-          if (item.stage === "worker")
+          if (item.stage === "sessionAgent")
             generation(worker, item.stage, item.usage);
         }
         toolObservations(worker, trace);

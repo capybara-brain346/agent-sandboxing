@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LanguageModel } from "ai";
-import type { WorkerResult } from "../../src/types/harness.types";
+import type { SessionAgentResult } from "../../src/types/harness.types";
 import type { ArtifactContent } from "../../src/types/artifact.types";
 import type {
   ChatMessage,
@@ -342,7 +342,7 @@ const readWorkerReport = async (
   service: Pick<RepoEvalChatSessionService, "getArtifact">,
   sessionId: string,
   result: SessionResult,
-): Promise<WorkerResult | null> => {
+): Promise<SessionAgentResult | null> => {
   const artifact = result.artifacts.find(
     (candidate) => candidate.kind === "worker_report",
   );

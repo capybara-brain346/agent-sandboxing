@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { ServiceError } from "../../shared/errors";
 import { runQuery } from "../../shared/query-logging";
 import { logger } from "../../logger";
-import type { CodeWorker } from "../agent/code-worker";
+import type { SessionAgent } from "../agent/session-agent";
 import type {
   MessageProcessingContext,
   MessageProcessingResult,
@@ -10,7 +10,7 @@ import type {
 } from "../../types/message-processing.types";
 import type {
   OrchestratorContext,
-  WorkerResult,
+  SessionAgentResult,
 } from "../../types/harness.types";
 import type { OrchestratorAgent } from "../agent/orchestrator-agent";
 import type { SessionContextBuilder } from "./session-context-builder";
@@ -22,7 +22,7 @@ export class MessageOrchestrator implements MessageProcessor {
     private readonly prisma: Pick<PrismaClient, "chatSession">,
     private readonly contextBuilder: SessionContextBuilder,
     private readonly compactor: SessionSummaryCompactor,
-    private readonly worker: CodeWorker,
+    private readonly worker: SessionAgent,
     private readonly agent: OrchestratorAgent,
     private readonly traceRecorder?: EvalTraceRecorderLike,
   ) {}
@@ -71,15 +71,19 @@ export class MessageOrchestrator implements MessageProcessor {
         },
       },
     });
-    const delegate = async (brief: string): Promise<WorkerResult> => {
+    const delegate = async (brief: string): Promise<SessionAgentResult> => {
       this.traceRecorder?.recordWorkerBrief({
         messageId: context.messageId,
         brief,
       });
-      const result = await this.worker.process({
+      const agentResult = await this.worker.process({
         ...context,
         instructions: brief,
       });
+      const result: SessionAgentResult = {
+        status: "completed",
+        summary: agentResult.finalText,
+      };
       this.traceRecorder?.recordWorkerResult({
         messageId: context.messageId,
         result,
@@ -127,7 +131,7 @@ export class MessageOrchestrator implements MessageProcessor {
     if (lastResult?.status === "failed")
       throw new ServiceError(
         "worker_failed",
-        lastResult.summary || "CodeWorker failed",
+        lastResult.summary || "Session agent failed",
         502,
         { workerReport },
       );

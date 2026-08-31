@@ -1,9 +1,21 @@
-export const WORKER_STATUSES = ["completed", "blocked", "failed"] as const;
-export type WorkerStatus = (typeof WORKER_STATUSES)[number];
+export const SESSION_AGENT_STATUSES = [
+  "completed",
+  "blocked",
+  "failed",
+] as const;
+export type SessionAgentStatus = (typeof SESSION_AGENT_STATUSES)[number];
 
-export type WorkerResult = {
-  status: WorkerStatus;
+export type SessionAgentResult = {
+  status: SessionAgentStatus;
   summary: string;
+};
+
+export type AgentResult = {
+  finalText: string;
+  usage: unknown;
+  toolCalls: unknown[];
+  startedAt: string;
+  completedAt: string;
 };
 
 export type MessageIntent = "clarification" | "code";

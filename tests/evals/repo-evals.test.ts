@@ -14,7 +14,7 @@ import type {
   SessionResult,
 } from "../../src/types/chat.types";
 import type { PublicEvent } from "../../src/types/event.types";
-import type { WorkerResult } from "../../src/types/harness.types";
+import type { SessionAgentResult } from "../../src/types/harness.types";
 import {
   allRepoScoresPass,
   changedFilesFromDiff,
@@ -36,7 +36,7 @@ vi.mock("ai", async (importOriginal) => {
   return { ...actual, generateText: aiMocks.generateText };
 });
 
-const workerReport: WorkerResult = {
+const workerReport: SessionAgentResult = {
   status: "completed",
   summary: "Updated README.md",
 };

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type {
   OrchestratorChatMessage,
   OrchestratorContext,
-  WorkerResult,
+  SessionAgentResult,
 } from "../../types/harness.types";
 import { buildWorkerBrief } from "./worker-brief";
 import { getPromptText } from "../../prompts/load-prompt";
@@ -22,12 +22,12 @@ export type OrchestratorAgentInput = {
   message: string;
   messageId?: string;
   signal: AbortSignal;
-  delegate: (brief: string) => Promise<WorkerResult>;
+  delegate: (brief: string) => Promise<SessionAgentResult>;
 };
 
 export type OrchestratorDecision = {
   reply: string;
-  delegations: WorkerResult[];
+  delegations: SessionAgentResult[];
 };
 
 export type OrchestratorAgent = {
@@ -51,12 +51,12 @@ const toWorkerBriefContext = (
 const ORCHESTRATOR_SYSTEM_PROMPT = getPromptText("orchestrator");
 
 const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
-  const delegations: WorkerResult[] = [];
+  const delegations: SessionAgentResult[] = [];
   let lastCorrection: string | undefined;
 
   const delegateTool = tool({
     description:
-      "Delegate a bounded, sandboxed coding attempt to the CodeWorker. " +
+      "Delegate a bounded, sandboxed coding attempt to the session agent. " +
       "Only call this for imperative, actionable requests — never for " +
       "questions about past work or general conversation.",
     inputSchema: z.object({
@@ -68,7 +68,7 @@ const createDelegationTool = ({ context, delegate }: DelegationToolInput) => {
       const previousResult = delegations.at(-1);
       if (previousResult?.status === "failed") return previousResult;
       if (delegations.length >= MAX_DELEGATIONS_PER_TURN) {
-        const blocked: WorkerResult = {
+        const blocked: SessionAgentResult = {
           status: "blocked",
           summary: "Delegation budget for this turn is exhausted.",
         };

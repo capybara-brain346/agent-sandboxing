@@ -11,9 +11,9 @@ import { LocalTraceSink } from "../src/services/eval/local-trace-sink";
 import { langfuseTraceMetadata } from "../src/services/eval/langfuse-trace-sink";
 import type { EvalTraceSink } from "../src/types/eval-trace.types";
 import type { PublicEvent } from "../src/types/event.types";
-import type { WorkerResult } from "../src/types/harness.types";
+import type { SessionAgentResult } from "../src/types/harness.types";
 
-const workerResult: WorkerResult = {
+const workerResult: SessionAgentResult = {
   status: "completed",
   summary: "Updated the file",
 };
@@ -140,7 +140,7 @@ describe("eval trace normalization", () => {
     });
     recorder.recordUsage({
       messageId: "msg_1",
-      stage: "worker",
+      stage: "sessionAgent",
       usage: { model: "test-model", inputTokens: 3, latencyMs: 8 },
     });
     await recorder.finishProcessing({
@@ -172,7 +172,7 @@ describe("eval trace normalization", () => {
       },
       usage: [
         {
-          stage: "worker",
+          stage: "sessionAgent",
           usage: { model: "test-model", inputTokens: 3, latencyMs: 8 },
         },
       ],

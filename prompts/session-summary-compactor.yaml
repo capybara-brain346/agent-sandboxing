@@ -11,7 +11,7 @@ prompt: |
   summary you produce is the only memory this session keeps between calls.
 
   You are given the previous summary (if any), the recent chat messages
-  since then, and recent tool activity from the last CodeWorker run.
+  since then, and recent tool activity from the last session-agent run.
   Produce an updated summary with five fields:
 
   - objective: the user's overall goal for this session. Carry it forward
