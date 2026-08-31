@@ -1,0 +1,9 @@
+profiles:
+  main:
+    all: true
+  subagent:
+    tools:
+      - read
+      - grep
+      - find
+      - ls

@@ -7,6 +7,7 @@ import type { PublicEvent } from "../src/types/event.types";
 import type { MessageProcessingContext } from "../src/types/message-processing.types";
 import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
 import { logger } from "../src/logger";
+import type { ToolProfileName } from "../src/services/agent/tools/profile-loader";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -55,7 +56,10 @@ const makeContext = (
   messageId: "msg_1",
 });
 
-const makeRunner = (overrides: Partial<Config> = {}) => {
+const makeRunner = (
+  overrides: Partial<Config> = {},
+  profile: ToolProfileName = "main",
+) => {
   const runtime = {
     simpleExec: vi.fn(async () => ({
       stdout: "ok",
@@ -87,6 +91,7 @@ const makeRunner = (overrides: Partial<Config> = {}) => {
     events: events as unknown as Pick<EventStore, "append">,
     model: {} as LanguageModel,
     publish,
+    profile,
     traceRecorder,
   });
   return { runner, sandbox, events, publish, target, traceRecorder };
@@ -181,6 +186,24 @@ describe("AgentRunner", () => {
       completedAt: expect.any(String),
     });
     expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a restricted profile to the model loop", async () => {
+    aiMocks.generateText.mockResolvedValueOnce({
+      text: "completed investigation",
+      toolCalls: [],
+      response: { messages: [] },
+    });
+    const harness = makeRunner({}, "subagent");
+
+    await harness.runner.process(makeContext());
+
+    expect(Object.keys(aiMocks.generateText.mock.calls[0]?.[0].tools)).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+    ]);
   });
 
   it("does not resolve the sandbox or call the model after cancellation", async () => {

@@ -29,6 +29,7 @@ import { getPromptText } from "../../prompts/load-prompt";
 import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
 import { recordModelUsage } from "../eval/model-usage";
 import type { AgentGitHubTools } from "./tools/registry";
+import type { ToolProfileName } from "./tools/profile-loader";
 
 export const AGENT_SYSTEM_PROMPT = getPromptText("session-agent");
 
@@ -50,6 +51,7 @@ export type AgentRunnerDependencies = {
   events: Pick<EventStore, "append">;
   model: LanguageModel;
   publish: PublishEvent;
+  profile: ToolProfileName;
   artifacts?: ArtifactRecorder;
   traceRecorder?: EvalTraceRecorderLike;
   github?: AgentGitHubTools;
@@ -115,6 +117,7 @@ export class AgentRunner implements SessionAgent {
         context.signal,
         { sessionId: context.sessionId, messageId: context.messageId },
         this.dependencies.github,
+        this.dependencies.profile,
       ),
     );
     const relay = new ToolEventRelay({

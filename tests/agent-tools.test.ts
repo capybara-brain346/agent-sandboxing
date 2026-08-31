@@ -12,6 +12,11 @@ import { createPullRequestTool } from "../src/services/agent/tools/pull-request"
 import { createReadTool } from "../src/services/agent/tools/read";
 import { createToolRegistry } from "../src/services/agent/tools/registry";
 import { createWriteTool } from "../src/services/agent/tools/write";
+import {
+  getToolProfile,
+  loadToolProfiles,
+  validateToolProfiles,
+} from "../src/services/agent/tools/profile-loader";
 import type { SimpleExecResult } from "../src/types/sandbox.types";
 
 const config = {
@@ -67,6 +72,40 @@ describe("sandbox-proxied agent tools", () => {
       "find",
       "ls",
     ]);
+  });
+
+  it("loads the all-tools and restricted profiles", () => {
+    const profiles = loadToolProfiles();
+    expect(getToolProfile(profiles, "main")).toEqual({ all: true });
+    expect(
+      Object.keys(
+        createToolRegistry(
+          runtime(success()),
+          "sandbox-1",
+          config,
+          signal,
+          undefined,
+          undefined,
+          "subagent",
+        ),
+      ),
+    ).toEqual(["read", "grep", "find", "ls"]);
+  });
+
+  it("rejects profiles that reference an unregistered tool", () => {
+    const profiles = loadToolProfiles();
+    expect(() =>
+      validateToolProfiles(
+        {
+          ...profiles,
+          profiles: {
+            ...profiles.profiles,
+            restricted: { tools: ["missing"] },
+          },
+        },
+        ["read", "grep", "find", "ls"],
+      ),
+    ).toThrow('Tool profile "restricted" references missing tool "missing"');
   });
 
   it("registers backend-owned GitHub pull request tools", () => {

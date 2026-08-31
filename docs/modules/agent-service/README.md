@@ -11,8 +11,11 @@ does not call the persisted command API.
 Implementation:
 
 - [`AgentRunner`](../../../src/services/agent/agent-runner.ts) runs the model
-  loop and tool registry, returning an `AgentResult` with final text, usage,
-  tool calls, and run timestamps.
+  loop through a named tool profile, returning an `AgentResult` with final text,
+  usage, tool calls, and run timestamps.
+- [`profile-loader.ts`](../../../src/services/agent/tools/profile-loader.ts)
+  loads and validates the main and restricted tool profiles from
+  [`profiles.yaml`](../../../src/services/agent/tools/profiles/profiles.yaml).
 - [`session-agent.ts`](../../../src/services/agent/session-agent.ts) defines
   the session-agent runner seam.
 - [`session-agent-processor.ts`](../../../src/services/chat/session-agent-processor.ts)
@@ -39,7 +42,8 @@ sessions also receive brokered pull request tools.
 
 The agent response is prose. Changed files, pull request state, artifacts, and
 terminal processing state are derived from persisted backend records rather than
-model claims.
+model claims. The main profile exposes all registered tools; restricted profiles
+expose only their explicit tool lists.
 
 ## Processing behavior
 

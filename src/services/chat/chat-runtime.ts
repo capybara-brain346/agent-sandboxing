@@ -62,6 +62,7 @@ export const chatAgentRunner: SessionAgent =
         events,
         model: resolveAgentModel(config),
         publish,
+        profile: "main",
         artifacts: chatArtifacts,
         traceRecorder: chatTraceRecorder,
         github: chatGithub,

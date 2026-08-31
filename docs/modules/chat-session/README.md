@@ -120,8 +120,8 @@ events; provisioning should still include token creation and repository setup.
 ## Agent and artifacts
 
 The chat service injects Agent Service collaborators and contains no provider
-calls. The Agent Service owns model resolution, prompts, tool execution, the
-single session-agent run, and summary compaction.
+calls. The Agent Service owns model resolution, prompts, profile-driven tool
+execution, the single session-agent run, and summary compaction.
 
 `ArtifactStore` keeps bounded, redacted operational output outside the chat
 context. Artifact reads are scoped to the owning session. The context builder
