@@ -60,6 +60,23 @@ For bug fixes, reproduce the failure with a test when practical, verify the
 expected failing reason, implement the fix, and run the regression checks.
 Test observable behavior rather than implementation details.
 
+Do not introduce new:
+
+- services
+- libraries
+- databases
+- queues
+- architectural patterns
+- abstractions
+- background workers
+- state management systems
+
+without explicitly explaining why and asking me first.
+
+Implement only the architecture I specify.
+
+If my design has problems, point them out before writing code rather than silently redesigning it.
+
 ## Commits
 
 Commit messages must be specific, detailed, and production-level: describe the

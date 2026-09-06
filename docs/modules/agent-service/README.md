@@ -109,10 +109,19 @@ provider commands.
 `AGENT_MODEL` and `OPENROUTER_API_KEY` are loaded centrally. The key remains in
 the control plane and is never forwarded to the sandbox.
 
+Agent evals live under [`tests/evals`](../../../tests/evals). They run
+`AgentRunner` against the real configured model with an in-memory runtime that
+implements only the command forms emitted by the agent tools. They intentionally
+exclude the real sandbox service, GitHub service, workspace lifecycle, Prisma,
+and HTTP routes. Add new behavior checks as data-only case files under
+[`tests/evals/cases`](../../../tests/evals/cases) and list them in the case
+index.
+
 Local trace export, when enabled, writes JSONL to `.data/traces.jsonl` by
 default. Langfuse export uses the existing `LANGFUSE_*` configuration.
 
 ```bash
+npm run eval:agent
 npm test -- tests/agent-runner.test.ts tests/message-processing.test.ts tests/chat-session-service.test.ts
 npm run typecheck
 npm run lint

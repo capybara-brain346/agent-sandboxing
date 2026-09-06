@@ -5,6 +5,13 @@
 - [Agent Sandboxing Project](agent-sandboxing-project.md) — product direction,
   scope, and broader architecture.
 
+## Diagrams
+
+- [Overall product architecture](diagrams/overall-product.excalidraw)
+- [Sandbox flow](diagrams/sandbox-flow.excalidraw)
+- [Agent and harness architecture](diagrams/agent-and-harness.excalidraw)
+- [GitHub flow](diagrams/github-flow.excalidraw)
+
 ## Current Chat Invariant
 
 A chat session owns one sandbox and one working branch. Each user message may
