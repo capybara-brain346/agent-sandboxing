@@ -28,5 +28,14 @@ export default {
       "src/settings.ts": ['mode: "development"'],
     },
   },
+  validate: (transcript) => {
+    const firstRead = transcript.toolCalls.indexOf("read");
+    const firstEdit = transcript.toolCalls.indexOf("edit");
+    return firstRead >= 0 && firstRead < firstEdit
+      ? []
+      : [
+          "expected the first read tool call to precede the first edit tool call",
+        ];
+  },
   maxSteps: 6,
 } satisfies AgentEvalCase;

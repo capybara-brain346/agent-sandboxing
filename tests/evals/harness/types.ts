@@ -5,6 +5,7 @@ export type AgentEvalCase = {
   prompt: string;
   files: Record<string, string>;
   expected: AgentEvalExpected;
+  validate?: (transcript: AgentEvalTranscript) => string[];
   maxSteps?: number;
 };
 

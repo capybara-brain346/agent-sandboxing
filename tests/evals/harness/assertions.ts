@@ -91,5 +91,7 @@ export const assertAgentEval = (
       );
   }
 
+  if (evalCase.validate) failures.push(...evalCase.validate(transcript));
+
   return failures;
 };
