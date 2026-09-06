@@ -113,15 +113,22 @@ Agent evals live under [`tests/evals`](../../../tests/evals). They run
 `AgentRunner` against the real configured model with an in-memory runtime that
 implements only the command forms emitted by the agent tools. They intentionally
 exclude the real sandbox service, GitHub service, workspace lifecycle, Prisma,
-and HTTP routes. Add new behavior checks as case files under
-[`tests/evals/cases`](../../../tests/evals/cases) and list them in the case
-index. Cases are declarative by default; a case may supply a narrowly scoped
+and HTTP routes. Add new behavior checks to the appropriate category module
+under [`tests/evals/cases`](../../../tests/evals/cases); add new category
+modules to the case index. Each category module is declarative and exports an
+`AgentEvalCase[]`, currently containing its one existing case. The index owns
+the catalogue and flattens those arrays in category order; it does not execute
+evals. Cases are declarative by default; a case may supply a narrowly scoped
 validation procedure when behavior cannot be expressed by shared expectations.
-The suite covers all 15 case-based policy and tool-use scenarios in the eval
-catalogue while retaining this real-model/in-memory-runtime boundary.
+The catalogue currently contains 15 policy categories and 15 cases. The future
+target is ten independently reported variants per category, for 150 model
+runs, while `runAgentEval` and `assertAgentEval` remain single-case APIs.
 
 Local trace export, when enabled, writes JSONL to `.data/traces.jsonl` by
 default. Langfuse export uses the existing `LANGFUSE_*` configuration.
+Open `tests/evals/results-viewer.html` locally and select
+`.data/evals/agent-service.jsonl` to inspect the latest result for each eval
+case without starting the application.
 
 ```bash
 npm run eval:agent

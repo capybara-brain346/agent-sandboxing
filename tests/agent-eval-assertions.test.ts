@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import inspectBeforeEdit from "../cases/inspect-before-edit";
-import { assertAgentEval } from "./assertions";
-import type { AgentEvalCase, AgentEvalTranscript } from "./types";
+import inspectBeforeEditCases from "./evals/cases/inspect-before-edit";
+import { assertAgentEval } from "./evals/harness/assertions";
+import type { AgentEvalCase, AgentEvalTranscript } from "./evals/harness/types";
 
 const transcript = (toolCalls: string[]): AgentEvalTranscript => ({
   finalText: "done",
@@ -20,7 +20,7 @@ const evalCase = (overrides: Partial<AgentEvalCase> = {}): AgentEvalCase => ({
 });
 
 const inspectOrderingCase: AgentEvalCase = {
-  ...inspectBeforeEdit,
+  ...inspectBeforeEditCases[0]!,
   expected: {},
 };
 
