@@ -115,7 +115,8 @@ implements only the command forms emitted by the agent tools. They intentionally
 exclude the real sandbox service, GitHub service, workspace lifecycle, Prisma,
 and HTTP routes. Add new behavior checks as data-only case files under
 [`tests/evals/cases`](../../../tests/evals/cases) and list them in the case
-index.
+index. The suite covers all 15 case-based policy and tool-use scenarios in the
+eval catalogue while retaining this real-model/in-memory-runtime boundary.
 
 Local trace export, when enabled, writes JSONL to `.data/traces.jsonl` by
 default. Langfuse export uses the existing `LANGFUSE_*` configuration.
