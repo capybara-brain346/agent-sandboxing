@@ -1,0 +1,9 @@
+Verify your email - {{ site_name }}
+
+Hello {{ user.username }},
+
+Click the link below to verify your email address. This link will expire in 15 minutes.
+
+{{ magic_link_url }}
+
+If you didn't request this email, you can safely ignore it.

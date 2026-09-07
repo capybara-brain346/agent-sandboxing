@@ -1,0 +1,5 @@
+{
+  "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap": "@font-face {\n  font-family: 'IBM Plex Mono';\n  font-style: normal;\n  font-weight: 400 500 600;\n  src: url(https://fonts.gstatic.com/s/ibm-plex-mono.woff2) format('woff2');\n}\n",
+  "https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap": "@font-face {\n  font-family: 'Inter';\n  font-style: normal;\n  font-weight: 100 900;\n  src: url(https://fonts.gstatic.com/s/inter.woff2) format('woff2');\n}\n",
+  "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@200..800&display=swap": "@font-face {\n  font-family: 'Plus Jakarta Sans';\n  font-style: normal;\n  font-weight: 200 800;\n  src: url(https://fonts.gstatic.com/s/plus-jakarta-sans.woff2) format('woff2');\n}\n"
+}

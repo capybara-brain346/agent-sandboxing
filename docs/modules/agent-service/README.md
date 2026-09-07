@@ -109,7 +109,9 @@ provider commands.
 `AGENT_MODEL` and `OPENROUTER_API_KEY` are loaded centrally. The key remains in
 the control plane and is never forwarded to the sandbox.
 
-Agent evals live under [`tests/evals`](../../../tests/evals). They run
+Agent evals live under [`tests/evals`](../../../tests/evals). Their policy
+harness lives beside the cases in
+[`tests/evals/cases/harness`](../../../tests/evals/cases/harness). They run
 `AgentRunner` against the real configured model with an in-memory runtime that
 implements only the command forms emitted by the agent tools. They intentionally
 exclude the real sandbox service, GitHub service, workspace lifecycle, Prisma,
@@ -129,6 +131,34 @@ default. Langfuse export uses the existing `LANGFUSE_*` configuration.
 Open `tests/evals/results-viewer.html` locally and select
 `.data/evals/agent-service.jsonl` to inspect the latest result for each eval
 case without starting the application.
+
+Policy evals and full-stack E2E evals are separate. Policy evals exercise the
+agent runner with a fake runtime and cover prompt, tool-policy, and reporting
+behavior. The CapyNodes E2E evaluator under
+[`tests/evals/e2e`](../../../tests/evals/e2e) drives the authenticated public
+chat-session API, provisions a real session sandbox from a task Git fixture,
+collects session SSE events, and runs hidden deterministic oracles in an
+isolated no-network container. It does not call agent or sandbox services
+directly. For every command ID in a command start or terminal event, the SSE
+evidence must contain exactly one `command_started` followed by exactly one
+terminal event (`command_completed`, `command_failed`, `command_timed_out`, or
+`command_cancelled`).
+
+Build the dedicated image before starting the test-only Compose override:
+
+```bash
+docker build -f tests/evals/e2e/Dockerfile -t capynodes-e2e:latest .
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build
+E2E_SANDBOX_IMAGE=capynodes-e2e:latest BASE_URL=http://localhost:3000 npm run eval:e2e
+```
+
+The evaluator requires a healthy API, Docker, the mounted
+`.data/evals/e2e/fixtures` root, `OPENROUTER_API_KEY`, and the matching
+`AUTH_COOKIE_SECRET`. It runs known-good and known-bad hidden-oracle smoke
+checks before live model calls, executes the four cases sequentially, writes
+`.data/evals/e2e/capynodes.jsonl`, and removes evaluator-created fixtures and
+sandbox containers after each case. The committed CapyNodes snapshot is
+`repo/capynodes-backend`; hidden tests are staged only in the grader checkout.
 
 ```bash
 npm run eval:agent

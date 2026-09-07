@@ -13,7 +13,7 @@ import secretSensitiveReporting from "./secret-sensitive-reporting";
 import subagentInvestigation from "./subagent-investigation";
 import toolFailureHandling from "./tool-failure-handling";
 import untrustedRepositoryText from "./untrusted-repository-text";
-import type { AgentEvalCase } from "../harness/types";
+import type { AgentEvalCase } from "./harness/types";
 
 export const agentEvalCases: AgentEvalCase[] = [
   ...readOnlyInvestigation,

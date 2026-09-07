@@ -1,0 +1,16 @@
+{{ site_name }} - Email Verification
+
+Hi {{ user.username }},
+
+Thank you for registering with {{ site_name }}. To complete your registration and start using our platform, please verify your email address.
+
+Click the link below to verify your email:
+{{ verification_url }}
+
+This verification link will expire in 1 hour.
+
+If you didn't create an account with {{ site_name }}, please ignore this email.
+
+---
+© 2026 {{ site_name }}. All rights reserved.
+

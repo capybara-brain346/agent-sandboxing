@@ -229,9 +229,17 @@ These are safe engineering-level specifics, not product-impact metrics:
 - tool-event result snippet cap: 500 bytes;
 - repository discovery page size: 20 repositories with cursor pagination;
 - event sequences are positive and strictly increasing per session; and
-- the current agent evaluation index contains five data-only cases: read-only
-  investigation, minimal localized edit, no-op when satisfied, destructive
-  request, and subagent investigation.
+- the current agent evaluation index contains 15 policy categories and 150
+  independently reported model-backed cases: read-only investigation, minimal
+  localized edit, no-op when satisfied, destructive request, subagent
+  investigation, inspect-before-edit ordering, scope control, missing targets,
+  ambiguous targets, tool-failure handling, untrusted repository text,
+  secret-sensitive reporting, path and shell safety, contradictory
+  constraints, and outcome honesty; and
+- each case runs against a bounded in-memory runtime, with shared assertions
+  for changed and unchanged files, required or forbidden tools, final-response
+  content, file-content constraints, change-count limits, and destructive
+  commands, plus narrowly scoped transcript validation where needed.
 
 Sources:
 
@@ -243,7 +251,43 @@ Sources:
 - `/home/capybara/code/agent-sandboxing/src/services/agent/tools/profiles/profiles.yaml:1-9`
 - `/home/capybara/code/agent-sandboxing/src/services/agent/tools/subagent.ts:7-8`
 - `/home/capybara/code/agent-sandboxing/src/services/agent/tool-event-relay.ts`
-- `/home/capybara/code/agent-sandboxing/tests/evals/cases/index.ts:1-14`
+- `/home/capybara/code/agent-sandboxing/tests/evals/cases/index.ts:1-34`
+- `/home/capybara/code/agent-sandboxing/tests/evals/cases/harness/fake-runtime.ts:1-169`
+
+## Observed local timing snapshot
+
+The running Docker Postgres database contained 1,790 persisted session events
+dated 2026-08-27 through 2026-08-31. The measurements below are calculated
+from those historical events. They span mixed GitHub-backed sessions, do not
+record the machine, repository size, image-cache state, or model/provider
+conditions, and are therefore exploratory engineering observations, not
+resume claims or production SLOs.
+
+- 20 cold provisions measured from `message_processing_requested` to
+  `sandbox_ready`: 3,072 ms p50 and 17,199 ms p95. The narrower
+  `sandbox_provisioning_started` to `sandbox_ready` span was 2,924 ms p50 and
+  16,781 ms p95.
+- 16 messages submitted after their session had already emitted
+  `sandbox_ready`, measured from `message_processing_requested` to
+  `message_processing_completed`: 60,621 ms p50 and 141,134 ms p95. This is
+  full warm-message latency: it includes model, tool, diff, and persistence
+  work rather than isolating orchestration.
+- 603 persisted `agent_tool_result` durations were available. Common local
+  workspace tools measured: `bash` (288 samples, 82 ms p50, 226 ms p95),
+  `read` (130, 154 ms, 756 ms), `ls` (68, 157 ms, 369 ms), `find` (50,
+  138 ms, 302 ms), `grep` (34, 146 ms, 377 ms), and `edit` (14, 184 ms,
+  374 ms).
+
+The current event store cannot establish browser SSE delivery latency because
+it records server-side persistence time, not client receipt time. It also
+cannot reconstruct peak sandbox memory because no time-series container memory
+samples are persisted. GitHub API durations are emitted only as structured
+debug logs, and those historical logs were not available in the Docker stack.
+
+To make a resume-usable performance claim, rerun a controlled fixture workload
+with a recorded machine, repository, image-cache state, model configuration,
+and at least 30 samples. Browser receipt timing and peak memory need separate
+client-side and container-sampling capture during that run.
 
 ## Verification and quality evidence
 
@@ -256,7 +300,12 @@ The repository defines and implements checks for:
 - event persistence, ordering, transactional publication, and SSE replay;
 - GitHub repository/branch access, API timing instrumentation, branch safety,
   and pull-request behavior;
-- five model-backed agent evaluation cases using a bounded in-memory runtime;
+- 15 policy categories with 150 model-backed agent evaluation cases using a
+  bounded in-memory runtime;
+- declarative eval expectations plus per-case transcript validation for
+  interaction-order checks such as read-before-edit;
+- JSONL result export at `.data/evals/agent-service.jsonl` and a standalone
+  results viewer that keeps the latest record for each case;
 - TypeScript typechecking, ESLint, the full Vitest suite, and production build.
 
 Primary sources:
@@ -264,8 +313,13 @@ Primary sources:
 - `/home/capybara/code/agent-sandboxing/docs/modules/chat-session/README.md:101-145`
 - `/home/capybara/code/agent-sandboxing/docs/modules/sandbox-service/README.md:74-82`
 - `/home/capybara/code/agent-sandboxing/docs/modules/event-service/README.md:91-95`
-- `/home/capybara/code/agent-sandboxing/docs/modules/agent-service/README.md:107-129`
-- `/home/capybara/code/agent-sandboxing/tests/evals/harness/run-agent-eval.ts:34-109`
+- `/home/capybara/code/agent-sandboxing/tests/evals/cases/index.ts:1-34`
+- `/home/capybara/code/agent-sandboxing/tests/evals/cases/harness/types.ts:3-46`
+- `/home/capybara/code/agent-sandboxing/tests/evals/cases/harness/assertions.ts:3-97`
+- `/home/capybara/code/agent-sandboxing/tests/evals/cases/harness/run-agent-eval.ts:34-125`
+- `/home/capybara/code/agent-sandboxing/tests/evals/cases/harness/report.ts:1-18`
+- `/home/capybara/code/agent-sandboxing/tests/evals/results-viewer.html:101-211`
+- `/home/capybara/code/agent-sandboxing/tests/agent-eval-assertions.test.ts:1-71`
 - `/home/capybara/code/agent-sandboxing/package.json` (`test`, `typecheck`,
   `lint`, `build`, and `eval:agent` scripts)
 
@@ -285,6 +339,8 @@ verification surface; they do not record pass/fail results. Do not write
 - Postgres-backed ordered event store and replay-safe SSE;
 - diff/artifact capture and safe tool/trace observability;
 - GitHub repository/branch selection and backend-brokered PR publishing;
+- 15 policy categories with 150 model-backed agent evaluation cases and
+  inspectable per-case results;
 - React/Vite frontend using the documented session API.
 
 ### Phrase cautiously
@@ -326,9 +382,10 @@ style:
   couples lifecycle events to state transactions and closes the reconnect/live
   delivery race with cursor replay and buffering.
 - Added profile-governed read-only subagents, bounded/redacted artifacts and
-  traces, and model-backed evaluations covering minimal edits, no-op behavior,
-  destructive requests, read-only investigation, and capability-limited
-  subagent investigation.
+  traces, and 150 model-backed evaluations across 15 policy categories,
+  including minimal edits, no-op behavior, destructive requests, read-only
+  investigation, safety boundaries, instruction conflicts, and outcome
+  honesty.
 
 The downstream writer should select only the angles that match the target role
 and avoid turning the directions above into unsupported impact claims.

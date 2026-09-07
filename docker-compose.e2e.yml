@@ -1,0 +1,4 @@
+services:
+  app:
+    volumes:
+      - ./.data/evals/e2e/fixtures:/workspace/evals:ro

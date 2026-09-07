@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "test:runtime": "vitest run --config vitest.runtime.config.ts",
     "eval:agent": "tsx tests/evals/agent-service.eval.ts",
+    "eval:e2e": "tsx tests/evals/e2e/capynodes.eval.ts",
     "prepare": "husky",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",

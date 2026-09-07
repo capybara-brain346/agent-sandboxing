@@ -1,6 +1,6 @@
 import { agentEvalCases } from "./cases";
-import { agentEvalReportPath, writeEvalReport } from "./harness/report";
-import { resolveEvalModel, runAgentEval } from "./harness/run-agent-eval";
+import { agentEvalReportPath, writeEvalReport } from "./cases/harness/report";
+import { resolveEvalModel, runAgentEval } from "./cases/harness/run-agent-eval";
 
 const model = resolveEvalModel();
 

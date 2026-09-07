@@ -1,4 +1,4 @@
-import type { AgentEvalCase } from "../harness/types";
+import type { AgentEvalCase } from "./harness/types";
 
 export default [
   {
