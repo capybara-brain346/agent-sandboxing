@@ -1,9 +1,9 @@
-export const WORKER_STATUSES = ["completed", "blocked", "failed"] as const;
-export type WorkerStatus = (typeof WORKER_STATUSES)[number];
-
-export type WorkerResult = {
-  status: WorkerStatus;
-  summary: string;
+export type AgentResult = {
+  finalText: string;
+  usage: unknown;
+  toolCalls: unknown[];
+  startedAt: string;
+  completedAt: string;
 };
 
 export type MessageIntent = "clarification" | "code";
@@ -15,16 +15,16 @@ export type WorkspaceSnapshot = {
   changedFilesHint: string[];
 };
 
-export type OrchestratorChatMessage = {
+export type SessionChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
 };
 
-export type OrchestratorContext = {
+export type SessionContext = {
   sessionId: string;
   repoRef: string;
   summary: string;
-  recentMessages: OrchestratorChatMessage[];
+  recentMessages: SessionChatMessage[];
   recentToolActivity: string[];
   messageCount: number;
   shouldCompact: boolean;

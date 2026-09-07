@@ -10,6 +10,7 @@ import type { PublicEvent } from "../../types/event.types";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
 import { ServiceError } from "../../shared/errors";
 import { boundUtf8 } from "./tools/helpers";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
 
 const RESULT_SNIPPET_MAX_BYTES = 500;
 
@@ -26,6 +27,9 @@ export type ToolEventRelayDependencies = {
   publish: PublishEvent;
   /** When set, session-scoped tool results too large for the event snippet are stored here for on-demand fetch. */
   artifacts?: ArtifactRecorder;
+  traceRecorder?: TraceRecorderLike;
+  agentRunId?: string;
+  emitEvents?: boolean;
 };
 
 export type ToolEventRelayCallbacks<TOOLS extends ToolSet> = {
@@ -94,6 +98,15 @@ export class ToolEventRelay {
     event: ToolExecutionStartEvent,
   ): Promise<void> {
     const correlationId = this.startCorrelation(event.callId);
+    const startedAt = new Date().toISOString();
+    this.dependencies.traceRecorder?.recordToolCallStart?.({
+      messageId: context.messageId,
+      agentRunId: this.dependencies.agentRunId ?? context.messageId,
+      correlationId,
+      toolName: event.toolCall.toolName,
+      args: safeToolArgs(event.toolCall.toolName, event.toolCall.input),
+      startedAt,
+    });
     await this.appendAndPublish(
       this.eventInput(context, correlationId, "agent_tool_call", {
         tool_name: event.toolCall.toolName,
@@ -107,6 +120,7 @@ export class ToolEventRelay {
     event: ToolExecutionEndEvent,
   ): Promise<void> {
     const correlationId = this.endCorrelation(event.callId);
+    const completedAt = new Date().toISOString();
     const output =
       event.toolOutput.type === "tool-result"
         ? event.toolOutput.output
@@ -121,9 +135,42 @@ export class ToolEventRelay {
     const outputTruncated =
       event.toolOutput.type === "tool-result" &&
       (outputRecord.truncated === true || bounded.truncated);
+    const error =
+      event.toolOutput.type === "tool-error"
+        ? event.toolOutput.error instanceof ServiceError
+          ? {
+              code: event.toolOutput.error.code,
+              message: event.toolOutput.error.message,
+              stage: "tool",
+              correlationId,
+            }
+          : { message: "Tool execution failed", stage: "tool", correlationId }
+        : undefined;
+    this.dependencies.traceRecorder?.recordToolCallEnd?.({
+      messageId: context.messageId,
+      agentRunId: this.dependencies.agentRunId ?? context.messageId,
+      correlationId,
+      toolName: event.toolCall.toolName,
+      output:
+        event.toolOutput.type === "tool-result"
+          ? output
+          : safeToolError(event.toolOutput.error),
+      resultSnippet: bounded.value,
+      exitCode:
+        event.toolOutput.type === "tool-result"
+          ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)
+          : null,
+      truncated: outputTruncated,
+      completedAt,
+      durationMs: duration(event.toolExecutionMs),
+      ...(error ? { error } : {}),
+    });
 
     const artifact =
-      context.sessionId && bounded.truncated && this.dependencies.artifacts
+      this.dependencies.emitEvents !== false &&
+      context.sessionId &&
+      bounded.truncated &&
+      this.dependencies.artifacts
         ? await this.dependencies.artifacts.create({
             sessionId: context.sessionId,
             messageId: context.messageId,
@@ -132,6 +179,7 @@ export class ToolEventRelay {
             content: serialized,
           })
         : undefined;
+    const artifactId = artifact?.artifactId;
 
     await this.appendAndPublish(
       this.eventInput(
@@ -155,9 +203,32 @@ export class ToolEventRelay {
               }
             : {}),
         },
-        artifact?.artifactId,
+        artifactId,
       ),
     );
+    if (artifact)
+      this.dependencies.traceRecorder?.recordToolCallEnd?.({
+        messageId: context.messageId,
+        agentRunId: this.dependencies.agentRunId ?? context.messageId,
+        correlationId,
+        toolName: event.toolCall.toolName,
+        output:
+          event.toolOutput.type === "tool-result"
+            ? output
+            : safeToolError(event.toolOutput.error),
+        resultSnippet: bounded.value,
+        exitCode:
+          event.toolOutput.type === "tool-result"
+            ? integerOrNull(outputRecord.exitCode ?? outputRecord.exit_code)
+            : null,
+        truncated: outputTruncated,
+        completedAt,
+        durationMs: duration(event.toolExecutionMs),
+        artifactId: artifact.artifactId,
+        artifactByteSize: artifact.byteSize,
+        artifactRedacted: artifact.redacted,
+        ...(error ? { error } : {}),
+      });
   }
 
   private eventInput(
@@ -184,6 +255,7 @@ export class ToolEventRelay {
   private appendAndPublish(
     input: Parameters<EventStore["append"]>[0],
   ): Promise<void> {
+    if (this.dependencies.emitEvents === false) return Promise.resolve();
     const next = this.appendQueue.then(async () => {
       const event = await this.dependencies.events.append(input);
       this.dependencies.publish(event);

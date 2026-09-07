@@ -114,7 +114,7 @@ describe("ArtifactStore", () => {
     const pointer = await store.create({
       sessionId: "chat_1",
       messageId: "msg_1",
-      kind: "worker_report",
+      kind: "tool_output",
       contentType: "application/json",
       content: '{"status":"completed"}',
     });
@@ -124,7 +124,7 @@ describe("ArtifactStore", () => {
       artifactId: pointer.artifactId,
       sessionId: "chat_1",
       messageId: "msg_1",
-      kind: "worker_report",
+      kind: "tool_output",
       content: '{"status":"completed"}',
     });
   });

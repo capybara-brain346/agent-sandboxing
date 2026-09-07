@@ -8,13 +8,14 @@ import type { Config } from "../../config";
 import { ServiceError } from "../../shared/errors";
 import { logger } from "../../logger";
 import type { PublicEvent } from "../../types/event.types";
-import type { WorkerResult } from "../../types/harness.types";
+import { randomUUID } from "node:crypto";
+import type { AgentResult } from "../../types/harness.types";
 import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
 import type { MessageProcessingContext } from "../../types/message-processing.types";
 import { createAgentToolRegistry } from "./tools/registry";
 import type { AgentToolConfig } from "./tools/config";
-import type { CodeWorker } from "./code-worker";
+import type { SessionAgent } from "./session-agent";
 import {
   createAbortError,
   isAbortError,
@@ -26,11 +27,14 @@ import {
 } from "./tool-event-relay";
 import type { ArtifactRecorder } from "../artifacts/artifact-store";
 import { getPromptText } from "../../prompts/load-prompt";
-import type { EvalTraceRecorderLike } from "../eval/eval-trace-recorder";
-import { recordModelUsage } from "../eval/model-usage";
+import type { TraceRecorderLike } from "../tracing/trace-recorder";
+import { recordModelUsage } from "../tracing/model-usage";
 import type { AgentGitHubTools } from "./tools/registry";
+import type { ToolProfileName } from "./tools/profile-loader";
+import type { SubagentToolInput } from "./tools/subagent";
 
-export const AGENT_SYSTEM_PROMPT = getPromptText("code-worker");
+export const AGENT_SYSTEM_PROMPT = getPromptText("session-agent");
+export const SUBAGENT_SYSTEM_PROMPT = getPromptText("subagent");
 
 const toolConfig = (config: Config): AgentToolConfig => ({
   AGENT_BASH_TIMEOUT_MS: config.AGENT_BASH_TIMEOUT_MS,
@@ -50,9 +54,14 @@ export type AgentRunnerDependencies = {
   events: Pick<EventStore, "append">;
   model: LanguageModel;
   publish: PublishEvent;
+  profile: ToolProfileName;
   artifacts?: ArtifactRecorder;
-  traceRecorder?: EvalTraceRecorderLike;
+  traceRecorder?: TraceRecorderLike;
+  agentRunId?: string;
+  subagentRunId?: string;
+  agentTask?: string;
   github?: AgentGitHubTools;
+  emitToolEvents?: boolean;
 };
 
 class SerialExecutor {
@@ -89,23 +98,132 @@ export const serializeToolRegistry = <TOOLS extends ToolSet>(
   return Object.fromEntries(entries) as TOOLS;
 };
 
-export class AgentRunner implements CodeWorker {
+export class AgentRunner implements SessionAgent {
   constructor(private readonly dependencies: AgentRunnerDependencies) {}
 
-  async process(context: MessageProcessingContext): Promise<WorkerResult> {
+  async process(context: MessageProcessingContext): Promise<AgentResult> {
     throwIfAborted(context.signal);
     const executionStartedAt = Date.now();
-    logger.debug("agent_worker_started", {
+    const startedAt = new Date().toISOString();
+    const agentRunId =
+      this.dependencies.agentRunId ??
+      this.dependencies.traceRecorder?.getAgentRunId?.(context.messageId) ??
+      `agent_${randomUUID()}`;
+    this.dependencies.traceRecorder?.startAgentRun?.({
+      messageId: context.messageId,
+      agentRunId,
+      startedAt,
+      input: context.instructions,
+      ...(this.dependencies.subagentRunId
+        ? { subagentRunId: this.dependencies.subagentRunId }
+        : {}),
+      ...(this.dependencies.agentTask
+        ? { task: this.dependencies.agentTask }
+        : {}),
+    });
+    logger.debug("session_agent_started", {
       sessionId: context.sessionId,
       messageId: context.messageId,
       sandboxId: context.sandboxId,
     });
-    const target = await this.dependencies.sandbox.getAgentToolTarget(
-      context.sessionId,
-      context.sandboxId,
-    );
+    let target;
+    try {
+      target = await this.dependencies.sandbox.getAgentToolTarget(
+        context.sessionId,
+        context.sandboxId,
+      );
+    } catch (error) {
+      if (!isAbortError(error) && !context.signal.aborted)
+        this.dependencies.traceRecorder?.finishAgentRun?.({
+          messageId: context.messageId,
+          agentRunId,
+          completedAt: new Date().toISOString(),
+          error: {
+            message:
+              error instanceof ServiceError
+                ? error.message
+                : "Agent processing failed",
+            ...(error instanceof ServiceError ? { code: error.code } : {}),
+            stage: "sessionAgent",
+            agentRunId,
+          },
+        });
+      throw error;
+    }
     throwIfAborted(context.signal);
 
+    const runSubagent =
+      this.dependencies.profile === "main"
+        ? async (input: SubagentToolInput): Promise<AgentResult> => {
+            const subagentRunId = `subagent_${randomUUID()}`;
+            const subagentStartedAtMs = Date.now();
+            const subagentStartedAt = new Date(
+              subagentStartedAtMs,
+            ).toISOString();
+            try {
+              const result = await new AgentRunner({
+                config: this.dependencies.config,
+                sandbox: this.dependencies.sandbox,
+                events: this.dependencies.events,
+                model: this.dependencies.model,
+                publish: this.dependencies.publish,
+                profile: "subagent",
+                ...(this.dependencies.traceRecorder
+                  ? { traceRecorder: this.dependencies.traceRecorder }
+                  : {}),
+                agentRunId: subagentRunId,
+                subagentRunId,
+                agentTask: input.task,
+                ...(this.dependencies.artifacts
+                  ? { artifacts: this.dependencies.artifacts }
+                  : {}),
+                ...(this.dependencies.github
+                  ? { github: this.dependencies.github }
+                  : {}),
+                emitToolEvents: false,
+              }).process({
+                ...context,
+                instructions: input.task,
+                ...(input.maxSteps === undefined
+                  ? {}
+                  : { maxSteps: input.maxSteps }),
+              });
+              this.dependencies.traceRecorder?.recordSubagent?.({
+                messageId: context.messageId,
+                subagent: {
+                  subagentRunId,
+                  task: input.task,
+                  toolCalls: result.toolCalls,
+                  summary: result.finalText,
+                  startedAt: subagentStartedAt,
+                  completedAt: result.completedAt,
+                  durationMs: Date.now() - subagentStartedAtMs,
+                },
+              });
+              return result;
+            } catch (error) {
+              this.dependencies.traceRecorder?.recordSubagent?.({
+                messageId: context.messageId,
+                subagent: {
+                  subagentRunId,
+                  task: input.task,
+                  toolCalls: [],
+                  summary: "",
+                  startedAt: subagentStartedAt,
+                  completedAt: new Date().toISOString(),
+                  durationMs: Date.now() - subagentStartedAtMs,
+                  error:
+                    error instanceof ServiceError
+                      ? `${error.code}: ${error.message}`
+                      : isAbortError(error) || context.signal.aborted
+                        ? "Subagent cancelled"
+                        : "Subagent failed",
+                },
+              });
+              throw error;
+            }
+          }
+        : undefined;
     const tools = serializeToolRegistry(
       createAgentToolRegistry(
         target.runtime,
@@ -114,6 +232,8 @@ export class AgentRunner implements CodeWorker {
         context.signal,
         { sessionId: context.sessionId, messageId: context.messageId },
         this.dependencies.github,
+        this.dependencies.profile,
+        runSubagent,
       ),
     );
     const relay = new ToolEventRelay({
@@ -122,60 +242,77 @@ export class AgentRunner implements CodeWorker {
       ...(this.dependencies.artifacts
         ? { artifacts: this.dependencies.artifacts }
         : {}),
+      ...(this.dependencies.traceRecorder
+        ? { traceRecorder: this.dependencies.traceRecorder }
+        : {}),
+      agentRunId,
+      emitEvents: this.dependencies.emitToolEvents !== false,
     } satisfies ToolEventRelayDependencies);
-    const callbacks = relay.callbacks<ToolSet>({
+    const callbacks = relay?.callbacks<ToolSet>({
       messageId: context.messageId,
       sandboxId: context.sandboxId,
       sessionId: context.sessionId,
     });
 
-    const startedAt = Date.now();
+    const usageStartedAt = Date.now();
     let usageRecorded = false;
     try {
       const result = await generateText({
         model: this.dependencies.model,
-        system: AGENT_SYSTEM_PROMPT,
+        system:
+          this.dependencies.profile === "subagent"
+            ? SUBAGENT_SYSTEM_PROMPT
+            : AGENT_SYSTEM_PROMPT,
         messages: [{ role: "user", content: context.instructions }],
         tools,
         abortSignal: context.signal,
-        stopWhen: isStepCount(this.dependencies.config.AGENT_MAX_STEPS),
-        onToolExecutionStart: async (event) => {
-          if (!event) return;
-          await callbacks.onToolExecutionStart(event);
-        },
-        onToolExecutionEnd: async (event) => {
-          if (!event) return;
-          await callbacks.onToolExecutionEnd(event as never);
-        },
+        stopWhen: isStepCount(
+          context.maxSteps ?? this.dependencies.config.AGENT_MAX_STEPS,
+        ),
+        ...(callbacks
+          ? {
+              onToolExecutionStart: callbacks.onToolExecutionStart,
+              onToolExecutionEnd: callbacks.onToolExecutionEnd,
+            }
+          : {}),
       });
       recordModelUsage({
         recorder: this.dependencies.traceRecorder,
         messageId: context.messageId,
-        stage: "worker",
+        stage: "sessionAgent",
+        agentRunId,
         model: this.dependencies.model,
-        startedAt,
+        startedAt: usageStartedAt,
         result,
       });
       usageRecorded = true;
 
-      const workerResult: WorkerResult = {
-        status: "completed",
-        summary:
-          result.text.trim() || "Worker completed without a final report.",
+      const agentResult: AgentResult = {
+        finalText: result.text.trim(),
+        usage: result.usage,
+        toolCalls: result.toolCalls,
+        startedAt,
+        completedAt: new Date().toISOString(),
       };
+      this.dependencies.traceRecorder?.finishAgentRun?.({
+        messageId: context.messageId,
+        agentRunId,
+        completedAt: agentResult.completedAt,
+        output: agentResult.finalText,
+      });
 
-      logger.debug("agent_worker_completed", {
+      logger.debug("session_agent_completed", {
         sessionId: context.sessionId,
         messageId: context.messageId,
         sandboxId: context.sandboxId,
         durationMs: Date.now() - executionStartedAt,
-        status: workerResult.status,
+        finalTextPresent: agentResult.finalText.length > 0,
         toolCallCount: result.toolCalls.length,
       });
-      return workerResult;
+      return agentResult;
     } catch (error) {
       const cancelled = isAbortError(error) || context.signal.aborted;
-      logger.debug("agent_worker_failed", {
+      logger.debug("session_agent_failed", {
         sessionId: context.sessionId,
         messageId: context.messageId,
         sandboxId: context.sandboxId,
@@ -188,11 +325,30 @@ export class AgentRunner implements CodeWorker {
         recordModelUsage({
           recorder: this.dependencies.traceRecorder,
           messageId: context.messageId,
-          stage: "worker",
+          stage: "sessionAgent",
+          agentRunId,
           model: this.dependencies.model,
-          startedAt,
+          startedAt: usageStartedAt,
           result: {},
         });
+      this.dependencies.traceRecorder?.finishAgentRun?.({
+        messageId: context.messageId,
+        agentRunId,
+        completedAt: new Date().toISOString(),
+        ...(cancelled
+          ? {}
+          : {
+              error: {
+                message:
+                  error instanceof ServiceError
+                    ? error.message
+                    : "Agent processing failed",
+                ...(error instanceof ServiceError ? { code: error.code } : {}),
+                stage: "sessionAgent",
+                agentRunId,
+              },
+            }),
+      });
       if (isAbortError(error)) throw error;
       if (context.signal.aborted) throw createAbortError();
       if (error instanceof ServiceError) throw error;

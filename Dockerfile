@@ -33,6 +33,7 @@ COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/node_modules/@prisma/client ./node_modules/@prisma/client
 COPY prisma ./prisma
 COPY prompts ./prompts
+COPY --from=build /app/src/services/agent/tools/profiles ./src/services/agent/tools/profiles
 
 EXPOSE 3000
 CMD ["npm", "run", "start:prod"]

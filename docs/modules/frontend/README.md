@@ -52,6 +52,8 @@ rendered with `TimelineRow` and tool results use bounded event snippets.
 - `src/pages/` contains authentication, repository selection, and chat pages.
 - `src/components/ai/` contains the chat, processing, timeline, diff, and pull
   request primitives.
+- Assistant messages render GitHub-flavored Markdown with safe links and fenced
+  code blocks; user and system messages remain plain text.
 - `src/styles/theme.css` contains the shared visual tokens.
 
 ## Development and verification

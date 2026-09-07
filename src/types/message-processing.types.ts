@@ -34,11 +34,11 @@ export type MessageProcessingContext = {
   sandboxId: string;
   instructions: string;
   signal: AbortSignal;
+  maxSteps?: number;
 };
 
 export type MessageProcessingResult = {
   summary: string | null;
-  workerReport?: string | null;
 };
 
 export type MessageProcessor = {

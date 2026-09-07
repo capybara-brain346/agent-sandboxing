@@ -12,13 +12,12 @@ import {
   chatArtifacts,
   chatGithub,
   chatTraceRecorder,
-  chatWorker,
+  chatAgentRunner,
 } from "./chat-runtime";
 import { MessageProcessingService } from "./message-processing";
-import { MessageOrchestrator } from "./message-orchestrator";
+import { SessionAgentProcessor } from "./session-agent-processor";
 import { ArtifactStore } from "../artifacts/artifact-store";
 import type { ArtifactContent } from "../../types/artifact.types";
-import { ModelOrchestratorAgent } from "../agent/orchestrator-agent";
 import { resolveAgentModel } from "../agent/model";
 import { SessionContextBuilder } from "./session-context-builder";
 import { ModelSessionSummaryCompactor } from "../agent/session-summary-compactor";
@@ -727,18 +726,14 @@ const config = loadConfig();
 const processor =
   config.NODE_ENV === "test"
     ? new PlaceholderMessageProcessor()
-    : new MessageOrchestrator(
+    : new SessionAgentProcessor(
         prisma,
         new SessionContextBuilder(prisma, chatEvents),
         new ModelSessionSummaryCompactor(
           resolveAgentModel(config),
           chatTraceRecorder,
         ),
-        chatWorker,
-        new ModelOrchestratorAgent(
-          resolveAgentModel(config),
-          chatTraceRecorder,
-        ),
+        chatAgentRunner,
         chatTraceRecorder,
       );
 const messageProcessing = new MessageProcessingService(

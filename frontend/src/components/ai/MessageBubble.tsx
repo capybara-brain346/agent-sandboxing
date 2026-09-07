@@ -1,5 +1,6 @@
 import type { ChatMessage } from "@/api/types";
 import { cn } from "@/lib/utils";
+import { MarkdownMessage } from "./MarkdownMessage";
 import { StreamingText } from "./StreamingText";
 
 const ROLE_LABEL: Record<ChatMessage["role"], string> = {
@@ -16,6 +17,7 @@ export const MessageBubble = ({
   streaming?: boolean;
 }) => {
   const isUser = message.role === "user";
+  const isAssistant = message.role === "assistant";
 
   return (
     <div
@@ -27,7 +29,11 @@ export const MessageBubble = ({
       <span className="text-2xs font-semibold tracking-wide text-fg-subtle uppercase">
         {ROLE_LABEL[message.role]}
       </span>
-      <StreamingText text={message.content} streaming={streaming} />
+      {isAssistant ? (
+        <MarkdownMessage text={message.content} streaming={streaming} />
+      ) : (
+        <StreamingText text={message.content} streaming={streaming} />
+      )}
     </div>
   );
 };

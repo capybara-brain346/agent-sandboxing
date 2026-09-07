@@ -5,14 +5,14 @@ import { sseHub } from "../events/sse-hub";
 import { sandboxService } from "../sandbox/sandbox";
 import type { PublicEvent } from "../../types/event.types";
 import { AgentRunner } from "../agent/agent-runner";
-import type { CodeWorker } from "../agent/code-worker";
+import type { SessionAgent } from "../agent/session-agent";
 import { resolveAgentModel } from "../agent/model";
 import { ArtifactStore } from "../artifacts/artifact-store";
-import { CompositeTraceSink } from "../eval/composite-trace-sink";
-import { EvalTraceRecorder } from "../eval/eval-trace-recorder";
-import { LangfuseTraceSink } from "../eval/langfuse-trace-sink";
-import { LocalTraceSink } from "../eval/local-trace-sink";
-import type { EvalTraceSink } from "../../types/eval-trace.types";
+import { CompositeTraceSink } from "../tracing/composite-trace-sink";
+import { TraceRecorder } from "../tracing/trace-recorder";
+import { LangfuseTraceSink } from "../tracing/langfuse-trace-sink";
+import { LocalTraceSink } from "../tracing/local-trace-sink";
+import type { TraceSink } from "../../types/trace.types";
 import { GitHubService } from "../github/github";
 
 const config = loadConfig();
@@ -21,16 +21,16 @@ const publish = (event: PublicEvent): void => sseHub.publish(event);
 
 export const chatArtifacts = new ArtifactStore(prisma);
 const langfuse = new LangfuseTraceSink(config);
-const traceSinks: EvalTraceSink[] = [
+const traceSinks: TraceSink[] = [
   langfuse,
   ...(config.LOCAL_TRACE_EXPORT_ENABLED
     ? [new LocalTraceSink(config.LOCAL_TRACE_EXPORT_PATH)]
     : []),
 ];
-export const chatTraceRecorder = new EvalTraceRecorder(
+export const chatTraceRecorder = new TraceRecorder(
   new CompositeTraceSink(traceSinks),
   {
-    includeContextSnapshot: config.EVAL_TRACE_CONTEXT_SNAPSHOT_ENABLED,
+    includeContextSnapshot: config.TRACE_CONTEXT_SNAPSHOT_ENABLED,
     tags: [`environment:${config.NODE_ENV}`, "source:chat-session"],
   },
 );
@@ -43,14 +43,17 @@ export const chatGithub = new GitHubService(
 );
 export const shutdownChatTracing = (): Promise<void> => langfuse.shutdown();
 
-const placeholderProcessor: CodeWorker = {
+const placeholderProcessor: SessionAgent = {
   process: async () => ({
-    status: "completed",
-    summary: "",
+    finalText: "",
+    usage: {},
+    toolCalls: [],
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
   }),
 };
 
-export const chatWorker: CodeWorker =
+export const chatAgentRunner: SessionAgent =
   config.NODE_ENV === "test"
     ? placeholderProcessor
     : new AgentRunner({
@@ -59,6 +62,7 @@ export const chatWorker: CodeWorker =
         events,
         model: resolveAgentModel(config),
         publish,
+        profile: "main",
         artifacts: chatArtifacts,
         traceRecorder: chatTraceRecorder,
         github: chatGithub,

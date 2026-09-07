@@ -46,13 +46,6 @@ export type ArtifactRecorder = {
 const artifactId = (): string =>
   `art_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
 
-/**
- * Stores operational output (command/tool output, diffs, worker reports)
- * outside the chat/prompt path. Content is capped and secret-scrubbed on
- * write; callers get back a bounded pointer+preview, never the full body,
- * so large output cannot leak into event payloads or model context by
- * accident. Full content is only readable via `get`, scoped to its session.
- */
 export class ArtifactStore implements ArtifactRecorder {
   constructor(private readonly prisma: Pick<PrismaClient, "artifact">) {}
 

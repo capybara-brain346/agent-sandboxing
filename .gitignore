@@ -6,8 +6,14 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
-# Ignore test repo
-repo/
+# Ignore generated test repositories while tracking the CapyNodes baseline.
+repo/*
+!repo/capynodes-backend/
+!repo/capynodes-backend/**
+repo/capynodes-backend/**/__pycache__/
+repo/capynodes-backend/**/*.py[cod]
+repo/capynodes-backend/capynodes-frontend/.next/
+repo/capynodes-backend/capynodes-frontend/node_modules/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -150,3 +156,4 @@ tests/evals/results/*.jsonl
 docs/planning/*
 docs/planning/github-pr-flow-plan.md
 .hermes/
+.data/

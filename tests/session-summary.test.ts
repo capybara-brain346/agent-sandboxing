@@ -4,7 +4,7 @@ import {
   ModelSessionSummaryCompactor,
   type CompactionInput,
 } from "../src/services/agent/session-summary-compactor";
-import type { EvalTraceRecorderLike } from "../src/services/eval/eval-trace-recorder";
+import type { TraceRecorderLike } from "../src/services/tracing/trace-recorder";
 
 const aiMocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -81,7 +81,7 @@ describe("ModelSessionSummaryCompactor", () => {
     });
     const recorder = {
       recordUsage: vi.fn(),
-    } as unknown as EvalTraceRecorderLike;
+    } as unknown as TraceRecorderLike;
     const compactor = new ModelSessionSummaryCompactor(
       {} as LanguageModel,
       recorder,
