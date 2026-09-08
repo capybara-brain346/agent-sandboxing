@@ -91,6 +91,28 @@ const makeRepository = async (): Promise<{
 };
 
 describe("SWE-bench Lite harness", () => {
+  it("installs pytest in the agent wrapper", async () => {
+    const dockerfile = await readFile(
+      new URL("../swe-bench-lite/Dockerfile.agent", import.meta.url),
+      "utf8",
+    );
+    expect(dockerfile).toContain("python -m pip install --no-cache-dir pytest");
+  });
+
+  it("runs the predictor package script instead of silently exiting", async () => {
+    const manifestPath = path.join(
+      os.tmpdir(),
+      `missing-swe-bench-manifest-${Date.now()}-${process.pid}.jsonl`,
+    );
+    await expect(
+      execFile("npm", ["run", "eval:swe-bench-lite:predict"], {
+        env: { ...process.env, SWE_BENCH_MANIFEST_PATH: manifestPath },
+      }),
+    ).rejects.toMatchObject({
+      stderr: expect.stringMatching(/ENOENT|no such file/i),
+    });
+  });
+
   it("rejects hidden dataset fields", () => {
     expect(() =>
       validateTaskRecord({

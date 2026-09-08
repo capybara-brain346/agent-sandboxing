@@ -33,6 +33,15 @@ npm run eval:swe-bench-lite:prepare -- --instance-id <dev-instance-id>
 docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build
 ```
 
+After Compose starts, seed the evaluator user in every fresh evaluator database:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec postgres psql -U postgres -d agent_sandboxing -c "INSERT INTO users (id, github_user_id, login, avatar_url, updated_at) VALUES ('swe-bench-lite-user', 'swe-bench-lite-user', 'swe-bench-lite', 'https://example.invalid/swe-bench-lite.png', CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING;"
+```
+
+This fixed row must match the evaluator cookie subject (`swe-bench-lite-user`).
+It is required for every fresh evaluator database.
+
 The dataset revision is pinned in `prepare.py` and can be replaced only by an
 explicit `--revision` or `SWE_BENCH_DATASET_REVISION` value. Select one or more
 task IDs with repeated `--instance-id` flags or
@@ -53,8 +62,10 @@ wrapper, checks the session sandbox contract, and writes patches from the
 persisted result:
 
 ```sh
-BASE_URL=http://localhost:3000 npm run eval:swe-bench-lite:predict
+npm run eval:swe-bench-lite:predict
 ```
+
+This is the supported predictor runner; no workaround invocation is needed.
 
 Submit predictions with a newly generated official run ID:
 
@@ -84,6 +95,8 @@ runs/<experiment-id>/official-results/
 ```
 
 The fixture is deleted after each attempt and the sandbox container is removed.
+The agent wrapper supplies `pytest` so its session-sandbox verification and
+Python task testing use the same runtime.
 The report retains setup, API, provider, session, no-patch, and grader failures
 instead of silently omitting them. Attempt status is diagnostic only; only the
 official grader classifications determine resolution.
@@ -106,7 +119,7 @@ sequentially and records exactly one terminal attempt and one prediction for
 each task, including setup, provider, session, and no-patch failures:
 
 ```sh
-BASE_URL=http://localhost:3000 npm run eval:swe-bench-lite:predict
+npm run eval:swe-bench-lite:predict
 ```
 
 Each experiment retains `summary.json` beside `attempts.jsonl`. The summary
@@ -138,7 +151,7 @@ reuse an experiment ID, so every task receives one fresh fixture and one
 public chat session:
 
 ```sh
-SWE_BENCH_SPLIT=test BASE_URL=http://localhost:3000 npm run eval:swe-bench-lite:predict
+SWE_BENCH_SPLIT=test npm run eval:swe-bench-lite:predict
 SWE_BENCH_SPLIT=test npm run eval:swe-bench-lite:grade
 ```
 

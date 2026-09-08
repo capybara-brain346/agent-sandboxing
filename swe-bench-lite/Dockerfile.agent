@@ -14,6 +14,7 @@ RUN if command -v apt-get >/dev/null 2>&1; then \
     && command -v sleep \
     && command -v git \
     && command -v node \
+    && python -m pip install --no-cache-dir pytest \
     && if ! id node >/dev/null 2>&1; then \
          if command -v useradd >/dev/null 2>&1; then useradd --create-home --shell /bin/sh node; \
          else adduser -D -s /bin/sh node; fi; \

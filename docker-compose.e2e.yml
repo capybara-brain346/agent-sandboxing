@@ -1,5 +1,7 @@
 services:
   app:
+    environment:
+      APP_BASE_URL: http://localhost:3000
     volumes:
       - ./.data/evals/e2e/fixtures:/workspace/evals:ro
       - ./swe-bench-lite/.data/fixtures:/workspace/swe-bench-lite/fixtures:ro

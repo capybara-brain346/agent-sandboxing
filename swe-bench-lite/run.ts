@@ -2,7 +2,6 @@ import "dotenv/config";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { cpus, totalmem } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -270,8 +269,4 @@ const main = async (): Promise<void> => {
   if (failed) process.exitCode = 1;
 };
 
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-)
-  await main();
+await main();
