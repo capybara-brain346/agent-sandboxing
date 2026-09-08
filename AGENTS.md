@@ -94,9 +94,6 @@ Run from the repository root:
 - `npm run test:runtime` — reserved for `tests/runtime/**/*.test.ts`; that
   directory is currently absent, so this command exits with “No test files
   found” and must not be reported as a passing check until runtime tests return.
-- `BASE_URL=http://localhost:3000 scripts/acceptance/chat-session-atomic-mvp.sh`
-  — end-to-end acceptance harness. It requires the API, Postgres, and Docker
-  to be running, plus `jq`, `curl`, `git`, `timeout`, and POSIX shell tools.
 - `npm run typecheck` — TypeScript check.
 - `npm run lint` — ESLint.
 - `npm run build` — typecheck and production bundle.

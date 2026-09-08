@@ -85,15 +85,6 @@ npm run build
 npm run start:prod
 ```
 
-## End-to-end test
-
-The acceptance harness requires the API, PostgreSQL, and Docker to be running,
-plus `jq`, `curl`, `git`, `timeout`, and POSIX shell tools:
-
-```sh
-BASE_URL=http://localhost:3000 scripts/acceptance/chat-session-atomic-mvp.sh
-```
-
 The isolated SWE-bench Lite evaluator is documented in
 [`swe-bench-lite/README.md`](swe-bench-lite/README.md). It prepares selected
 development or pinned test tasks, runs the public chat-session path, and
