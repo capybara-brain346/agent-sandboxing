@@ -25,4 +25,27 @@ describe("Docker Compose configuration", () => {
       LANGFUSE_FLUSH_TIMEOUT_MS: "${LANGFUSE_FLUSH_TIMEOUT_MS:-2000}",
     });
   });
+
+  it("mounts the dedicated SWE-bench fixture root into the app", async () => {
+    const compose = parse(
+      await readFile(
+        new URL("../docker-compose.e2e.yml", import.meta.url),
+        "utf8",
+      ),
+    ) as {
+      services: {
+        app: {
+          environment: Record<string, unknown>;
+          volumes: string[];
+        };
+      };
+    };
+
+    expect(compose.services.app.environment).toMatchObject({
+      APP_BASE_URL: "http://localhost:3000",
+    });
+    expect(compose.services.app.volumes).toContain(
+      "./swe-bench-lite/.data/fixtures:/workspace/swe-bench-lite/fixtures:ro",
+    );
+  });
 });

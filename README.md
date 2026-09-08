@@ -94,22 +94,12 @@ plus `jq`, `curl`, `git`, `timeout`, and POSIX shell tools:
 BASE_URL=http://localhost:3000 scripts/acceptance/chat-session-atomic-mvp.sh
 ```
 
-The retired acceptance harness is separate from the full-stack CapyNodes E2E
-evaluation. Build the evaluator image and start the test-only Compose override:
-
-```sh
-docker build -f tests/evals/e2e/Dockerfile -t capynodes-e2e:latest .
-docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build
-E2E_SANDBOX_IMAGE=capynodes-e2e:latest BASE_URL=http://localhost:3000 npm run eval:e2e
-```
-
-The full-stack evaluator drives only the authenticated chat-session HTTP API,
-uses task Git fixtures under `.data/evals/e2e/fixtures`, collects session SSE
-evidence, and grades the final checkout with hidden no-network oracles. It
-requires Docker, a healthy API, `OPENROUTER_API_KEY`, the matching
-`AUTH_COOKIE_SECRET`, and the evaluator image. Results are appended to
-`.data/evals/e2e/capynodes.jsonl`; evaluator fixtures and sandbox containers are
-cleaned after grading.
+The isolated SWE-bench Lite evaluator is documented in
+[`swe-bench-lite/README.md`](swe-bench-lite/README.md). It prepares selected
+development or pinned test tasks, runs the public chat-session path, and
+submits persisted diffs to the official grader without changing production
+code. Phase 3 test measurement records exact denominators and per-task
+official outcomes.
 
 ## Documentation
 

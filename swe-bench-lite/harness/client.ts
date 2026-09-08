@@ -1,15 +1,20 @@
 import {
-  signSessionToken,
   AUTH_COOKIE_NAME,
-} from "../../../../src/services/auth/auth";
+  signSessionToken,
+} from "../../src/services/auth/auth";
 import type {
   ChatMessage,
   ChatSession,
   CreateMessageResponse,
   SessionResult,
-} from "../../../../src/types/chat.types";
-import type { PublicEvent } from "../../../../src/types/event.types";
-import type { CapyNodesEvalCase, ChatEvidence, TaskFixture } from "./types";
+} from "../../src/types/chat.types";
+import type { PublicEvent } from "../../src/types/event.types";
+import type {
+  ChatEvidence,
+  SseEvidence,
+  SweBenchTask,
+  TaskFixture,
+} from "./types";
 
 type EvaluationAuth = {
   secret: string;
@@ -54,7 +59,7 @@ const safeErrorPayload = (
   };
 };
 
-const parseEventData = (value: string): PublicEvent | null => {
+const parseEvent = (value: string): PublicEvent | null => {
   try {
     const parsed: unknown = JSON.parse(value);
     if (!parsed || typeof parsed !== "object") return null;
@@ -78,13 +83,13 @@ const parseSseChunk = (
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n");
-    const event = data ? parseEventData(data) : null;
+    const event = data ? parseEvent(data) : null;
     if (event) events.push(event);
   }
   return { events, remainder };
 };
 
-const eventCollection = async (
+const collectEvents = async (
   response: Response,
   controller: AbortController,
 ): Promise<EventCollection> => {
@@ -103,8 +108,7 @@ const eventCollection = async (
         buffer = parsed.remainder;
         events.push(...parsed.events);
       }
-      buffer += decoder.decode();
-      const parsed = parseSseChunk(`${buffer}\n\n`);
+      const parsed = parseSseChunk(`${buffer}${decoder.decode()}\n\n`);
       events.push(...parsed.events);
     } catch (error) {
       if (!controller.signal.aborted) throw error;
@@ -123,21 +127,31 @@ const eventCollection = async (
   };
 };
 
-export const createEvaluationAuthCookie = async (
-  auth: EvaluationAuth,
-): Promise<string> => {
-  if (auth.secret.length < 32)
-    throw new Error("evaluation auth secret is too short");
-  const token = await signSessionToken(
-    {
-      sub: auth.userId,
-      login: auth.login,
-      avatarUrl: auth.avatarUrl,
-      email: auth.email,
-    },
-    auth.secret,
-  );
-  return `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}`;
+const promptForTask = (task: SweBenchTask): string =>
+  [
+    `SWE-bench task: ${task.instance_id}`,
+    `Repository: ${task.repo}`,
+    `Base commit: ${task.base_commit}`,
+    "",
+    task.problem_statement,
+  ].join("\n");
+
+export const evaluationAuthFromEnv = (): EvaluationAuth => {
+  const secret =
+    process.env.SWE_BENCH_AUTH_COOKIE_SECRET ?? process.env.AUTH_COOKIE_SECRET;
+  if (!secret)
+    throw new Error(
+      "SWE_BENCH_AUTH_COOKIE_SECRET or AUTH_COOKIE_SECRET is required",
+    );
+  return {
+    secret,
+    userId: process.env.SWE_BENCH_AUTH_USER_ID ?? "swe-bench-lite-user",
+    login: process.env.SWE_BENCH_AUTH_LOGIN ?? "swe-bench-lite",
+    avatarUrl:
+      process.env.SWE_BENCH_AUTH_AVATAR_URL ??
+      "https://example.invalid/swe-bench-lite.png",
+    email: process.env.SWE_BENCH_AUTH_EMAIL ?? "swe-bench-lite@example.invalid",
+  };
 };
 
 export class EvalHttpClient {
@@ -160,11 +174,22 @@ export class EvalHttpClient {
   static async create(
     baseUrl: string,
     auth: EvaluationAuth,
-    pollIntervalMs = Number(process.env.E2E_POLL_INTERVAL_MS ?? 500),
+    pollIntervalMs = Number(process.env.SWE_BENCH_POLL_INTERVAL_MS ?? 500),
   ): Promise<EvalHttpClient> {
+    if (auth.secret.length < 32)
+      throw new Error("evaluation auth secret is too short");
+    const token = await signSessionToken(
+      {
+        sub: auth.userId,
+        login: auth.login,
+        avatarUrl: auth.avatarUrl,
+        email: auth.email,
+      },
+      auth.secret,
+    );
     return new EvalHttpClient(
       baseUrl,
-      await createEvaluationAuthCookie(auth),
+      `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}`,
       pollIntervalMs,
     );
   }
@@ -209,21 +234,7 @@ export class EvalHttpClient {
     return payload as { status: string };
   }
 
-  async createSession(
-    evalCase: CapyNodesEvalCase,
-    fixture: TaskFixture,
-  ): Promise<ChatSession> {
-    return this.requestJson<ChatSession>("POST", "/chat-sessions", {
-      repo: { source: "fixture", ref: fixture.containerRepoRef },
-      title: `CapyNodes E2E ${evalCase.id}`,
-      image:
-        evalCase.image ??
-        process.env.E2E_SANDBOX_IMAGE ??
-        "capynodes-e2e:latest",
-    });
-  }
-
-  async startEvents(sessionId: string): Promise<EventCollection> {
+  private async startEvents(sessionId: string): Promise<EventCollection> {
     const controller = new AbortController();
     const response = await fetch(
       `${this.baseUrl}/chat-sessions/${encodeURIComponent(sessionId)}/events?after=0`,
@@ -241,35 +252,32 @@ export class EvalHttpClient {
         `session events returned ${response.status}`,
         response.status,
       );
-    return eventCollection(response, controller);
+    return collectEvents(response, controller);
   }
 
-  async appendMessage(
-    sessionId: string,
-    content: string,
-  ): Promise<CreateMessageResponse> {
-    return this.requestJson<CreateMessageResponse>(
-      "POST",
-      `/chat-sessions/${encodeURIComponent(sessionId)}/messages`,
-      { content },
-    );
-  }
-
-  private session(sessionId: string): Promise<ChatSession> {
+  private async getSession(sessionId: string): Promise<ChatSession> {
     return this.requestJson<ChatSession>(
       "GET",
       `/chat-sessions/${encodeURIComponent(sessionId)}`,
     );
   }
 
-  private messages(sessionId: string): Promise<{ items: ChatMessage[] }> {
-    return this.requestJson<{ items: ChatMessage[] }>(
+  async recoverSandboxId(): Promise<string | undefined> {
+    if (!this.lastSessionId) return this.lastSandboxId;
+    const session = await this.getSession(this.lastSessionId);
+    this.lastSandboxId = session.sandboxId ?? this.lastSandboxId;
+    return this.lastSandboxId;
+  }
+
+  private async getMessages(sessionId: string): Promise<ChatMessage[]> {
+    const page = await this.requestJson<{ items: ChatMessage[] }>(
       "GET",
       `/chat-sessions/${encodeURIComponent(sessionId)}/messages?limit=100`,
     );
+    return page.items;
   }
 
-  private async result(sessionId: string): Promise<SessionResult | null> {
+  private async getResult(sessionId: string): Promise<SessionResult | null> {
     try {
       return await this.requestJson<SessionResult>(
         "GET",
@@ -282,13 +290,20 @@ export class EvalHttpClient {
   }
 
   async runSession(
-    evalCase: CapyNodesEvalCase,
+    task: SweBenchTask,
     fixture: TaskFixture,
+    image: string,
   ): Promise<ChatEvidence> {
     const startedAt = Date.now();
-    this.lastSessionId = undefined;
-    this.lastSandboxId = undefined;
-    const session = await this.createSession(evalCase, fixture);
+    const session = await this.requestJson<ChatSession>(
+      "POST",
+      "/chat-sessions",
+      {
+        repo: { source: "fixture", ref: fixture.containerRepoRef },
+        title: `SWE-bench Lite ${task.instance_id}`,
+        image,
+      },
+    );
     this.lastSessionId = session.chatSessionId;
     const stream = await this.startEvents(session.chatSessionId);
     let stopped = false;
@@ -298,28 +313,27 @@ export class EvalHttpClient {
       return stream.stop();
     };
     try {
-      const message = await this.appendMessage(
-        session.chatSessionId,
-        evalCase.prompt,
+      const message = await this.requestJson<CreateMessageResponse>(
+        "POST",
+        `/chat-sessions/${encodeURIComponent(session.chatSessionId)}/messages`,
+        { content: promptForTask(task) },
       );
       const deadline =
         Date.now() +
-        (evalCase.timeoutMs ??
-          Number(process.env.E2E_CASE_TIMEOUT_MS ?? 900_000));
+        Number(process.env.SWE_BENCH_ATTEMPT_TIMEOUT_MS ?? 1_800_000);
       let latestSession = session;
       let latestMessages: ChatMessage[] = [];
       let latestResult: SessionResult | null = null;
       while (Date.now() < deadline) {
-        latestSession = await this.session(session.chatSessionId);
+        latestSession = await this.getSession(session.chatSessionId);
         this.lastSandboxId = latestSession.sandboxId ?? this.lastSandboxId;
-        latestMessages = (await this.messages(session.chatSessionId)).items;
-        latestResult = await this.result(session.chatSessionId);
+        latestMessages = await this.getMessages(session.chatSessionId);
+        latestResult = await this.getResult(session.chatSessionId);
         const processed = latestMessages.find(
           (candidate) => candidate.messageId === message.message.messageId,
         );
         if (
-          latestResult &&
-          latestResult.messageId === message.message.messageId &&
+          latestResult?.messageId === message.message.messageId &&
           processed?.processingStatus &&
           ["completed", "failed", "cancelled"].includes(
             processed.processingStatus,
@@ -331,7 +345,7 @@ export class EvalHttpClient {
       const events = await stopStream();
       if (!latestResult || latestResult.messageId !== message.message.messageId)
         throw new Error(
-          `message ${message.message.messageId} did not reach a terminal result within the case timeout`,
+          `message ${message.message.messageId} did not reach a terminal result`,
         );
       const completedMessage = latestMessages.find(
         (candidate) => candidate.messageId === message.message.messageId,
@@ -340,12 +354,17 @@ export class EvalHttpClient {
         throw new Error(
           "terminal message was not returned by the messages endpoint",
         );
+      const sse: SseEvidence = {
+        status: stream.status,
+        contentType: stream.contentType,
+        events,
+      };
       return {
         session: latestSession,
         message: completedMessage,
         messages: latestMessages,
         result: latestResult,
-        sse: { status: stream.status, contentType: stream.contentType, events },
+        sse,
         durationMs: Date.now() - startedAt,
       };
     } finally {
@@ -353,19 +372,3 @@ export class EvalHttpClient {
     }
   }
 }
-
-export const evaluationAuthFromEnv = (): EvaluationAuth => {
-  const secret =
-    process.env.E2E_AUTH_COOKIE_SECRET ?? process.env.AUTH_COOKIE_SECRET;
-  if (!secret)
-    throw new Error("E2E_AUTH_COOKIE_SECRET or AUTH_COOKIE_SECRET is required");
-  return {
-    secret,
-    userId: process.env.E2E_AUTH_USER_ID ?? "capynodes-e2e-user",
-    login: process.env.E2E_AUTH_LOGIN ?? "capynodes-e2e",
-    avatarUrl:
-      process.env.E2E_AUTH_AVATAR_URL ??
-      "https://example.invalid/capynodes-e2e.png",
-    email: process.env.E2E_AUTH_EMAIL ?? "capynodes-e2e@example.invalid",
-  };
-};
