@@ -7,7 +7,7 @@ from datasets import load_dataset
 
 DATASET_NAME = "SWE-bench/SWE-bench_Lite"
 DATASET_REVISION = "b0dde1093fe417d83b7184254edf8199c1f0dff5"
-DEFAULT_SPLIT = "dev"
+DEFAULT_SPLIT = os.environ.get("SWE_BENCH_SPLIT", "dev")
 VISIBLE_FIELDS = (
     "instance_id",
     "repo",
@@ -18,7 +18,7 @@ VISIBLE_FIELDS = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--split", default=DEFAULT_SPLIT, choices=[DEFAULT_SPLIT])
+    parser.add_argument("--split", default=DEFAULT_SPLIT, choices=["dev", "test"])
     parser.add_argument(
         "--revision",
         default=os.environ.get("SWE_BENCH_DATASET_REVISION", DATASET_REVISION),
@@ -26,15 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="include every task in the pinned development split",
+        help="include every task in the pinned selected split",
     )
     parser.add_argument("--instance-id", action="append")
     parser.add_argument(
         "--output",
-        default=os.environ.get(
-            "SWE_BENCH_MANIFEST_PATH",
-            "swe-bench-lite/.data/tasks/swe-bench-lite-dev.jsonl",
-        ),
+        default=os.environ.get("SWE_BENCH_MANIFEST_PATH"),
     )
     return parser.parse_args()
 
@@ -63,7 +60,7 @@ def main() -> None:
         selected_ids = [str(row["instance_id"]) for row in rows]
     if not selected_ids:
         raise SystemExit(
-            f"select at least one --instance-id from the {len(rows)} available development tasks"
+            f"select at least one --instance-id from the {len(rows)} available {args.split} tasks"
         )
     if len(set(selected_ids)) != len(selected_ids):
         raise SystemExit("duplicate --instance-id values are not allowed")
@@ -92,7 +89,9 @@ def main() -> None:
         if image is not None:
             task["image"] = image
         tasks.append(task)
-    output = Path(args.output)
+    output = Path(
+        args.output or f"swe-bench-lite/.data/tasks/swe-bench-lite-{args.split}.jsonl"
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     Path(
         os.environ.get("SWE_BENCH_FIXTURE_ROOT", "swe-bench-lite/.data/fixtures")

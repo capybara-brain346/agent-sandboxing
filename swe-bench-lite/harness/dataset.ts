@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { SweBenchTask, TaskManifest } from "./types";
+import type { SweBenchSplit, SweBenchTask, TaskManifest } from "./types";
 
 const hiddenFields = new Set([
   "patch",
@@ -71,18 +71,19 @@ export const validateTaskRecord = (value: unknown): SweBenchTask => {
   if (!/^[0-9a-f]{7,64}$/i.test(baseCommit))
     throw new Error(`invalid base commit for ${instanceId}`);
   const split = stringField(value, "split");
-  if (split !== "dev")
+  if (split !== "dev" && split !== "test")
     throw new Error(
-      `development evaluation requires the dev split, got ${split}`,
+      `SWE-bench evaluation requires the dev or test split, got ${split}`,
     );
   const image =
     value.image === undefined ? undefined : stringField(value, "image");
+  const normalizedSplit: SweBenchSplit = split === "test" ? "test" : "dev";
   return {
     instance_id: instanceId,
     repo,
     base_commit: baseCommit,
     problem_statement: stringField(value, "problem_statement"),
-    split: "dev",
+    split: normalizedSplit,
     dataset_name: stringField(value, "dataset_name"),
     dataset_revision: stringField(value, "dataset_revision"),
     dataset_task_count: integerField(value, "dataset_task_count"),
@@ -144,6 +145,12 @@ export const readTaskManifest = async (
 
 export const selectDevelopmentTasks = (
   manifest: TaskManifest,
+  instanceIds?: string[],
+): SweBenchTask[] => selectEvaluationTasks(manifest, "dev", instanceIds);
+
+export const selectEvaluationTasks = (
+  manifest: TaskManifest,
+  split: SweBenchSplit = manifest.split,
   instanceIds = (
     process.env.SWE_BENCH_INSTANCE_IDS ?? process.env.SWE_BENCH_INSTANCE_ID
   )
@@ -151,9 +158,9 @@ export const selectDevelopmentTasks = (
     .map((value) => value.trim())
     .filter(Boolean),
 ): SweBenchTask[] => {
-  if (manifest.split !== "dev")
+  if (manifest.split !== split)
     throw new Error(
-      `development evaluation requires the dev split, got ${manifest.split}`,
+      `requested ${split} evaluation with a ${manifest.split} manifest`,
     );
   if (!instanceIds || instanceIds.length === 0) return manifest.tasks;
   const tasks = instanceIds.map((instanceId) =>

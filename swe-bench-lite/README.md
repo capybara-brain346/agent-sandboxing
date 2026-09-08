@@ -1,7 +1,7 @@
-# SWE-bench Lite development cohort
+# SWE-bench Lite evaluator
 
-This is an evaluation-only harness. It selects development tasks from the
-pinned `SWE-bench/SWE-bench_Lite` `dev` split, checks out each exact base
+This is an evaluation-only harness. It selects tasks from the pinned
+`SWE-bench/SWE-bench_Lite` `dev` or `test` split, checks out each exact base
 commit, wraps the official task image, drives the public chat-session API and
 SSE, and sends persisted `SessionResult.diff` values to the official grader.
 
@@ -35,7 +35,7 @@ docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build
 
 The dataset revision is pinned in `prepare.py` and can be replaced only by an
 explicit `--revision` or `SWE_BENCH_DATASET_REVISION` value. Select one or more
-development task IDs with repeated `--instance-id` flags or
+task IDs with repeated `--instance-id` flags or
 `SWE_BENCH_INSTANCE_IDS=owner__repo-1,owner__repo-2`.
 
 ## Phase 1 commands
@@ -88,8 +88,8 @@ The report retains setup, API, provider, session, no-patch, and grader failures
 instead of silently omitting them. Attempt status is diagnostic only; only the
 official grader classifications determine resolution.
 
-Phase 1 does not modify `src/`, production prompts, Prisma, sandbox runtime
-semantics, or the existing CapyNodes E2E evaluator.
+The evaluator does not modify `src/`, production prompts, Prisma, sandbox
+runtime semantics, or the existing CapyNodes E2E evaluator.
 
 ## Phase 2 development cohort
 
@@ -120,3 +120,39 @@ npm run eval:swe-bench-lite:grade
 
 Phase 2 results are diagnostic development-cohort results. They must not be
 used to tune the agent before the pinned Lite test measurement in Phase 3.
+
+## Phase 3 Lite test measurement
+
+Freeze the model, prompt and tool digests, step limit, timeout, retry policy,
+machine resources, cache condition, wrapper image digests, and complete test
+task ID list in the experiment manifest. Prepare the complete pinned test
+split:
+
+```sh
+npm run eval:swe-bench-lite:prepare -- --split test --all
+```
+
+Start the API with the fixed production-like settings, then run the complete
+test manifest once. Test prediction rejects partial manifests and refuses to
+reuse an experiment ID, so every task receives one fresh fixture and one
+public chat session:
+
+```sh
+SWE_BENCH_SPLIT=test BASE_URL=http://localhost:3000 npm run eval:swe-bench-lite:predict
+SWE_BENCH_SPLIT=test npm run eval:swe-bench-lite:grade
+```
+
+Do not tune the agent from the test results. The official `grade.json` reports
+the pinned manifest count, submitted predictions, all recorded attempts,
+no-patch count, setup/provider/session failures, official harness failures,
+timeouts, per-task outcomes, and these exact ratios:
+
+```text
+resolved_pct = official_resolved / submitted_predictions
+completion_yield_pct = official_resolved / all_recorded_attempts
+```
+
+The current public `SessionResult` does not expose provider cost. The report
+therefore records `estimated_usd: null` and `cost_source: unavailable` instead
+of inventing a cost; attach provider or trace billing data separately when
+publishing the measurement.

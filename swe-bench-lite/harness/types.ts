@@ -5,12 +5,14 @@ import type {
 } from "../../src/types/chat.types";
 import type { PublicEvent } from "../../src/types/event.types";
 
+export type SweBenchSplit = "dev" | "test";
+
 export type SweBenchTask = {
   instance_id: string;
   repo: string;
   base_commit: string;
   problem_statement: string;
-  split: "dev";
+  split: SweBenchSplit;
   dataset_name: string;
   dataset_revision: string;
   dataset_task_count: number;
@@ -22,7 +24,7 @@ export type TaskManifest = {
   path: string;
   datasetName: string;
   datasetRevision: string;
-  split: "dev";
+  split: SweBenchSplit;
   datasetTaskCount: number;
   taskCount: number;
   tasks: SweBenchTask[];
@@ -84,13 +86,23 @@ export type ExperimentManifest = {
   evaluatorVersion: string;
   datasetName: string;
   datasetRevision: string;
-  split: string;
+  split: SweBenchSplit;
   taskIds: string[];
   model: string;
   promptProfile: string;
+  promptDigest: string;
+  toolProfile: string;
+  toolConfigPath: string;
+  toolConfigDigest: string;
   maxSteps: number;
   timeoutMs: number;
+  retryPolicy: "none";
   wrapperImages: Record<string, string>;
+  machineResources: {
+    cpuCount: number;
+    memoryBytes: number;
+  };
+  cacheCondition: string;
   officialRunId?: string;
   createdAt: string;
 };
@@ -113,4 +125,23 @@ export type CohortSummary = {
   providerFailureCount: number;
   sessionFailureCount: number;
   recordedAt: string;
+};
+
+export type OfficialMetrics = {
+  taskCount: number;
+  submittedPredictions: number;
+  allRecordedAttempts: number;
+  officialResolved: number;
+  resolvedPct: number | null;
+  completionYieldPct: number | null;
+  noPatchCount: number;
+  setupFailureCount: number;
+  providerFailureCount: number;
+  sessionFailureCount: number;
+  officialHarnessFailureCount: number;
+  timeoutCount: number;
+  perTask: Record<string, string>;
+  estimatedUsd: number | null;
+  costSource: "unavailable";
+  costNote: string;
 };

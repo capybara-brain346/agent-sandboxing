@@ -111,11 +111,12 @@ requires Docker, a healthy API, `OPENROUTER_API_KEY`, the matching
 `.data/evals/e2e/capynodes.jsonl`; evaluator fixtures and sandbox containers are
 cleaned after grading.
 
-The isolated SWE-bench Lite development-cohort evaluator is documented in
+The isolated SWE-bench Lite evaluator is documented in
 [`swe-bench-lite/README.md`](swe-bench-lite/README.md). It prepares selected
-development tasks, runs the public chat-session path, and
+development or pinned test tasks, runs the public chat-session path, and
 submits persisted diffs to the official grader without changing production
-code.
+code. Phase 3 test measurement records exact denominators and per-task
+official outcomes.
 
 ## Documentation
 

@@ -12,18 +12,24 @@ import {
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { promisify } from "node:util";
-import { readTaskManifest, selectDevelopmentTasks } from "./harness/dataset";
+import { readTaskManifest, selectEvaluationTasks } from "./harness/dataset";
 import {
   predictionSha256,
   readPredictions,
   validatePredictions,
 } from "./harness/predictions";
-import { assertRunIdFresh, safeOutput } from "./harness/report";
+import {
+  assertRunIdFresh,
+  buildOfficialMetrics,
+  readAttempts,
+  safeOutput,
+  summarizeAttempts,
+} from "./harness/report";
 
 const execFile = promisify(execFileCallback);
 const manifestPath =
   process.env.SWE_BENCH_MANIFEST_PATH ??
-  "swe-bench-lite/.data/tasks/swe-bench-lite-dev.jsonl";
+  `swe-bench-lite/.data/tasks/swe-bench-lite-${process.env.SWE_BENCH_SPLIT ?? "dev"}.jsonl`;
 const runsRoot = path.resolve("swe-bench-lite/.data/runs");
 
 const filesBelow = async (root: string): Promise<string[]> => {
@@ -38,8 +44,10 @@ const filesBelow = async (root: string): Promise<string[]> => {
 };
 
 const latestPredictionPath = async (): Promise<string> => {
-  const candidates = (await filesBelow(runsRoot)).filter((filePath) =>
-    filePath.endsWith("/predictions.jsonl"),
+  const candidates = (await filesBelow(runsRoot)).filter(
+    (filePath) =>
+      filePath.endsWith(`${path.sep}predictions.jsonl`) &&
+      !filePath.split(path.sep).includes("official-results"),
   );
   if (candidates.length === 0)
     throw new Error("no predictions.jsonl found; run the predictor first");
@@ -58,6 +66,11 @@ const latestPredictionPath = async (): Promise<string> => {
 const runId = (): string =>
   process.env.SWE_BENCH_OFFICIAL_RUN_ID ??
   `official-${Date.now()}-${process.pid}`;
+
+const assertSafeRunId = (value: string): void => {
+  if (!/^[A-Za-z0-9_.-]+$/.test(value))
+    throw new Error("official run ID must be a safe path component");
+};
 
 const preparePinnedDataset = async (
   datasetName: string,
@@ -97,15 +110,37 @@ const classifications = async (
       if (!entry || typeof entry !== "object") continue;
       const resolved = (entry as { resolved?: unknown }).resolved;
       if (resolved === true) result[taskId] = "resolved";
+      else if (
+        resolved === false &&
+        (entry as { infra_failure?: unknown }).infra_failure === true
+      )
+        result[taskId] = "official_harness_failed";
       else if (resolved === false) result[taskId] = "unresolved";
     }
   }
   return result;
 };
 
+const timedOut = async (root: string, taskId: string): Promise<boolean> => {
+  const outputPaths = (await filesBelow(root)).filter(
+    (filePath) =>
+      filePath.endsWith(`${path.sep}test_output.txt`) &&
+      filePath.includes(`${path.sep}${taskId}${path.sep}`),
+  );
+  for (const outputPath of outputPaths) {
+    if ((await readFile(outputPath, "utf8")).includes("Timeout error:"))
+      return true;
+  }
+  return false;
+};
+
 const main = async (): Promise<void> => {
   const manifest = await readTaskManifest(manifestPath);
-  const tasks = selectDevelopmentTasks(manifest);
+  const tasks = selectEvaluationTasks(manifest);
+  if (manifest.split === "test" && tasks.length !== manifest.datasetTaskCount)
+    throw new Error(
+      "Phase 3 grading requires the complete pinned test manifest",
+    );
   const sourcePredictionPath = path.resolve(
     process.env.SWE_BENCH_PREDICTIONS_PATH ?? (await latestPredictionPath()),
   );
@@ -115,11 +150,20 @@ const main = async (): Promise<void> => {
     predictions.map((prediction) => [prediction.instance_id, prediction]),
   );
   validatePredictions(predictions, taskIds);
+  const attempts = await readAttempts(
+    path.join(path.dirname(sourcePredictionPath), "attempts.jsonl"),
+  ).catch(() => []);
+  if (manifest.split === "test") summarizeAttempts(attempts, taskIds);
   const officialRunId = runId();
+  assertSafeRunId(officialRunId);
   const sourceHash = await predictionSha256(sourcePredictionPath);
   await assertRunIdFresh(officialRunId, sourceHash, runsRoot);
   const predictionRoot = path.dirname(sourcePredictionPath);
-  const officialRoot = path.join(predictionRoot, "official-results");
+  const officialRoot = path.join(
+    predictionRoot,
+    "official-results",
+    officialRunId,
+  );
   await mkdir(officialRoot, { recursive: true });
   const immutablePredictionPath = path.join(officialRoot, "predictions.jsonl");
   await copyFile(sourcePredictionPath, immutablePredictionPath);
@@ -184,10 +228,18 @@ const main = async (): Promise<void> => {
     resultClassifications[taskId] =
       prediction?.model_patch.trim() === ""
         ? "not_submitted"
-        : exitCode === 0
-          ? "official_result_missing"
-          : "official_harness_failed";
+        : (await timedOut(officialRoot, taskId))
+          ? "timeout"
+          : exitCode === 0
+            ? "official_result_missing"
+            : "official_harness_failed";
   }
+  const metrics = buildOfficialMetrics({
+    taskIds,
+    predictions,
+    attempts,
+    classifications: resultClassifications,
+  });
   const experimentManifestPath = path.join(predictionRoot, "manifest.json");
   const experimentManifest = await readFile(experimentManifestPath, "utf8")
     .then((contents) => JSON.parse(contents) as Record<string, unknown>)
@@ -195,7 +247,11 @@ const main = async (): Promise<void> => {
   if (experimentManifest)
     await writeFile(
       experimentManifestPath,
-      `${JSON.stringify({ ...experimentManifest, officialRunId }, null, 2)}\n`,
+      `${JSON.stringify(
+        { ...experimentManifest, officialRunId, officialMetrics: metrics },
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
   await writeFile(
@@ -209,6 +265,23 @@ const main = async (): Promise<void> => {
         sourcePredictionPath,
         predictionSha256: predictionHash,
         instanceIds: taskIds,
+        datasetTaskCount: manifest.datasetTaskCount,
+        manifestTaskCount: manifest.taskCount,
+        metrics,
+        resolved_pct: metrics.resolvedPct,
+        completion_yield_pct: metrics.completionYieldPct,
+        submitted_predictions: metrics.submittedPredictions,
+        all_recorded_attempts: metrics.allRecordedAttempts,
+        no_patch_count: metrics.noPatchCount,
+        setup_failure_count: metrics.setupFailureCount,
+        provider_failure_count: metrics.providerFailureCount,
+        session_failure_count: metrics.sessionFailureCount,
+        official_harness_failure_count: metrics.officialHarnessFailureCount,
+        timeout_count: metrics.timeoutCount,
+        per_task_outcomes: metrics.perTask,
+        estimated_usd: metrics.estimatedUsd,
+        cost_source: metrics.costSource,
+        cost_note: metrics.costNote,
         classifications: resultClassifications,
         exitCode,
         stdout: safeOutput(stdout),

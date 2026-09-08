@@ -12,6 +12,8 @@ import type {
   CohortSummary,
   ExperimentManifest,
   OfficialRunRecord,
+  Prediction,
+  OfficialMetrics,
 } from "./types";
 
 const defaultRunsRoot = path.resolve("swe-bench-lite/.data/runs");
@@ -56,6 +58,16 @@ export const writeAttempt = async (
     )}\n`,
   );
   return filePath;
+};
+
+export const readAttempts = async (
+  filePath: string,
+): Promise<AttemptRecord[]> => {
+  const contents = await readFile(path.resolve(filePath), "utf8");
+  return contents
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as AttemptRecord);
 };
 
 export const classifyFailure = (
@@ -124,20 +136,72 @@ export const writeCohortSummary = async (
   return filePath;
 };
 
+export const buildOfficialMetrics = (input: {
+  taskIds: string[];
+  predictions: Prediction[];
+  attempts: AttemptRecord[];
+  classifications: Record<string, string>;
+}): OfficialMetrics => {
+  const submittedPredictions = input.predictions.filter(
+    (prediction) => prediction.model_patch.trim() !== "",
+  ).length;
+  const officialResolved = input.taskIds.filter(
+    (taskId) => input.classifications[taskId] === "resolved",
+  ).length;
+  const perTask = Object.fromEntries(
+    input.taskIds.map((taskId) => [
+      taskId,
+      input.classifications[taskId] ?? "official_result_missing",
+    ]),
+  );
+  const ratio = (numerator: number, denominator: number): number | null =>
+    denominator === 0 ? null : numerator / denominator;
+  return {
+    taskCount: input.taskIds.length,
+    submittedPredictions,
+    allRecordedAttempts: input.attempts.length,
+    officialResolved,
+    resolvedPct: ratio(officialResolved, submittedPredictions),
+    completionYieldPct: ratio(officialResolved, input.attempts.length),
+    noPatchCount: input.attempts.filter(
+      (attempt) => attempt.status === "no_patch",
+    ).length,
+    setupFailureCount: input.attempts.filter(
+      (attempt) => attempt.failureCategory === "setup",
+    ).length,
+    providerFailureCount: input.attempts.filter(
+      (attempt) => attempt.failureCategory === "provider",
+    ).length,
+    sessionFailureCount: input.attempts.filter(
+      (attempt) => attempt.failureCategory === "session",
+    ).length,
+    officialHarnessFailureCount: Object.values(input.classifications).filter(
+      (classification) => classification === "official_harness_failed",
+    ).length,
+    timeoutCount: Object.values(input.classifications).filter(
+      (classification) => classification === "timeout",
+    ).length,
+    perTask,
+    estimatedUsd: null,
+    costSource: "unavailable",
+    costNote:
+      "The public SessionResult does not expose provider cost; obtain it from the provider or trace backend separately.",
+  };
+};
+
 const collectOfficialRuns = async (
   root: string,
 ): Promise<OfficialRunRecord[]> => {
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   const records: OfficialRunRecord[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const recordPath = path.join(
-      root,
-      entry.name,
-      "official-results",
-      "grade.json",
-    );
-    const record = await readFile(recordPath, "utf8")
+    const entryPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      records.push(...(await collectOfficialRuns(entryPath)));
+      continue;
+    }
+    if (entry.name !== "grade.json") continue;
+    const record = await readFile(entryPath, "utf8")
       .then((contents) => JSON.parse(contents) as OfficialRunRecord)
       .catch(() => undefined);
     if (record) records.push(record);
@@ -152,10 +216,15 @@ export const assertRunIdFresh = async (
 ): Promise<void> => {
   const previous = await collectOfficialRuns(path.resolve(runsRoot));
   const collision = previous.find((record) => record.runId === runId);
-  if (collision && collision.predictionSha256 !== predictionSha256)
+  if (collision) {
+    if (collision.predictionSha256 !== predictionSha256)
+      throw new Error(
+        `official run ID ${runId} was already used for a different prediction; choose a new run ID`,
+      );
     throw new Error(
-      `official run ID ${runId} was already used for a different prediction; choose a new run ID`,
+      `official run ID ${runId} was already used; choose a new run ID`,
     );
+  }
 };
 
 export const safeOutput = (value: string, maxBytes = 20_000): string =>

@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   selectDevelopmentTasks,
+  selectEvaluationTasks,
   validateTaskRecord,
 } from "../swe-bench-lite/harness/dataset";
 import {
@@ -21,6 +22,7 @@ import {
 import {
   classifyFailure,
   assertRunIdFresh,
+  buildOfficialMetrics,
   summarizeAttempts,
   writeAttempt,
 } from "../swe-bench-lite/harness/report";
@@ -31,12 +33,15 @@ import type {
 
 const execFile = promisify(execFileCallback);
 
-const task = (baseCommit: string): SweBenchTask => ({
+const task = (
+  baseCommit: string,
+  split: "dev" | "test" = "dev",
+): SweBenchTask => ({
   instance_id: "owner__repo-1",
   repo: "owner/repo",
   base_commit: baseCommit,
   problem_statement: "Fix the issue.",
-  split: "dev",
+  split,
   dataset_name: "SWE-bench/SWE-bench_Lite",
   dataset_revision: "b0dde1093fe417d83b7184254edf8199c1f0dff5",
   dataset_task_count: 1,
@@ -116,6 +121,25 @@ describe("SWE-bench Lite harness", () => {
     expect(() =>
       selectDevelopmentTasks(manifest, [first.instance_id, first.instance_id]),
     ).toThrow(/duplicate/);
+  });
+
+  it("accepts and selects a complete pinned test manifest", () => {
+    const first = task("0123456789abcdef0123456789abcdef01234567", "test");
+    const second: SweBenchTask = {
+      ...first,
+      instance_id: "owner__repo-2",
+    };
+    const manifest: TaskManifest = {
+      path: "manifest.jsonl",
+      datasetName: first.dataset_name,
+      datasetRevision: first.dataset_revision,
+      split: "test",
+      datasetTaskCount: 2,
+      taskCount: 2,
+      tasks: [first, second],
+    };
+    expect(selectEvaluationTasks(manifest)).toEqual([first, second]);
+    expect(validateTaskRecord({ ...first, split: "test" }).split).toBe("test");
   });
 
   it("isolates fixtures and checks out the requested commit", async () => {
@@ -305,5 +329,59 @@ describe("SWE-bench Lite harness", () => {
         "owner__repo-4",
       ]),
     ).toThrow(/one terminal attempt/);
+  });
+
+  it("reports Phase 3 ratios with explicit denominators and costs", () => {
+    const predictions = [
+      predictionForResult(
+        task("0123456789abcdef0123456789abcdef01234567"),
+        "diff",
+        "agent",
+      ),
+      predictionForResult(
+        {
+          ...task("0123456789abcdef0123456789abcdef01234567"),
+          instance_id: "owner__repo-2",
+        },
+        "",
+        "agent",
+      ),
+    ];
+    const metrics = buildOfficialMetrics({
+      taskIds: ["owner__repo-1", "owner__repo-2"],
+      predictions,
+      attempts: [
+        {
+          attemptId: "attempt-one",
+          instanceId: "owner__repo-1",
+          status: "completed",
+          diffBytes: 4,
+          startedAt: "2026-09-08T00:00:00.000Z",
+          completedAt: "2026-09-08T00:00:01.000Z",
+        },
+        {
+          attemptId: "attempt-two",
+          instanceId: "owner__repo-2",
+          status: "no_patch",
+          diffBytes: 0,
+          startedAt: "2026-09-08T00:00:00.000Z",
+          completedAt: "2026-09-08T00:00:01.000Z",
+        },
+      ],
+      classifications: {
+        "owner__repo-1": "resolved",
+        "owner__repo-2": "not_submitted",
+      },
+    });
+    expect(metrics).toMatchObject({
+      submittedPredictions: 1,
+      allRecordedAttempts: 2,
+      officialResolved: 1,
+      resolvedPct: 1,
+      completionYieldPct: 0.5,
+      noPatchCount: 1,
+      estimatedUsd: null,
+      costSource: "unavailable",
+    });
   });
 });

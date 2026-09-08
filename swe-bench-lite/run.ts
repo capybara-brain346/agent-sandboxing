@@ -1,10 +1,13 @@
 import "dotenv/config";
 import { execFile as execFileCallback } from "node:child_process";
+import { createHash } from "node:crypto";
+import { access, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { cpus, totalmem } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { evaluationAuthFromEnv, EvalHttpClient } from "./harness/client";
-import { readTaskManifest, selectDevelopmentTasks } from "./harness/dataset";
+import { readTaskManifest, selectEvaluationTasks } from "./harness/dataset";
 import { cleanupTaskFixture, createTaskFixture } from "./harness/fixture";
 import {
   buildAgentImage,
@@ -29,16 +32,17 @@ import type {
 } from "./harness/types";
 
 const execFile = promisify(execFileCallback);
+const promptProfile = "prompts/session-agent.yaml";
+const toolConfigPath = "src/services/agent/tools/profiles/profiles.yaml";
 const manifestPath =
   process.env.SWE_BENCH_MANIFEST_PATH ??
-  "swe-bench-lite/.data/tasks/swe-bench-lite-dev.jsonl";
+  `swe-bench-lite/.data/tasks/swe-bench-lite-${process.env.SWE_BENCH_SPLIT ?? "dev"}.jsonl`;
 const baseUrl = process.env.BASE_URL ?? "http://localhost:3000";
 const runsRoot = path.resolve("swe-bench-lite/.data/runs");
 const model =
   process.env.SWE_BENCH_MODEL_NAME ??
   process.env.AGENT_MODEL ??
   "agent-sandboxing";
-const promptProfile = "prompts/session-agent.yaml";
 const timeoutMs = Number(process.env.SWE_BENCH_ATTEMPT_TIMEOUT_MS ?? 1_800_000);
 
 const safeError = (error: unknown): string =>
@@ -51,8 +55,18 @@ const repositorySha = async (): Promise<string> => {
   return result.stdout.trim();
 };
 
-const experimentId = (): string =>
-  process.env.SWE_BENCH_EXPERIMENT_ID ?? `dev-${Date.now()}-${process.pid}`;
+const fileSha256 = async (filePath: string): Promise<string> =>
+  createHash("sha256")
+    .update(await readFile(path.resolve(filePath)))
+    .digest("hex");
+
+const experimentId = (split: string): string =>
+  process.env.SWE_BENCH_EXPERIMENT_ID ??
+  `${split}-${Date.now()}-${process.pid}`;
+
+const assertSafeId = (value: string, name: string): void => {
+  if (!/^[A-Za-z0-9_.-]+$/.test(value)) throw new Error(`invalid ${name}`);
+};
 
 const attemptId = (task: SweBenchTask): string =>
   `${task.instance_id}-${Date.now()}-${process.pid}`;
@@ -62,31 +76,61 @@ const initialManifest = (
   repositoryShaValue: string,
   datasetName: string,
   datasetRevision: string,
-  split: string,
+  split: "dev" | "test",
   taskIds: string[],
+  promptDigest: string,
+  toolConfigDigest: string,
 ): ExperimentManifest => ({
   experimentId: id,
   repositorySha: repositoryShaValue,
-  evaluatorVersion: "swe-bench-lite-phase-2",
+  evaluatorVersion:
+    split === "test" ? "swe-bench-lite-phase-3" : "swe-bench-lite-phase-2",
   datasetName,
   datasetRevision,
   split,
   taskIds,
   model,
   promptProfile,
+  promptDigest,
+  toolProfile: "main",
+  toolConfigPath,
+  toolConfigDigest,
   maxSteps: Number(process.env.AGENT_MAX_STEPS ?? 25),
   timeoutMs,
+  retryPolicy: "none",
   wrapperImages: {},
+  machineResources: {
+    cpuCount: cpus().length,
+    memoryBytes: totalmem(),
+  },
+  cacheCondition:
+    process.env.SWE_BENCH_CACHE_CONDITION ??
+    "unspecified; record before grading",
   createdAt: new Date().toISOString(),
 });
 
 const main = async (): Promise<void> => {
   const startedAt = new Date().toISOString();
-  const id = experimentId();
-  const runRoot = path.join(runsRoot, id);
   const manifest = await readTaskManifest(manifestPath);
-  const tasks = selectDevelopmentTasks(manifest);
+  const tasks = selectEvaluationTasks(manifest);
+  if (manifest.split === "test" && tasks.length !== manifest.datasetTaskCount)
+    throw new Error(
+      "Phase 3 test measurement requires the complete pinned test manifest",
+    );
+  const id = experimentId(manifest.split);
+  assertSafeId(id, "experiment ID");
+  const runRoot = path.join(runsRoot, id);
+  await access(runRoot).then(
+    () => {
+      throw new Error(`experiment ${id} already exists; choose a new ID`);
+    },
+    () => undefined,
+  );
   const taskIds = tasks.map((task) => task.instance_id);
+  const [promptDigest, toolConfigDigest] = await Promise.all([
+    fileSha256(promptProfile),
+    fileSha256(toolConfigPath),
+  ]);
   const experimentManifest = initialManifest(
     id,
     await repositorySha(),
@@ -94,6 +138,8 @@ const main = async (): Promise<void> => {
     manifest.datasetRevision,
     manifest.split,
     taskIds,
+    promptDigest,
+    toolConfigDigest,
   );
   await writeExperimentManifest(runRoot, experimentManifest);
   const predictions = tasks.map((task) => predictionForResult(task, "", model));
@@ -194,7 +240,7 @@ const main = async (): Promise<void> => {
         completedAt: new Date().toISOString(),
       };
     } finally {
-      failed ||= attempt.status !== "completed";
+      failed ||= attempt.status === "failed";
       try {
         await writeAttempt(runRoot, attempt);
         attempts.push(attempt);
