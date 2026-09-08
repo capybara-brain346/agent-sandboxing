@@ -101,8 +101,8 @@ The report retains setup, API, provider, session, no-patch, and grader failures
 instead of silently omitting them. Attempt status is diagnostic only; only the
 official grader classifications determine resolution.
 
-The evaluator does not modify `src/`, production prompts, Prisma, sandbox
-runtime semantics, or the existing CapyNodes E2E evaluator.
+The evaluator does not modify `src/`, production prompts, Prisma, or sandbox
+runtime semantics.
 
 ## Phase 2 development cohort
 
