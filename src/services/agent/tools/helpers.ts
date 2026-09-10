@@ -35,7 +35,9 @@ export const throwIfAborted = (signal: AbortSignal): void => {
   if (signal.aborted) throw createAbortError();
 };
 
-const invalidPath = (message = "Path must be under /workspace/repo"): never => {
+const invalidPath = (
+  message = "Path must be under /workspace/repo or /tmp",
+): never => {
   throw new ServiceError("unsafe_path", message, 422);
 };
 
@@ -54,7 +56,9 @@ export const validateWorkspacePath = (value: string): string => {
   const normalized = path.posix.normalize(value);
   if (
     normalized !== workspaceRoot &&
-    !normalized.startsWith(`${workspaceRoot}/`)
+    !normalized.startsWith(`${workspaceRoot}/`) &&
+    normalized !== "/tmp" &&
+    !normalized.startsWith("/tmp/")
   )
     return invalidPath();
 
@@ -132,13 +136,4 @@ export const ensureInputSize = (
       `${name} exceeds the configured size limit`,
       413,
     );
-};
-
-export const workspacePathFromArgument = (value: string): string => {
-  if (path.posix.isAbsolute(value)) return validateWorkspacePath(value);
-  if (hasControlCharacter(value) || shellSyntax.test(value))
-    return invalidPath("Path contains disallowed control or shell characters");
-  if (value.split("/").includes(".."))
-    return invalidPath("Path traversal is not allowed");
-  return validateWorkspacePath(path.posix.join(workspaceRoot, value));
 };

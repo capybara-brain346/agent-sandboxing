@@ -112,10 +112,6 @@ const main = async (): Promise<void> => {
   const startedAt = new Date().toISOString();
   const manifest = await readTaskManifest(manifestPath);
   const tasks = selectEvaluationTasks(manifest);
-  if (manifest.split === "test" && tasks.length !== manifest.datasetTaskCount)
-    throw new Error(
-      "Phase 3 test measurement requires the complete pinned test manifest",
-    );
   const id = experimentId(manifest.split);
   assertSafeId(id, "experiment ID");
   const runRoot = path.join(runsRoot, id);

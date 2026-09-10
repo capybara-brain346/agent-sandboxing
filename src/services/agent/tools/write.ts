@@ -20,7 +20,7 @@ export const createWriteTool = (
   tool({
     description: "Write UTF-8 text to a file inside the task workspace.",
     inputSchema: z.object({
-      path: z.string().describe("Absolute path under /workspace/repo"),
+      path: z.string().describe("Absolute path under /workspace/repo or /tmp"),
       content: z.string(),
     }),
     execute: async ({ path: filePath, content }) => {

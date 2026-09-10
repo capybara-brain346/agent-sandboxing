@@ -18,7 +18,8 @@ export const createBashTool = (
   signal: AbortSignal,
 ) =>
   tool({
-    description: "Run an allowlisted shell command in /workspace/repo.",
+    description:
+      "Run a shell command in the sandbox. /workspace/repo and /tmp are writable.",
     inputSchema: z.object({ command: z.string().min(1) }),
     execute: async ({ command }) => {
       throwIfAborted(signal);

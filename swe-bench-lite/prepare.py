@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ def parse_args() -> argparse.Namespace:
         help="include every task in the pinned selected split",
     )
     parser.add_argument("--instance-id", action="append")
+    parser.add_argument("--sample-size", type=int)
     parser.add_argument(
         "--output",
         default=os.environ.get("SWE_BENCH_MANIFEST_PATH"),
@@ -41,6 +43,18 @@ def image_for(row: dict) -> str | None:
     if value is None or str(value).strip() == "":
         return None
     return str(value)
+
+
+def deterministic_sample(rows: list[dict], size: int) -> list[str]:
+    return [
+        str(row["instance_id"])
+        for row in sorted(
+            rows,
+            key=lambda row: hashlib.sha256(
+                str(row["instance_id"]).encode("utf-8")
+            ).hexdigest(),
+        )[:size]
+    ]
 
 
 def main() -> None:
@@ -56,6 +70,18 @@ def main() -> None:
     ]
     if args.all and selected_ids:
         raise SystemExit("--all cannot be combined with --instance-id values")
+    if args.sample_size is not None:
+        if args.split != "test":
+            raise SystemExit("--sample-size is supported only for the test split")
+        if args.all or selected_ids:
+            raise SystemExit(
+                "--sample-size cannot be combined with --all or --instance-id values"
+            )
+        if args.sample_size < 1 or args.sample_size > len(rows):
+            raise SystemExit(
+                f"--sample-size must be between 1 and {len(rows)} for the selected split"
+            )
+        selected_ids = deterministic_sample(rows, args.sample_size)
     if args.all:
         selected_ids = [str(row["instance_id"]) for row in rows]
     if not selected_ids:

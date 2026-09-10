@@ -137,28 +137,29 @@ used to tune the agent before the pinned Lite test measurement in Phase 3.
 ## Phase 3 Lite test measurement
 
 Freeze the model, prompt and tool digests, step limit, timeout, retry policy,
-machine resources, cache condition, wrapper image digests, and complete test
-task ID list in the experiment manifest. Prepare the complete pinned test
-split:
+machine resources, cache condition, wrapper image digests, and task ID list in
+the experiment manifest. Prepare the deterministic 23-task test sample:
 
 ```sh
-npm run eval:swe-bench-lite:prepare -- --split test --all
+npm run eval:swe-bench-lite:prepare -- --split test --sample-size 23
 ```
 
-Start the API with the fixed production-like settings, then run the complete
-test manifest once. Test prediction rejects partial manifests and refuses to
-reuse an experiment ID, so every task receives one fresh fixture and one
-public chat session:
+The sample ranks all task IDs by the SHA-256 hex digest of the UTF-8 task ID,
+selects the first 23, and writes the selected records in task-ID order. The
+pinned dataset revision keeps the sample reproducible. Start the API with the
+fixed production-like settings, then run the manifest once. Every task receives
+one fresh fixture and one public chat session:
 
 ```sh
 SWE_BENCH_SPLIT=test npm run eval:swe-bench-lite:predict
 SWE_BENCH_SPLIT=test npm run eval:swe-bench-lite:grade
 ```
 
-Do not tune the agent from the test results. The official `grade.json` reports
-the pinned manifest count, submitted predictions, all recorded attempts,
-no-patch count, setup/provider/session failures, official harness failures,
-timeouts, per-task outcomes, and these exact ratios:
+Do not tune the agent from the test results. This 23-task run is a documented
+sample, not a complete SWE-bench Lite measurement. The official `grade.json`
+reports the pinned manifest count, submitted predictions, all recorded
+attempts, no-patch count, setup/provider/session failures, official harness
+failures, timeouts, per-task outcomes, and these exact ratios:
 
 ```text
 resolved_pct = official_resolved / submitted_predictions

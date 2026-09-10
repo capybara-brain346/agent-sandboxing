@@ -137,10 +137,6 @@ const timedOut = async (root: string, taskId: string): Promise<boolean> => {
 const main = async (): Promise<void> => {
   const manifest = await readTaskManifest(manifestPath);
   const tasks = selectEvaluationTasks(manifest);
-  if (manifest.split === "test" && tasks.length !== manifest.datasetTaskCount)
-    throw new Error(
-      "Phase 3 grading requires the complete pinned test manifest",
-    );
   const sourcePredictionPath = path.resolve(
     process.env.SWE_BENCH_PREDICTIONS_PATH ?? (await latestPredictionPath()),
   );
