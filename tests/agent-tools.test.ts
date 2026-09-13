@@ -463,6 +463,16 @@ describe("sandbox-proxied agent tools", () => {
     );
   });
 
+  it.each([
+    "git commit -m fix",
+    "git push origin HEAD",
+    "npm test && git commit -am fix",
+  ])("rejects direct Git publication commands: %s", (command) => {
+    expect(() => validateBashCommand(command)).toThrow(
+      "Use the pull request tool to commit and publish changes",
+    );
+  });
+
   it("treats grep exit code one as an empty match result", async () => {
     const fake = runtime({ ...success(), exitCode: 1 });
     const result = await execute(

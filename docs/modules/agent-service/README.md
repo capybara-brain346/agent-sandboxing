@@ -102,8 +102,8 @@ tool failure, and plain `find` terms match filename substrings case-insensitivel
 
 Pull request tools receive only injected session capabilities. The backend owns
 repository identity, branch `agent/<sessionId>`, commit, push, and pull request
-creation or update. Agents cannot supply tokens, remotes, or shell-based
-provider commands.
+creation or update. Bash rejects direct `git commit` and `git push` commands;
+agents cannot supply tokens, remotes, or shell-based provider commands.
 
 ## Configuration and verification
 
