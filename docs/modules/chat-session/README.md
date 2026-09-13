@@ -63,8 +63,10 @@ backend checks installation ownership locally before making the direct branch
 request. GitHub session creation validates the selected metadata and installation
 ownership locally; repository and branch access are exercised during provisioning,
 where the selected base SHA is also verified when present.
-Repository and branch discovery responses use short-lived in-memory caches;
-explicit repository refresh and a newly connected installation invalidate them.
+Repository discovery intersects the OAuth-visible page with the saved App
+installation's repository catalog. That catalog and repository and branch
+discovery responses use short-lived in-memory caches; explicit repository
+refresh and a newly connected installation invalidate them.
 
 Messages contain user, assistant, or system content plus processing metadata.
 Operational output stays in session events and artifacts. A message result
@@ -112,10 +114,10 @@ npm test -- tests/github-service.test.ts tests/github-routes.test.ts tests/githu
 For a deployment rollout, set `LOG_LEVEL=debug` and capture one journey through
 repository discovery, branch selection, session creation, and the first
 message. Compare `request_completed` durations with the `github_api_call_timing`
-events for `listAppInstallations`, `listOAuthRepositories`,
-`listInstallationRepositories`, `listBranches`, and
-`createInstallationToken`. Session creation should have no GitHub API timing
-events; provisioning should still include token creation and repository setup.
+events for `listOAuthRepositories`, `listInstallationRepositories`,
+`listBranches`, and `createInstallationToken`. Session creation should have no
+GitHub API timing events; provisioning should still include token creation and
+repository setup.
 
 ## Agent and artifacts
 

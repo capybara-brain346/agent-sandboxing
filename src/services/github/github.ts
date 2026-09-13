@@ -684,6 +684,10 @@ export class GitHubService {
     string,
     GitHubCacheEntry<GitHubBranch[]>
   >();
+  private readonly installationRepositoryCache = new Map<
+    string,
+    GitHubCacheEntry<GitHubRepositoryRecord[]>
+  >();
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -708,6 +712,7 @@ export class GitHubService {
         this.repositoryCache.delete(key);
     }
     this.branchCache.clear();
+    this.installationRepositoryCache.clear();
   }
 
   async createInstallationToken(installationId: string): Promise<string> {
@@ -1897,7 +1902,6 @@ export class GitHubService {
 
   private async installationsForUser(
     userId: string,
-    githubUserId: string,
   ): Promise<
     Array<{ installationId: string; accountLogin: string; accountType: string }>
   > {
@@ -1910,47 +1914,8 @@ export class GitHubService {
         accountType: true,
       },
     });
-    const installations = saved.filter(
+    return saved.filter(
       (installation) => installation.accountType.toLowerCase() === "user",
-    );
-    const known = new Set(
-      installations.map((installation) => installation.installationId),
-    );
-    for (const installation of await this.api.listAppInstallations()) {
-      if (
-        installation.accountType.toLowerCase() !== "user" ||
-        installation.accountId !== githubUserId ||
-        known.has(installation.installationId)
-      )
-        continue;
-      const next = await this.prisma.gitHubInstallation.upsert({
-        where: {
-          userId_installationId: {
-            userId,
-            installationId: installation.installationId,
-          },
-        },
-        create: {
-          userId,
-          installationId: installation.installationId,
-          accountLogin: installation.accountLogin,
-          accountType: "User",
-        },
-        update: {
-          accountLogin: installation.accountLogin,
-          accountType: "User",
-        },
-        select: {
-          installationId: true,
-          accountLogin: true,
-          accountType: true,
-        },
-      });
-      known.add(next.installationId);
-      installations.push(next);
-    }
-    return installations.sort((left, right) =>
-      left.accountLogin.localeCompare(right.accountLogin),
     );
   }
 
@@ -1996,10 +1961,7 @@ export class GitHubService {
           "Reconnect GitHub to refresh repository access",
           401,
         );
-      const installations = await this.installationsForUser(
-        userId,
-        user.githubUserId,
-      );
+      const installations = await this.installationsForUser(userId);
       const accessToken = decryptToken(
         {
           ciphertext: token.accessTokenCiphertext,
@@ -2022,12 +1984,24 @@ export class GitHubService {
         oauthRepositories.map((repository) => [repository.id, repository]),
       );
       const repositories = new Map<string, GitHubRepositoryView>();
-      for (const installation of installations) {
-        if (installation.accountType.toLowerCase() !== "user") continue;
-        const installed = await this.api.listInstallationRepositories(
-          installation.installationId,
-        );
-        for (const repository of installed) {
+      const installed = await Promise.all(
+        installations.map(async (installation) => ({
+          installation,
+          repositories: await cachedGitHubRequest(
+            this.installationRepositoryCache,
+            installation.installationId,
+            () =>
+              this.api.listInstallationRepositories(
+                installation.installationId,
+              ),
+          ),
+        })),
+      );
+      for (const {
+        installation,
+        repositories: installationRepositories,
+      } of installed) {
+        for (const repository of installationRepositories) {
           const oauthRepository = visible.get(repository.id);
           if (!oauthRepository || repositories.has(repository.id)) continue;
           repositories.set(repository.id, {

@@ -41,8 +41,10 @@ rendered with `TimelineRow` and tool results use bounded event snippets.
   event contracts.
 - `src/api/client.ts` is the credentialed fetch wrapper.
 - GitHub repository discovery reuses matching in-flight requests across the
-  repository picker and shell switcher; explicit refresh bypasses that request
-  and the backend's short-lived repository and branch caches.
+  repository picker and shell switcher. The backend intersects the OAuth-visible
+  page with the saved GitHub App installation's repository catalog. Explicit
+  refresh bypasses the request and the backend's short-lived repository and
+  branch caches.
 - The shell repository switcher loads the first 20 repositories when opened and
   fetches additional pages as the user scrolls.
 - Settled repository responses are not retained in the browser, so a later

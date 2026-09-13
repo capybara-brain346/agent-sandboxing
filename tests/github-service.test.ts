@@ -921,6 +921,8 @@ describe("GitHubService", () => {
       page: 1,
       perPage: 20,
     });
+    expect(api.listAppInstallations).not.toHaveBeenCalled();
+    expect(api.listInstallationRepositories).toHaveBeenCalledWith("10");
   });
 
   it("sorts repository pages by latest updated and returns the next cursor", async () => {
@@ -1013,6 +1015,9 @@ describe("GitHubService", () => {
       page: 3,
       perPage: 2,
     });
+    expect(api.listInstallationRepositories).toHaveBeenCalledWith("10");
+    await service.repositories("user_1", { cursor: "4", limit: 2 });
+    expect(api.listInstallationRepositories).toHaveBeenCalledTimes(1);
   });
 
   it("only saves installations owned by the authenticated personal account", async () => {
@@ -1059,25 +1064,13 @@ describe("GitHubService", () => {
     });
   });
 
-  it("saves an already-installed personal app installation while listing repositories", async () => {
+  it("returns only repositories available to the App installation", async () => {
     const encrypted = encryptToken(
       "oauth-token",
       config.AUTH_TOKEN_ENCRYPTION_KEY,
     );
-    const upsert = vi.fn(async () => ({
-      installationId: "10",
-      accountLogin: "octo",
-      accountType: "User",
-    }));
     const api: GitHubApi = {
-      listAppInstallations: vi.fn(async () => [
-        {
-          installationId: "10",
-          accountId: "42",
-          accountLogin: "octo",
-          accountType: "User",
-        },
-      ]),
+      listAppInstallations: vi.fn(),
       listOAuthRepositories: vi.fn(async () => [
         {
           id: "1",
@@ -1089,6 +1082,17 @@ describe("GitHubService", () => {
           private: true,
           defaultBranch: "main",
           updatedAt: "2026-01-02T00:00:00Z",
+        },
+        {
+          id: "2",
+          ownerId: "42",
+          ownerLogin: "octo",
+          ownerType: "User",
+          name: "missing",
+          fullName: "octo/missing",
+          private: true,
+          defaultBranch: "main",
+          updatedAt: "2026-01-01T00:00:00Z",
         },
       ]),
       getInstallation: vi.fn(),
@@ -1120,23 +1124,21 @@ describe("GitHubService", () => {
         })),
       },
       gitHubInstallation: {
-        findMany: vi.fn(async () => []),
-        upsert,
+        findMany: vi.fn(async () => [
+          {
+            installationId: "10",
+            accountLogin: "octo",
+            accountType: "User",
+          },
+        ]),
       },
     } as unknown as PrismaClient;
     const service = new GitHubService(prisma, config, api);
 
     await expect(service.repositories("user_1")).resolves.toMatchObject({
-      installations: [
-        { installationId: "10", accountLogin: "octo", accountType: "user" },
-      ],
       repositories: [{ fullName: "octo/repo", installationId: "10" }],
     });
-    expect(upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        create: expect.objectContaining({ installationId: "10" }),
-      }),
-    );
+    expect(api.listInstallationRepositories).toHaveBeenCalledWith("10");
   });
 
   it("caches repository discovery until expiry and supports refresh", async () => {
