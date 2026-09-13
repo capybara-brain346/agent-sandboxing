@@ -161,6 +161,9 @@ reports the pinned manifest count, submitted predictions, all recorded
 attempts, no-patch count, setup/provider/session failures, official harness
 failures, timeouts, per-task outcomes, and these exact ratios:
 
+`RESULTS.md` records a separately scoped exploratory direct-harness batch; it
+is not interchangeable with this deterministic sample.
+
 ```text
 resolved_pct = official_resolved / submitted_predictions
 completion_yield_pct = official_resolved / all_recorded_attempts
