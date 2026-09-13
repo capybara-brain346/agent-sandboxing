@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config";
-import { ServiceError } from "../src/shared/errors";
 import { createBashTool } from "../src/services/agent/tools/bash";
 import { validateBashCommand } from "../src/services/agent/tools/bash-policy";
 import { createEditTool } from "../src/services/agent/tools/edit";
@@ -395,7 +394,7 @@ describe("sandbox-proxied agent tools", () => {
     expect(fake.simpleExec).not.toHaveBeenCalled();
   });
 
-  it("runs allowlisted pipelines and safe workspace redirects", async () => {
+  it("runs shell commands unchanged", async () => {
     const fake = runtime(success("ok"));
     const result = await execute(
       createBashTool(fake, "sandbox-1", config, signal),
@@ -438,27 +437,30 @@ describe("sandbox-proxied agent tools", () => {
   });
 
   it.each([
+    "pytest tests/x.py 2>&1",
+    "python -c 'print(1)\nprint(2)'",
+    "python -c 'print(foo())'",
+    "python -m pip install example-package",
+    "conda install example-package",
+    "mkdir -p /tmp/repro",
     "npm test",
-    "npm run test:unit",
-    "npx vitest run",
-    "cat file; echo injected",
-    "sh -c 'cat secret'",
-    "echo $(cat secret)",
-    "cat ../../etc/passwd",
-    "find . -exec cat {}",
-    "xargs cat",
-    "rm -rf /tmp/outside",
-  ])("rejects unsafe bash grammar: %s", (command) => {
-    expect(() => validateBashCommand(command)).toThrow(ServiceError);
+  ])("forwards standard sandbox shell commands: %s", async (command) => {
+    const fake = runtime(success());
+    await execute(createBashTool(fake, "sandbox-1", config, signal), {
+      command,
+    });
+    expect(fake.simpleExec).toHaveBeenCalledWith(
+      "sandbox-1",
+      command,
+      "/workspace/repo",
+      { timeoutMs: 1200, signal },
+    );
   });
 
-  it.each([
-    "python -m pytest tests/test_config.py",
-    "python3 verify_fix.py",
-    "pytest tests/test_cli.py -k test_help",
-    "uv run pytest tests/test_text_utils.py",
-  ])("allows Python fixture verification: %s", (command) => {
-    expect(validateBashCommand(command)).toBe(command);
+  it("rejects empty bash commands", () => {
+    expect(() => validateBashCommand("   ")).toThrow(
+      "Command must not be empty",
+    );
   });
 
   it("treats grep exit code one as an empty match result", async () => {
@@ -523,13 +525,25 @@ describe("sandbox-proxied agent tools", () => {
     ).toBeLessThanOrEqual(50 * 1024);
   });
 
-  it("rejects traversal, relative paths, controls, and shell injection before execution", async () => {
+  it("allows /tmp paths and rejects paths outside task storage", async () => {
     const fake = runtime(success());
+    await execute(createReadTool(fake, "sandbox-1", config, signal), {
+      path: "/tmp/repro.txt",
+    });
+    expect(fake.simpleExec).toHaveBeenCalledWith(
+      "sandbox-1",
+      "cat -- '/tmp/repro.txt'",
+      "/workspace/repo",
+      { timeoutMs: 300, signal },
+    );
+    fake.simpleExec.mockClear();
+
     for (const path of [
       "relative.txt",
       "/workspace/repo/../secret",
       "/workspace/repo/file\u0000.txt",
       "/workspace/repo/file;touch /tmp/pwned",
+      "/etc/passwd",
     ]) {
       await expect(
         execute(createReadTool(fake, "sandbox-1", config, signal), { path }),

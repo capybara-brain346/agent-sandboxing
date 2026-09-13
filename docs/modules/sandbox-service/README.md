@@ -67,9 +67,10 @@ Sandbox lifecycle, command, and diff events are appended to the owning session
 stream. State changes and lifecycle events commit together, and publication
 happens after commit.
 
-Commands and agent tools validate workspace paths under `/workspace/repo`,
-enforce time and output limits, preserve valid UTF-8 boundaries, and never put
-provider keys or raw runtime failures into events or logs.
+Structured agent tools validate paths under `/workspace/repo` or `/tmp`.
+Bash commands run through the sandbox shell. All tools enforce time and output
+limits, preserve valid UTF-8 boundaries, and never put provider keys or raw
+runtime failures into events or logs.
 
 ## Configuration and verification
 

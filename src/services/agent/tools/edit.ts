@@ -76,7 +76,7 @@ export const createEditTool = (
   tool({
     description: "Replace exactly one occurrence of text in a workspace file.",
     inputSchema: z.object({
-      path: z.string().describe("Absolute path under /workspace/repo"),
+      path: z.string().describe("Absolute path under /workspace/repo or /tmp"),
       oldString: z.string().min(1),
       newString: z.string(),
     }),

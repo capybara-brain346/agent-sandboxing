@@ -45,7 +45,8 @@ The message processor passes `sessionId`, `messageId`, sandbox ID, a composed
 session-agent message, and an `AbortSignal`. The runner receives only the
 session-owned `simpleExec` runtime seam and the configured limits. Workspace
 tools are `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`; GitHub
-sessions also receive brokered pull request tools.
+sessions also receive brokered pull request tools. `bash` passes normal shell
+commands to the sandbox runtime; `/workspace/repo` and `/tmp` are writable.
 
 The agent response is prose. Changed files, pull request state, artifacts, and
 terminal processing state are derived from persisted backend records rather than

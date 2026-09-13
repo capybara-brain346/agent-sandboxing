@@ -164,6 +164,38 @@ describe("SWE-bench Lite harness", () => {
     expect(validateTaskRecord({ ...first, split: "test" }).split).toBe("test");
   });
 
+  it("prepares a stable selected test sample", async () => {
+    const script = `
+import io
+import json
+from pathlib import Path
+import runpy
+import sys
+import types
+from contextlib import redirect_stdout
+
+rows = [
+    {"instance_id": value, "repo": "owner/repo", "base_commit": "0123456789abcdef", "problem_statement": "Fix"}
+    for value in ["owner__repo-4", "owner__repo-1", "owner__repo-3", "owner__repo-2"]
+]
+module = types.ModuleType("datasets")
+module.load_dataset = lambda *args, **kwargs: rows
+sys.modules["datasets"] = module
+sys.argv = ["prepare.py", "--split", "test", "--sample-size", "2", "--output", "/tmp/swe-bench-lite-sample.jsonl"]
+with redirect_stdout(io.StringIO()) as output:
+    runpy.run_path("swe-bench-lite/prepare.py", run_name="__main__")
+Path("/tmp/swe-bench-lite-sample.jsonl").unlink()
+print(output.getvalue(), end="")
+`;
+    const first = await execFile("python3", ["-c", script]);
+    const second = await execFile("python3", ["-c", script]);
+    expect(first.stdout).toBe(second.stdout);
+    expect(JSON.parse(first.stdout)).toMatchObject({
+      instance_ids: ["owner__repo-1", "owner__repo-3"],
+      task_count: 2,
+    });
+  });
+
   it("isolates fixtures and checks out the requested commit", async () => {
     const repository = await makeRepository();
     const root = await mkdtemp(

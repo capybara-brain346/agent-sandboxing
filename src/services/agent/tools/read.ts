@@ -19,7 +19,7 @@ export const createReadTool = (
   tool({
     description: "Read a UTF-8 text file inside the task workspace.",
     inputSchema: z.object({
-      path: z.string().describe("Absolute path under /workspace/repo"),
+      path: z.string().describe("Absolute path under /workspace/repo or /tmp"),
     }),
     execute: async ({ path: filePath }) => {
       throwIfAborted(signal);
