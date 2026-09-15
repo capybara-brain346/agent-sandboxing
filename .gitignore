@@ -157,3 +157,4 @@ docs/planning/*
 docs/planning/github-pr-flow-plan.md
 .hermes/
 .data/
+run-local.sh
