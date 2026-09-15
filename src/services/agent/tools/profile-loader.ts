@@ -25,16 +25,15 @@ export type ToolProfile = z.infer<typeof profileSchema>;
 export type ToolProfiles = z.infer<typeof profilesSchema>;
 export type ToolProfileName = "main" | "subagent";
 
-const PROFILES_PATH = join(
-  process.cwd(),
-  "src/services/agent/tools/profiles/profiles.yaml",
-);
+const profilesPath = () =>
+  process.env.AGENT_TOOL_PROFILES_PATH ??
+  join(process.cwd(), "src/services/agent/tools/profiles/profiles.yaml");
 
 export const parseToolProfiles = (raw: string): ToolProfiles =>
   profilesSchema.parse(parse(raw));
 
 export const loadToolProfiles = (): ToolProfiles =>
-  parseToolProfiles(readFileSync(PROFILES_PATH, "utf-8"));
+  parseToolProfiles(readFileSync(profilesPath(), "utf-8"));
 
 export const getToolProfile = (
   profiles: ToolProfiles,

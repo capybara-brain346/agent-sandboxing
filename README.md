@@ -92,6 +92,11 @@ submits persisted diffs to the official grader without changing production
 code. Phase 3 test measurement records exact denominators and per-task
 official outcomes.
 
+The Terminal-Bench evaluator and Phase 2 Harbor reporter are documented in
+[`terminal-bench/README.md`](terminal-bench/README.md). They record pinned run
+settings and benchmark outcomes separately from production runtime
+configuration.
+
 ## Documentation
 
 Product direction, module guides, and planning documents are in `docs/`. Start

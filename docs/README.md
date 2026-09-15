@@ -50,3 +50,4 @@ trigger processing in that same workspace. There is no run resource.
 - [Task Service plan prompt](planning/task-service-plan-prompt.md)
 - [Evaluating Coding Agent Harnesses](research/evaluating-coding-agent-harnesses.md) — industry patterns, failure modes, and a practical eval stack for this project.
 - [SWE-bench Lite integration plan](planning/swe-bench-lite-integration-plan.md) — isolated external coding-agent benchmark plan.
+- [Terminal-Bench 4.0 integration plan](planning/terminal-bench-4-integration-plan.md) — Harbor-based agent-harness benchmark plan.

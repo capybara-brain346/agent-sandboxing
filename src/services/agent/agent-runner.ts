@@ -10,7 +10,6 @@ import { logger } from "../../logger";
 import type { PublicEvent } from "../../types/event.types";
 import { randomUUID } from "node:crypto";
 import type { AgentResult } from "../../types/harness.types";
-import type { SandboxService } from "../sandbox/sandbox";
 import type { EventStore } from "../events/event-store";
 import type { MessageProcessingContext } from "../../types/message-processing.types";
 import { createAgentToolRegistry } from "./tools/registry";
@@ -20,6 +19,7 @@ import {
   createAbortError,
   isAbortError,
   throwIfAborted,
+  type AgentToolRuntime,
 } from "./tools/helpers";
 import {
   ToolEventRelay,
@@ -46,7 +46,15 @@ const toolConfig = (config: Config): AgentToolConfig => ({
 
 type PublishEvent = (event: PublicEvent) => void;
 
-export type AgentRunnerSandbox = Pick<SandboxService, "getAgentToolTarget">;
+export type AgentRunnerSandbox = {
+  getAgentToolTarget(
+    sessionId: string,
+    sandboxId: string,
+  ): Promise<{
+    containerName: string;
+    runtime: { simpleExec: AgentToolRuntime["simpleExec"] };
+  }>;
+};
 
 export type AgentRunnerDependencies = {
   config: Config;

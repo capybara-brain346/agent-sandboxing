@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config";
 import { createBashTool } from "../src/services/agent/tools/bash";
@@ -137,6 +140,25 @@ describe("sandbox-proxied agent tools", () => {
         ),
       ),
     ).toEqual(["read", "grep", "find", "ls"]);
+  });
+
+  it("loads an evaluation profile from its configured path", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agent-profiles-"));
+    const profilePath = path.join(directory, "profiles.yaml");
+    try {
+      await writeFile(
+        profilePath,
+        "profiles:\n  main:\n    all: true\n  subagent:\n    tools:\n      - read\n",
+        "utf8",
+      );
+      vi.stubEnv("AGENT_TOOL_PROFILES_PATH", profilePath);
+      expect(getToolProfile(loadToolProfiles(), "subagent")).toEqual({
+        tools: ["read"],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("rejects profiles that reference an unregistered tool", () => {

@@ -42,8 +42,12 @@ trigger processing in that same workspace. There is no run resource.
 ## Runtime boundary
 
 The message processor passes `sessionId`, `messageId`, sandbox ID, a composed
-session-agent message, and an `AbortSignal`. The runner receives only the
-session-owned `simpleExec` runtime seam and the configured limits. Workspace
+session-agent message, and an `AbortSignal`. The runner receives an
+`AgentRunnerSandbox` target seam with `simpleExec` and the configured limits.
+Production supplies the session sandbox target. The evaluation-only
+Terminal-Bench adapter supplies a local-process target in Harbor's task working
+directory; it has no Docker, Prisma, session, event persistence, or publishing
+path. Workspace
 tools are `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`; GitHub
 sessions also receive brokered pull request tools. `bash` passes normal shell
 commands to the sandbox runtime; `/workspace/repo` and `/tmp` are writable.
@@ -108,7 +112,12 @@ agents cannot supply tokens, remotes, or shell-based provider commands.
 ## Configuration and verification
 
 `AGENT_MODEL` and `OPENROUTER_API_KEY` are loaded centrally. The key remains in
-the control plane and is never forwarded to the sandbox.
+the control plane and is never forwarded to the sandbox. The evaluation adapter
+sets `AGENT_TOOL_PROFILES_PATH` and `AGENT_PROMPTS_PATH` only in its Harbor
+task process so the bundled runner reads the same versioned profile and prompts
+it uses in the application. Its ESM bundle injects a Node `createRequire`
+resolver for bundled CommonJS dependencies; the build command imports that
+bundle in Node 18.20.4 before Harbor runs.
 
 Agent evals live under [`tests/evals`](../../../tests/evals). Their policy
 harness lives beside the cases in

@@ -16,7 +16,8 @@ export type PromptDefinition = z.infer<typeof promptSchema>;
 export type PromptName =
   "session-agent" | "session-summary-compactor" | "subagent";
 
-const PROMPTS_DIR = join(process.cwd(), "prompts");
+const promptsDir = () =>
+  process.env.AGENT_PROMPTS_PATH ?? join(process.cwd(), "prompts");
 
 const cache = new Map<PromptName, PromptDefinition>();
 
@@ -24,7 +25,7 @@ export const loadPrompt = (name: PromptName): PromptDefinition => {
   const cached = cache.get(name);
   if (cached) return cached;
 
-  const raw = readFileSync(join(PROMPTS_DIR, `${name}.yaml`), "utf-8");
+  const raw = readFileSync(join(promptsDir(), `${name}.yaml`), "utf-8");
   const definition = promptSchema.parse(parse(raw));
   if (definition.id !== name) {
     throw new Error(

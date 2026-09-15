@@ -153,6 +153,8 @@ vite.config.ts.timestamp-*
 
 # Local eval results
 tests/evals/results/*.jsonl
+terminal-bench/.data/
+terminal-bench/run-local.sh
 docs/planning/*
 docs/planning/github-pr-flow-plan.md
 .hermes/
