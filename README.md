@@ -6,6 +6,11 @@ provisions an isolated sandbox, clones the repository, and an agent works
 through sandbox-executed tools. The frontend streams progress, and the system
 creates a branch, pushes changes, and opens a pull request.
 
+## Demos
+
+- [Demo 1](https://www.youtube.com/watch?v=_etbZp31hLI)
+- [Demo 2](https://www.youtube.com/watch?v=Jf6ip-e9Ll8)
+
 ## Architecture
 
 A chat session owns one sandbox and one working branch. Each user message may
